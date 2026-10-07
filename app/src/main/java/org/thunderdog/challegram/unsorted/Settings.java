@@ -430,6 +430,12 @@ public class Settings {
   public static final long SETTING_FLAG_FORCE_DEFAULT_ANIMATION_FOR_RIGHT_SWIPE_EDGE = 1 << 19;
   public static final long SETTING_FLAG_FORCE_DISABLE_HLS_VIDEO = 1 << 20;
 
+  // Ghost mode (fork features)
+  public static final long SETTING_FLAG_GHOST_NO_READ_RECEIPTS = 1 << 21;
+  public static final long SETTING_FLAG_GHOST_NO_TYPING = 1 << 22;
+  public static final long SETTING_FLAG_GHOST_OFFLINE = 1 << 23;
+  public static final long SETTING_FLAG_GHOST_NO_SCREENSHOT_NOTIFICATION = 1 << 24;
+
   public static final long EXPERIMENT_FLAG_ALLOW_EXPERIMENTS = 1;
   public static final long EXPERIMENT_FLAG_SHOW_PEER_IDS = 1 << 2;
   public static final long EXPERIMENT_FLAG_NO_EDGE_TO_EDGE = 1 << 3;
@@ -1440,6 +1446,24 @@ public class Settings {
 
   public boolean setNewSetting (long key, boolean value) {
     return setNewSettings(BitwiseUtils.setFlag(getNewSettings(), key, value));
+  }
+
+  // Ghost mode helpers
+
+  public boolean isGhostNoReadReceipts () {
+    return getNewSetting(SETTING_FLAG_GHOST_NO_READ_RECEIPTS);
+  }
+
+  public boolean isGhostNoTyping () {
+    return getNewSetting(SETTING_FLAG_GHOST_NO_TYPING);
+  }
+
+  public boolean isGhostOffline () {
+    return getNewSetting(SETTING_FLAG_GHOST_OFFLINE);
+  }
+
+  public boolean isGhostNoScreenshotNotification () {
+    return getNewSetting(SETTING_FLAG_GHOST_NO_SCREENSHOT_NOTIFICATION);
   }
 
   public boolean toggleNewSetting (long key) {

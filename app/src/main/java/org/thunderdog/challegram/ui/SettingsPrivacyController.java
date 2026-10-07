@@ -38,6 +38,7 @@ import org.thunderdog.challegram.telegram.PrivacySettings;
 import org.thunderdog.challegram.telegram.PrivacySettingsListener;
 import org.thunderdog.challegram.telegram.SessionListener;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.telegram.TdlibAccount;
 import org.thunderdog.challegram.telegram.TdlibCache;
 import org.thunderdog.challegram.telegram.TdlibContactManager;
 import org.thunderdog.challegram.telegram.TdlibManager;
@@ -130,6 +131,8 @@ public class SettingsPrivacyController extends RecyclerViewController<SettingsPr
           }
         } else if (itemId == R.id.btn_secretLinkPreviews) {
           v.getToggler().setRadioEnabled(Settings.instance().needSecretLinkPreviews(), isUpdate);
+        } else if (itemId == R.id.btn_toggleNewSetting) {
+          updateSettingView(v, item, isUpdate);
         }
       }
     };
@@ -219,6 +222,18 @@ public class SettingsPrivacyController extends RecyclerViewController<SettingsPr
     items.add(new SettingItem(SettingItem.TYPE_VALUED_SETTING_COMPACT, R.id.btn_loggedWebsites, 0, R.string.WebSessionsTitle));*/
       items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
       // items.add(new SettingItem(SettingItem.TYPE_DESCRIPTION, 0, 0, R.string.PrivacyBotsInfo));
+
+      items.add(new ListItem(ListItem.TYPE_HEADER, 0, 0, R.string.GhostMode));
+      items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
+      items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_toggleNewSetting, 0, R.string.GhostNoReadReceipts).setLongId(Settings.SETTING_FLAG_GHOST_NO_READ_RECEIPTS));
+      items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+      items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_toggleNewSetting, 0, R.string.GhostNoTyping).setLongId(Settings.SETTING_FLAG_GHOST_NO_TYPING));
+      items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+      items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_toggleNewSetting, 0, R.string.GhostOffline).setLongId(Settings.SETTING_FLAG_GHOST_OFFLINE));
+      items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+      items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_toggleNewSetting, 0, R.string.GhostNoScreenshotNotification).setLongId(Settings.SETTING_FLAG_GHOST_NO_SCREENSHOT_NOTIFICATION));
+      items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
+      items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.GhostModeInfo));
 
       items.add(new ListItem(ListItem.TYPE_HEADER, 0, 0, R.string.SecretChats));
       items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
@@ -372,6 +387,15 @@ public class SettingsPrivacyController extends RecyclerViewController<SettingsPr
           adapter.updateValuedSettingById(id);
         }
       });
+    } else if (id == R.id.btn_toggleNewSetting) {
+      handleSettingClick(v, adapter);
+      // "Stay offline" must be applied immediately
+      for (TdlibAccount account : tdlib.context()) {
+        Tdlib activeTdlib = account.activeTdlib();
+        if (activeTdlib != null) {
+          activeTdlib.syncOnlineStatus();
+        }
+      }
     } else if (id == R.id.btn_secretLinkPreviews) {
       Settings.instance().setUseSecretLinkPreviews(adapter.toggleView(v));
     } else if (id == R.id.btn_incognitoMode) {

@@ -1,3 +1,36 @@
+# Telegram X Ghost — fork of [Telegram X](https://github.com/TGX-Android/Telegram-X) with privacy features
+
+> This is a fork. Everything below the «Fork features» section is the original Telegram X README.
+
+## Fork features
+
+**Settings → Privacy and Security → Ghost Mode**
+
+| Toggle | What it does |
+| --- | --- |
+| Don't send read receipts | Messages you open are never reported as read (`viewMessages` is not sent). Note: unread counters on your side won't decrease either until you turn this off. |
+| Hide typing status | «typing…», «recording voice…», «sending photo…» etc. are never sent. |
+| Stay offline | The `online` option is never set to `true` in TDLib, so your «last seen» doesn't update while using the app. Applied immediately when toggled. |
+| Don't notify about screenshots | Screenshot notifications in secret chats are suppressed. |
+
+## Building via GitHub Actions
+
+The workflow in [`.github/workflows/android.yml`](.github/workflows/android.yml) builds the APK on every push to `main`, on PRs, manually (**Actions → Build APK → Run workflow**) and publishes a GitHub Release for `v*` tags.
+
+Configure in **Settings → Secrets and variables → Actions**:
+
+| Kind | Name | Purpose |
+| --- | --- | --- |
+| Variable | `APP_ID` | Package name (default `org.ayonovdenizs.tgx`) — lets the fork be installed next to the original Telegram X |
+| Variable | `APP_NAME` | App name (default `Telegram X Ghost`) |
+| Variable | `APP_DOWNLOAD_URL` | Link shown in the app (defaults to the repo's Releases page) |
+| Secret | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | Your own credentials from https://my.telegram.org (strongly recommended; sample ones are used otherwise) |
+| Secret | `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` | Release signing key (`base64 -w0 release.keystore`). Without them the committed test keystore `sign.keystore` is used — fine for testing, **not** for distribution. |
+
+The default job builds `assembleLatestArm64Release` (arm64 only, Android 7.0+) to keep CI time down; pick `Universal` in the manual run to get arm64+arm32 in one APK. A full build compiles TDLib, FFmpeg, WebRTC, etc. from source and takes ~1.5–3 hours on a free runner.
+
+---
+
 # [Telegram X](https://play.google.com/store/apps/details?id=org.thunderdog.challegram) — a slick experimental Telegram client based on [TDLib](https://core.telegram.org/tdlib).
 
 ![Telegram X](/images/feature.png)
