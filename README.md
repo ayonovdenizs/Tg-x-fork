@@ -26,7 +26,18 @@ Configure in **Settings → Secrets and variables → Actions**:
 | Variable | `APP_NAME` | App name (default `Telegram X Ghost`) |
 | Variable | `APP_DOWNLOAD_URL` | Link shown in the app (defaults to the repo's Releases page) |
 | Secret | `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` | Your own credentials from https://my.telegram.org (strongly recommended; sample ones are used otherwise) |
+| Secret | `GOOGLE_SERVICES_JSON` | Firebase config for **your** package (raw JSON or base64). Required for push notifications — see below. |
 | Secret | `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD` | Release signing key (`base64 -w0 release.keystore`). Without them the committed test keystore `sign.keystore` is used — fine for testing, **not** for distribution. |
+
+### Push notifications (Firebase)
+
+The committed `app/google-services.json` is tied to the original `org.thunderdog.challegram` package. With a different `APP_ID` the build fails validation, so the workflow falls back to an **experimental** build — it compiles and works, but Telegram X disables push notifications entirely in experimental builds (you'll also see a one-time "experimental build" alert). To get notifications:
+
+1. Create a project at https://console.firebase.google.com, add an Android app with package name = your `APP_ID`.
+2. Download `google-services.json` and store its content in the `GOOGLE_SERVICES_JSON` secret (`base64 -w0 google-services.json` or paste the JSON as is).
+3. Re-run the workflow.
+
+Workaround without Firebase: in the app enable **Settings → Notifications → Keep connection alive (foreground service)** — messages then arrive via a persistent connection.
 
 The default job builds `assembleLatestArm64Release` (arm64 only, Android 7.0+) to keep CI time down; pick `Universal` in the manual run to get arm64+arm32 in one APK. A full build compiles TDLib, FFmpeg, WebRTC, etc. from source and takes ~1.5–3 hours on a free runner.
 

@@ -99,6 +99,26 @@ jobs:
             echo "KEYSTORE_FILE=keystore.properties" >> "$GITHUB_ENV"
           fi
 
+      - name: Prepare google-services.json (Firebase push notifications)
+        run: |
+          # The committed app/google-services.json belongs to the original org.thunderdog.challegram package.
+          # For a rebranded package Firebase needs its own config, otherwise the build is marked "experimental"
+          # (release builds pass, but push notifications are completely disabled in the app).
+          if [ -n "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
+            printf '%s' "${{ secrets.GOOGLE_SERVICES_JSON }}" > /tmp/gs.raw
+            if head -c1 /tmp/gs.raw | grep -q '{'; then
+              cp /tmp/gs.raw app/google-services.json
+            else
+              base64 -d /tmp/gs.raw > app/google-services.json
+            fi
+            echo "APP_EXPERIMENTAL=false" >> "$GITHUB_ENV"
+          elif grep -q "\"package_name\": \"$APP_ID\"" app/google-services.json; then
+            echo "APP_EXPERIMENTAL=false" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No GOOGLE_SERVICES_JSON secret for package $APP_ID — building as experimental (push notifications disabled). See README."
+            echo "APP_EXPERIMENTAL=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Write local.properties
         run: |
           SAMPLE_ID=$(grep '^telegram.api_id=' local.properties.sample | cut -d= -f2)
@@ -114,6 +134,7 @@ jobs:
           telegram.api_id=${TELEGRAM_API_ID:-$SAMPLE_ID}
           telegram.api_hash=${TELEGRAM_API_HASH:-$SAMPLE_HASH}
           tgx.extension=none
+          app.experimental=$APP_EXPERIMENTAL
           EOF
           sed 's/api_hash=.*/api_hash=***/' local.properties
 
