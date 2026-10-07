@@ -61,6 +61,10 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          # gradle-wrapper.jar is identical to upstream TGX-Android/Telegram-X (Gradle 9.8.0),
+          # but the validator's checksum list doesn't include this version yet.
+          validate-wrappers: false
 
       - name: Install build dependencies
         run: |
