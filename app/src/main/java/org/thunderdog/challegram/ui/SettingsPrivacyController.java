@@ -34,6 +34,7 @@ import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.navigation.SettingsWrapBuilder;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.telegram.ChatListener;
+import org.thunderdog.challegram.telegram.DeletedMessagesStore;
 import org.thunderdog.challegram.telegram.PrivacySettings;
 import org.thunderdog.challegram.telegram.PrivacySettingsListener;
 import org.thunderdog.challegram.telegram.SessionListener;
@@ -133,6 +134,8 @@ public class SettingsPrivacyController extends RecyclerViewController<SettingsPr
           v.getToggler().setRadioEnabled(Settings.instance().needSecretLinkPreviews(), isUpdate);
         } else if (itemId == R.id.btn_toggleNewSetting) {
           updateSettingView(v, item, isUpdate);
+        } else if (itemId == R.id.btn_clearDeletedMessages) {
+          v.setData(Lang.getString(R.string.DeletedMessagesSavedCount, String.valueOf(DeletedMessagesStore.count(tdlib))));
         }
       }
     };
@@ -236,6 +239,8 @@ public class SettingsPrivacyController extends RecyclerViewController<SettingsPr
       items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.GhostModeInfo));
       items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
       items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_toggleNewSetting, 0, R.string.AntiDelete).setLongId(Settings.SETTING_FLAG_ANTI_DELETE));
+      items.add(new ListItem(ListItem.TYPE_SEPARATOR_FULL));
+      items.add(new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT, R.id.btn_clearDeletedMessages, 0, R.string.ClearDeletedMessages));
       items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
       items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.AntiDeleteInfo));
 
@@ -541,6 +546,14 @@ public class SettingsPrivacyController extends RecyclerViewController<SettingsPr
       }).setIntDelegate(this).setAllowResize(false));
     } else if (id == R.id.btn_deleteAccount) {
       tdlib.ui().permanentlyDeleteAccount(this, true);
+    } else if (id == R.id.btn_clearDeletedMessages) {
+      showOptions(Lang.getString(R.string.ClearDeletedMessagesConfirm), new int[] {R.id.btn_clearDeletedMessages, R.id.btn_cancel}, new String[] {Lang.getString(R.string.ClearDeletedMessages), Lang.getString(R.string.Cancel)}, new int[] {OptionColor.RED, OptionColor.NORMAL}, new int[] {R.drawable.baseline_delete_forever_24, R.drawable.baseline_cancel_24}, (itemView, actionId) -> {
+        if (actionId == R.id.btn_clearDeletedMessages) {
+          DeletedMessagesStore.clear(tdlib);
+          adapter.updateValuedSettingById(R.id.btn_clearDeletedMessages);
+        }
+        return true;
+      });
     } else if (id == R.id.btn_clearAllDrafts) {
       showOptions(Lang.getString(R.string.AreYouSureClearDrafts), new int[] {R.id.btn_clearAllDrafts, R.id.btn_cancel}, new String[] {Lang.getString(R.string.PrivacyDeleteCloudDrafts), Lang.getString(R.string.Cancel)}, new int[] {OptionColor.RED, OptionColor.NORMAL}, new int[] {R.drawable.baseline_delete_forever_24, R.drawable.baseline_cancel_24}, (itemView, actionId) -> {
         if (actionId == R.id.btn_clearAllDrafts) {

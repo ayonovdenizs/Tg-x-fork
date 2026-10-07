@@ -957,6 +957,7 @@
   <item type="id" name="btn_incognitoMode" />
   <item type="id" name="btn_submitCrash" />
   <item type="id" name="btn_clearAllDrafts" />
+  <item type="id" name="btn_clearDeletedMessages" />
   <item type="id" name="btn_test" />
   <item type="id" name="btn_viewResults" />
   <item type="id" name="btn_vote" />

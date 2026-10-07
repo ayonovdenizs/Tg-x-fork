@@ -51,6 +51,7 @@ import org.thunderdog.challegram.telegram.MessageEditListener;
 import org.thunderdog.challegram.telegram.MessageListManager;
 import org.thunderdog.challegram.telegram.MessageListener;
 import org.thunderdog.challegram.telegram.MessageThreadListener;
+import org.thunderdog.challegram.telegram.DeletedMessagesStore;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibCache;
 import org.thunderdog.challegram.telegram.TdlibManager;
@@ -2285,10 +2286,14 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
         }
         boolean affected = false;
         for (int i = 0; i < messageIds.length; i++) {
-          if (!kept[i] && item.isDescendantOrSelf(messageIds[i])) {
-            kept[i] = true;
-            keptCount++;
-            affected = true;
+          if (!kept[i]) {
+            TdApi.Message deletedMessage = item.findDescendantOrSelf(messageIds[i]);
+            if (deletedMessage != null) {
+              kept[i] = true;
+              keptCount++;
+              affected = true;
+              DeletedMessagesStore.save(tdlib, deletedMessage);
+            }
           }
         }
         if (affected) {
