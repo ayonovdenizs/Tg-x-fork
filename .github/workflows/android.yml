@@ -81,10 +81,12 @@ jobs:
           scripts/setup-sdk.sh
 
       - name: Prepare keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
           # If KEYSTORE_BASE64 secret is provided, use it; otherwise fall back to the committed test keystore.
-          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
-            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > release.keystore
             cat > release.keystore.properties <<EOF
           keystore.file: release.keystore
           keystore.password: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -98,17 +100,20 @@ jobs:
           fi
 
       - name: Prepare google-services.json (Firebase push notifications)
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           # The committed app/google-services.json belongs to the original org.thunderdog.challegram package.
           # For a rebranded package Firebase needs its own config, otherwise the build is marked "experimental"
           # (release builds pass, but push notifications are completely disabled in the app).
-          if [ -n "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
-            printf '%s' "${{ secrets.GOOGLE_SERVICES_JSON }}" > /tmp/gs.raw
-            if head -c1 /tmp/gs.raw | grep -q '{'; then
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            printf '%s' "$GOOGLE_SERVICES_JSON" > /tmp/gs.raw
+            if grep -q '{' /tmp/gs.raw; then
               cp /tmp/gs.raw app/google-services.json
             else
               base64 -d /tmp/gs.raw > app/google-services.json
             fi
+            python3 -c "import json,sys; d=json.load(open('app/google-services.json')); print('Firebase project:', d['project_info']['project_id'], 'packages:', [c['client_info']['android_client_info']['package_name'] for c in d['client']])"
             echo "APP_EXPERIMENTAL=false" >> "$GITHUB_ENV"
           elif grep -q "\"package_name\": \"$APP_ID\"" app/google-services.json; then
             echo "APP_EXPERIMENTAL=false" >> "$GITHUB_ENV"
