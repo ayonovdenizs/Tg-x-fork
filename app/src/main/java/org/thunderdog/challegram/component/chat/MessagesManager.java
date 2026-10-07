@@ -51,6 +51,7 @@ import org.thunderdog.challegram.telegram.MessageEditListener;
 import org.thunderdog.challegram.telegram.MessageListManager;
 import org.thunderdog.challegram.telegram.MessageListener;
 import org.thunderdog.challegram.telegram.MessageThreadListener;
+import org.thunderdog.challegram.telegram.DeletedMessagesStore;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibCache;
 import org.thunderdog.challegram.telegram.TdlibManager;
@@ -2273,6 +2274,46 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   public void updateMessagesDeleted (long chatId, long[] messageIds) {
+    if (Settings.instance().isAntiDeleteEnabled() && !areScheduled() && !ChatId.isSecret(chatId)) {
+      // Anti-delete: keep incoming messages on screen, mark them as deleted
+      boolean[] kept = new boolean[messageIds.length];
+      int keptCount = 0;
+      int messageCount = adapter.getMessageCount();
+      for (int index = 0; index < messageCount; index++) {
+        TGMessage item = adapter.getMessage(index);
+        if (item.isOutgoing() || item.isSponsoredMessage()) {
+          continue;
+        }
+        boolean affected = false;
+        for (int i = 0; i < messageIds.length; i++) {
+          if (!kept[i]) {
+            TdApi.Message deletedMessage = item.findDescendantOrSelf(messageIds[i]);
+            if (deletedMessage != null) {
+              kept[i] = true;
+              keptCount++;
+              affected = true;
+              DeletedMessagesStore.save(tdlib, deletedMessage);
+            }
+          }
+        }
+        if (affected) {
+          item.markAsDeletedLocally();
+        }
+      }
+      if (keptCount == messageIds.length) {
+        return;
+      }
+      if (keptCount > 0) {
+        long[] remaining = new long[messageIds.length - keptCount];
+        int j = 0;
+        for (int i = 0; i < messageIds.length; i++) {
+          if (!kept[i]) {
+            remaining[j++] = messageIds[i];
+          }
+        }
+        messageIds = remaining;
+      }
+    }
     controller.removeReply(chatId, messageIds);
     controller.onMessagesDeleted(chatId, messageIds);
 

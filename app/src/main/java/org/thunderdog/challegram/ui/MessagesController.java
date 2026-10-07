@@ -10568,6 +10568,10 @@ public class MessagesController extends ViewController<MessagesController.Argume
           null;
       }
     }
+    if (set && Settings.instance().isGhostNoTyping()) {
+      // Ghost mode: never report "typing…" / "recording…" / etc.
+      return;
+    }
     if (set) {
       int time = (int) (SystemClock.uptimeMillis() / 1000L);
       if (time - actions.get(action) >= 4 || force || lastActionCancelled) {

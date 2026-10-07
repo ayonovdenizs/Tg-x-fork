@@ -38,6 +38,7 @@ import org.thunderdog.challegram.data.TGMessage;
 import org.thunderdog.challegram.data.TdApiExt;
 import org.thunderdog.challegram.data.ThreadInfo;
 import org.thunderdog.challegram.emoji.EmojiCodes;
+import org.thunderdog.challegram.telegram.DeletedMessagesStore;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibDelegate;
 import org.thunderdog.challegram.telegram.TdlibMessageViewer;
@@ -270,6 +271,9 @@ public class MessagesLoader implements Client.ResultHandler {
             }
             TdApi.Messages result = (TdApi.Messages) object;
             messages = result.messages;
+            if (canInjectDeletedMessages()) {
+              messages = DeletedMessagesStore.merge(tdlib, getChatId(), messages, lastFromMessageId != null ? lastFromMessageId.getMessageId() : 0, lastOffset, lastLimit, !loadingLocal);
+            }
             knownTotalCount = result.totalCount;
             nextSearchOffset = null; nextSearchFromMessageId = 0;
             break;
@@ -1093,6 +1097,11 @@ public class MessagesLoader implements Client.ResultHandler {
   private boolean foundUnreadAtLeastOnce;
   private final Object lock = new Object();
 
+  private boolean canInjectDeletedMessages () {
+    return specialMode == SPECIAL_MODE_NONE && messageThread == null && !hasSearchFilter() &&
+      Settings.instance().isAntiDeleteEnabled() && !ChatId.isSecret(getChatId());
+  }
+
   private boolean hasSearchFilter () {
     return searchFilter != null;
   }
@@ -1314,6 +1323,7 @@ public class MessagesLoader implements Client.ResultHandler {
     }
 
     final ArrayList<TGMessage> items = new ArrayList<>(messages.length);
+    final java.util.Set<Long> deletedMessageIds = canInjectDeletedMessages() ? DeletedMessagesStore.loadIds(tdlib, getChatId()) : null;
 
     final long chatId, lastReadOutboxMessageId, lastReadInboxMessageId;
     final boolean hasUnreadMessages;
@@ -1424,6 +1434,9 @@ public class MessagesLoader implements Client.ResultHandler {
         }
         cur = TGMessage.valueOf(manager, messages[j], chat, messageThread, administrator);
         if (cur != null) {
+          if (deletedMessageIds != null && deletedMessageIds.contains(messages[j].id)) {
+            cur.markAsDeletedLocally();
+          }
           if (!containsScrollingMessage && scrollMessageId != null && scrollMessageId.compareTo(messages[j].chatId, messages[j].id)) {
             containsScrollingMessage = true;
           }

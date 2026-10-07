@@ -283,7 +283,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
       this.client = Client.create(this, this, this);
       tdlib.updateParameters(client);
       if (Config.NEED_ONLINE) {
-        if (tdlib.isOnline) {
+        if (tdlib.isOnlineSent) {
           client.send(new TdApi.SetOption("online", new TdApi.OptionValueBoolean(true)), tdlib.okHandler());
         }
       }
@@ -3982,7 +3982,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
             break;
         }
       }
-      if (!hasPasscode(chat) && chat.lastMessage != null) {
+      if (!hasPasscode(chat) && chat.lastMessage != null && !Settings.instance().isGhostNoReadReceipts()) {
         client().send(new TdApi.ViewMessages(chatId, new long[] {chat.lastMessage.id}, source, true), okHandler(after));
       }
     }
@@ -4775,6 +4775,9 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   // Actions
 
   public void sendScreenshotMessage (long chatId, long[] messageIds) {
+    if (Settings.instance().isGhostNoScreenshotNotification()) {
+      return;
+    }
     client().send(new TdApi.ViewMessages(chatId, messageIds, new TdApi.MessageSourceScreenshot(), false), messageHandler());
   }
 
@@ -6572,6 +6575,7 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
   }
 
   private boolean isOnline;
+  private boolean isOnlineSent;
 
   public boolean isOnline () {
     return isOnline;
@@ -6581,10 +6585,22 @@ public class Tdlib implements TdlibProvider, Settings.SettingsChangeListener, Da
     if (this.isOnline != isOnline) {
       this.isOnline = isOnline;
       Log.i("SetOnline accountId:%d -> %b", accountId, isOnline);
-      if (Config.NEED_ONLINE) {
-        performOptional(client -> client.send(new TdApi.SetOption("online", new TdApi.OptionValueBoolean(isOnline)), okHandler()), null);
-      }
+      syncOnlineStatus();
       // cache().setPauseStatusRefreshers(!isOnline);
+    }
+  }
+
+  /**
+   * Re-sends "online" option to TDLib taking Ghost mode ("stay offline") into account.
+   * Call it when the ghost mode setting changes.
+   */
+  public void syncOnlineStatus () {
+    boolean effectiveOnline = isOnline && !Settings.instance().isGhostOffline();
+    if (this.isOnlineSent != effectiveOnline) {
+      this.isOnlineSent = effectiveOnline;
+      if (Config.NEED_ONLINE) {
+        performOptional(client -> client.send(new TdApi.SetOption("online", new TdApi.OptionValueBoolean(effectiveOnline)), okHandler()), null);
+      }
     }
   }
 

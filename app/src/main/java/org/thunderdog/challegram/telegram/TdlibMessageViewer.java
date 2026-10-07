@@ -28,6 +28,7 @@ import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.Settings;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -765,6 +766,13 @@ public class TdlibMessageViewer {
     }
 
     private void viewMessagesImpl (long chatId, long[] messageIds, TdApi.MessageSource messageSource, boolean forceRead, @Nullable RunnableBool after) {
+      if (messageIds.length > 0 && Settings.instance().isGhostNoReadReceipts()) {
+        // Ghost mode: do not report messages as viewed/read to the server
+        if (after != null) {
+          after.runWithBool(true);
+        }
+        return;
+      }
       if (messageIds.length > 0) {
         context.tdlib.send(new TdApi.ViewMessages(chatId, messageIds, messageSource, forceRead), (ok, error) -> {
           if (after != null) {
@@ -963,7 +971,7 @@ public class TdlibMessageViewer {
         }
       }
     }
-    if (screenshotMessages != null && !screenshotMessages.isEmpty()) {
+    if (screenshotMessages != null && !screenshotMessages.isEmpty() && !Settings.instance().isGhostNoScreenshotNotification()) {
       for (int i = 0; i < screenshotMessages.size(); i++) {
         long chatId = screenshotMessages.keyAt(i);
         long[] messageIds = screenshotMessages.valueAt(i).toArray();
