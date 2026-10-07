@@ -22,7 +22,7 @@ import android.view.View;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.chat.MediaPreview;
@@ -300,6 +300,10 @@ public abstract class InlineResult <T> implements MessageSourceProvider {
     }
   }
 
+  public final void rebuildLayout () {
+    layoutInternal(lastLayoutWidth);
+  }
+
   private int lastLayoutWidth;
 
   public final void layout (int width, ComplexReceiver receiver) {
@@ -400,6 +404,7 @@ public abstract class InlineResult <T> implements MessageSourceProvider {
   // Static stuff
 
   public static InlineResult<?> valueOf (BaseActivity context, Tdlib tdlib, TdApi.Message message) {
+    //noinspection SwitchIntDef
     switch (message.content.getConstructor()) {
       case TdApi.MessageAudio.CONSTRUCTOR: {
         return new InlineResultCommon(context, tdlib, message, (TdApi.MessageAudio) message.content, null).setMessage(message);

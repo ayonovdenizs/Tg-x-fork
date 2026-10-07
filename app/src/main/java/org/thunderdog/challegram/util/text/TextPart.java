@@ -16,45 +16,42 @@ package org.thunderdog.challegram.util.text;
 
 import android.graphics.Canvas;
 import android.graphics.Rect;
+import android.os.Build;
 import android.text.TextPaint;
-import android.text.TextUtils;
 import android.view.View;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
-import org.thunderdog.challegram.U;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.emoji.Emoji;
 import org.thunderdog.challegram.emoji.EmojiInfo;
 import org.thunderdog.challegram.loader.ComplexReceiver;
+import org.thunderdog.challegram.loader.gif.GifReceiver;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Strings;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.tool.Views;
+import org.thunderdog.challegram.util.text.bidi.BiDiEntity;
+import org.thunderdog.challegram.util.text.bidi.BiDiUtils;
 
-import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.ColorUtils;
 
 public class TextPart {
-  private static final int FLAG_LINE_RTL = 1;
-  private static final int FLAG_LINE_RTL_FAKE = 1 << 2;
-  private static final int FLAG_ANIMATED_EMOJI = 1 << 3;
-
   private final Text source;
   private String line;
   private @Nullable TextEntity entity;
 
-  private int flags;
   private int x, y;
   private int start, end;
   private float width;
   private int height = -1;
+  private @BiDiEntity int bidiEntity;
 
-  private final int lineIndex, paragraphIndex;
+  private int lineIndex, paragraphIndex;
 
   public TextPart (Text source, String line, int start, int end, int lineIndex, int paragraphIndex) {
     this.source = source;
@@ -79,17 +76,18 @@ public class TextPart {
     this.end = end;
   }
 
+  public void setLineIndex (int lineIndex, int paragraphIndex) {
+    this.lineIndex = lineIndex;
+    this.paragraphIndex = paragraphIndex;
+  }
+
   public void setXY (int x, int y) {
     this.x = x;
     this.y = y;
   }
 
   public boolean isRtl () {
-    return (flags & FLAG_LINE_RTL) != 0 || (flags & FLAG_LINE_RTL_FAKE) != 0;
-  }
-
-  public void setAnimateEmoji (boolean animate) {
-    this.flags = BitwiseUtils.setFlag(flags, FLAG_ANIMATED_EMOJI, animate);
+    return BiDiUtils.isParagraphRtl(bidiEntity);
   }
 
   public void setWidth (float width) {
@@ -104,12 +102,20 @@ public class TextPart {
     this.entity = entity;
   }
 
+  public void setBidiEntity (@BiDiEntity int bidiEntity) {
+    this.bidiEntity = bidiEntity;
+  }
+
+  public @BiDiEntity int getBidiEntity () {
+    return bidiEntity;
+  }
+
   public @Nullable TextEntity getEntity () {
     return entity;
   }
 
   public float getWidth () {
-    return trimmedLine != null ? trimmedWidth : width;
+    return width;
   }
 
   public int getHeight () {
@@ -168,61 +174,12 @@ public class TextPart {
     return emojiInfo == null && (this.entity == null || this.entity.isEssential());
   }
 
-  public void setPartDirection (int direction, boolean fake) {
-    int flags = this.flags;
-    /*switch (direction) {
-      case Strings.DIRECTION_LTR:
-        flags &= ~FLAG_DIRECTION_RTL;
-        flags |= FLAG_DIRECTION_LTR;
-        break;
-      case Strings.DIRECTION_RTL:
-        flags |= FLAG_DIRECTION_RTL;
-        flags &= ~FLAG_DIRECTION_LTR;
-        break;
-      case Strings.DIRECTION_NEUTRAL:
-        flags &= ~FLAG_DIRECTION_LTR;
-        flags &= ~FLAG_DIRECTION_RTL;
-        break;
-    }*/
-    // flags = U.setFlag(flags, )
-    // flags = U.setFlag(flags, FLAG_LINE_RTL_FAKE, fake);
-    this.flags = flags;
-  }
-
-  public void setRtlMode (boolean isRtl, boolean fake) {
-    int flags = this.flags;
-    flags = BitwiseUtils.setFlag(flags, FLAG_LINE_RTL, isRtl);
-    flags = BitwiseUtils.setFlag(flags, FLAG_LINE_RTL_FAKE, fake);
-    this.flags = flags;
-  }
-
   public void setEnd (int end) {
     if (end < start) {
       throw new RuntimeException("invalid");
     }
     if (this.end != end) {
       this.end = end;
-      if (trimmedLine != null) {
-        trimContents(trimmedMaxWidth);
-      }
-    }
-  }
-
-  private String trimmedLine;
-  private float trimmedWidth;
-  private float trimmedMaxWidth;
-
-  public void trimContents (float realMaxWidth) {
-    this.trimmedMaxWidth = realMaxWidth;
-    TextPaint paint = source.getTextPaint(entity);
-    int ellipsis = (int) U.measureText("…", paint);
-    int maxWidth = (int) realMaxWidth - ellipsis - x;
-    trimmedLine = line.substring(start, end);
-    trimmedLine = TextUtils.ellipsize(trimmedLine, paint, maxWidth, TextUtils.TruncateAt.END).toString();
-    trimmedWidth = U.measureText(trimmedLine, paint);
-    if (!trimmedLine.endsWith("…")) {
-      trimmedLine = trimmedLine + "…";
-      trimmedWidth += ellipsis;
     }
   }
 
@@ -243,7 +200,6 @@ public class TextPart {
   }
 
   private @Nullable TextMedia media;
-  private int displayMediaKeyOffset = -1;
   private EmojiInfo emojiInfo;
 
   public void setEmoji (@Nullable EmojiInfo emoji) {
@@ -299,14 +255,10 @@ public class TextPart {
       startXPadding = lineStartMargin;
       endXPadding = lineEndMargin;
     }
-    boolean rtl = (flags & FLAG_LINE_RTL) != 0;
+    boolean rtl = isRtl();
     if ((rtl || source.alignRight()) && endX != startX) {
-      if (!rtl || (flags & FLAG_LINE_RTL_FAKE) != 0) {
-        int lineWidth = source.getLineWidth(lineIndex);
-        x = endX - lineWidth + this.x - endXPadding;
-      } else {
-        x = endX - this.x - (int) this.width - endXPadding;
-      }
+      int lineWidth = source.getLineWidth(lineIndex);
+      x = endX - lineWidth + this.x - endXPadding;
       if (lineIndex + 1 == source.getLineCount()) {
         x -= endXBottomPadding;
       }
@@ -317,7 +269,7 @@ public class TextPart {
   }
 
   public boolean wouldMergeWithNextPart (TextPart part) {
-    return part != null && part != this && emojiInfo == null && part.emojiInfo == null && media == null && part.media == null && trimmedLine == null && part.trimmedLine == null && this.y == part.y && line == part.line && end == part.start && isSameEntity(part.entity) && requiresTopLayer() == part.requiresTopLayer();
+    return part != null && part != this && emojiInfo == null && part.emojiInfo == null && media == null && part.media == null && this.y == part.y && line == part.line && end == part.start && isSameEntity(part.entity) && bidiEntity == part.bidiEntity && requiresTopLayer() == part.requiresTopLayer();
   }
 
   @NonNull
@@ -337,10 +289,10 @@ public class TextPart {
     int x = makeX(startX, endX, endXBottomPadding);
     if (isStaticElement())
       throw new IllegalStateException("static elements can't be merged");
-    if (trimmedLine != null)
-      throw new IllegalStateException("trimmedLine != null");
     TextPaint paint = getPaint(partIndex, alpha, colorProvider);
-    c.drawText(line, start, end, x, y + source.getAscent() + paint.baselineShift, paint);
+    final float textSize = paint.getTextSize();
+    final int textY = y + source.getAscent(textSize) + paint.baselineShift;
+    c.drawText(line, start, end, x, textY, paint);
   }
 
   private void drawError (Canvas c, float cx, float cy, float radius, float alpha, int color) {
@@ -355,10 +307,48 @@ public class TextPart {
     Emoji.instance().draw(c, emojiInfo, rect, (int) (alpha * textPaint.getAlpha()));
   }
 
+  private static final int DRAW_BATCH_LEVEL_LOCAL = 1;
+
+  public @Nullable GifReceiver findTargetReceiver (@Nullable ComplexReceiver receiver) {
+    if (receiver != null && media != null && !media.isNotFoundCustomEmoji() && media.isAnimated()) {
+      final long displayMediaKey = media.getDisplayMediaKey();
+      return receiver.getGifReceiver(displayMediaKey);
+    }
+    return null;
+  }
+
+  public void beginDrawBatch (@Nullable ComplexReceiver receiver, int externalBatchId) {
+    if (externalBatchId <= 0)
+      throw new IllegalArgumentException(Integer.toString(externalBatchId));
+    GifReceiver gifReceiver = findTargetReceiver(receiver);
+    if (gifReceiver != null) {
+      gifReceiver.beginDrawBatch(DRAW_BATCH_LEVEL_LOCAL + externalBatchId);
+    }
+  }
+
+  public void finishAllDrawBatches (@Nullable ComplexReceiver receiver) {
+    finishDrawBatch(receiver, 0);
+  }
+
+  public void finishDrawBatch (@Nullable ComplexReceiver receiver, int externalBatchId) {
+    if (externalBatchId < 0) {
+      throw new IllegalArgumentException(Integer.toString(externalBatchId));
+    }
+    GifReceiver gifReceiver = findTargetReceiver(receiver);
+    if (gifReceiver != null) {
+      if (externalBatchId == 0) {
+        gifReceiver.finishAllDrawBatches();
+      } else {
+        gifReceiver.finishDrawBatch(DRAW_BATCH_LEVEL_LOCAL + externalBatchId);
+      }
+    }
+  }
+
   public void draw (int partIndex, Canvas c, int startX, int endX, int endXBottomPadding, int startY, float alpha, @Nullable TextColorSet colorProvider, @Nullable ComplexReceiver receiver) {
     final int y = startY + this.y;
     final int x = makeX(startX, endX, endXBottomPadding);
     final TextPaint textPaint = getPaint(partIndex, alpha, colorProvider);
+    final float textSize = textPaint.getTextSize();
     final float textAlpha = textPaint.getAlpha() / 255f;
     if (media != null) {
       if (media.isNotFoundCustomEmoji()) {
@@ -369,7 +359,7 @@ public class TextPart {
         }
         return;
       }
-      final int displayMediaKey = media.getDisplayMediaKey();
+      final long displayMediaKey = media.getDisplayMediaKey();
       final int iconY = y + textPaint.baselineShift - (isCustomEmoji() ? Screen.dp(1.5f) : 0);
       final int height = this.height == -1 ? (int) width : this.height;
       if (receiver != null && displayMediaKey != -1) {
@@ -384,7 +374,7 @@ public class TextPart {
           restoreToCount = Views.save(c);
           c.translate(x, iconY);
           if (isFirst && media.isAnimated()) {
-            receiver.getGifReceiver(displayMediaKey).beginDrawBatch();
+            receiver.getGifReceiver(displayMediaKey).beginDrawBatch(DRAW_BATCH_LEVEL_LOCAL);
           }
         } else {
           left = x;
@@ -396,7 +386,7 @@ public class TextPart {
         media.draw(c, receiver, left, top, right, bottom, alpha, displayMediaKey);
         if (needTranslate) {
           if (isLast && media.isAnimated()) {
-            receiver.getGifReceiver(displayMediaKey).finishDrawBatch();
+            receiver.getGifReceiver(displayMediaKey).finishDrawBatch(DRAW_BATCH_LEVEL_LOCAL);
           }
           Views.restore(c, restoreToCount);
         }
@@ -409,12 +399,54 @@ public class TextPart {
     } else if (isRecognizedEmoji()) {
       drawEmoji(c, x, y, textPaint, alpha);
     } else {
-      final int textY = y + source.getAscent() + textPaint.baselineShift;
-      if (trimmedLine != null) {
-        c.drawText(trimmedLine, x, textY, textPaint);
+      final int textY = y + source.getAscent(textSize) + textPaint.baselineShift;
+      if (DEBUG && BiDiUtils.isValid(bidiEntity)) {
+        final int color = BiDiUtils.isRtl(bidiEntity) ? 0x400000FF : 0x40FF0000;
+        c.drawRect(x, textY - Screen.dp(16), x + width, textY, Paints.fillingPaint(color));
+        c.drawRect(x, textY - Screen.dp(16), x + width, textY, Paints.strokeSmallPaint(0xFF000000));
+      }
+
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && BiDiUtils.isValid(bidiEntity)) {
+        c.drawTextRun(line, start, end, 0, line.length(), x, textY, BiDiUtils.isRtl(bidiEntity), textPaint);
       } else {
         c.drawText(line, start, end, x, textY, textPaint);
       }
     }
+  }
+
+  private static final boolean DEBUG = false;
+
+  public int getQuoteEntityId () {
+    return entity != null ? entity.getQuoteId() : -1;
+  }
+
+  public static int getAdditionalLinesBefore (TextPart part) {
+    final TextEntity entity = part.getEntity();
+    if (entity == null) return 0;
+
+    final int startEntity = entity.getStart();
+    final int startPart = part.getStart();
+    int startLinesCount = 0;
+
+    while ((startPart - startLinesCount - 1) >= startEntity && part.getLine().charAt(startPart - startLinesCount - 1) == '\n') {
+      startLinesCount++;
+    }
+
+    return startLinesCount;
+  }
+
+  public static int getAdditionalLinesAfter (TextPart part) {
+    final TextEntity entity = part.getEntity();
+    if (entity == null) return 0;
+
+    final int endEntity = entity.getEnd();
+    final int endPart = part.getEnd();
+    int endLinesCount = 0;
+
+    while ((endPart + endLinesCount) < endEntity && part.getLine().charAt(endPart + endLinesCount) == '\n') {
+      endLinesCount++;
+    }
+
+    return endLinesCount;
   }
 }

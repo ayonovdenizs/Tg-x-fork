@@ -31,6 +31,7 @@ import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.component.emoji.GifView;
 import org.thunderdog.challegram.component.inline.CustomResultView;
 import org.thunderdog.challegram.component.sticker.StickerSmallView;
+import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.InlineResult;
 import org.thunderdog.challegram.data.InlineResultButton;
 import org.thunderdog.challegram.data.InlineResultGif;
@@ -38,6 +39,7 @@ import org.thunderdog.challegram.data.InlineResultPhoto;
 import org.thunderdog.challegram.data.InlineResultSticker;
 import org.thunderdog.challegram.support.RippleSupport;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeId;
 import org.thunderdog.challegram.theme.ThemeListenerList;
@@ -56,6 +58,7 @@ public class InlineResultsAdapter extends RecyclerView.Adapter<InlineResultsAdap
   private final InlineResultsWrap parent;
   private final ArrayList<InlineResult<?>> items;
   private final ThemeListenerList themeProvider;
+  private StickerSmallView.StickerMovementCallback stickerMovementCallback;
 
   private Tdlib tdlib;
 
@@ -70,6 +73,12 @@ public class InlineResultsAdapter extends RecyclerView.Adapter<InlineResultsAdap
     this.items = new ArrayList<>();
     this.parent = parent;
     this.themeProvider = themeProvider;
+    this.stickerMovementCallback = parent;
+  }
+
+  public void setStickerMovementCallback (StickerSmallView.StickerMovementCallback stickerMovementCallback) {
+    this.stickerMovementCallback = stickerMovementCallback;
+    notifyDataSetChanged();
   }
 
   public void setTdlib (Tdlib tdlib) {
@@ -106,7 +115,7 @@ public class InlineResultsAdapter extends RecyclerView.Adapter<InlineResultsAdap
 
   @Override
   public ViewHolder onCreateViewHolder (@NonNull ViewGroup parent, int viewType) {
-    return ViewHolder.create(context, tdlib, viewType, useDarkMode, this.parent, this.parent, this.parent, this.parent, this.parent, themeProvider);
+    return ViewHolder.create(context, tdlib, viewType, useDarkMode, this.parent, this.parent, this.parent, this.stickerMovementCallback, this.parent, themeProvider);
   }
 
   @Override
@@ -165,6 +174,7 @@ public class InlineResultsAdapter extends RecyclerView.Adapter<InlineResultsAdap
       case ViewHolder.TYPE_STICKER: {
         InlineResult<?> result = items.get(position - 1);
         ((StickerSmallView) holder.itemView).setSticker(((InlineResultSticker) result).getSticker());
+        ((StickerSmallView) holder.itemView).setStickerMovementCallback(stickerMovementCallback);
         holder.itemView.setTag(result);
         break;
       }
@@ -188,7 +198,7 @@ public class InlineResultsAdapter extends RecyclerView.Adapter<InlineResultsAdap
       }
       case ViewHolder.TYPE_BUTTON: {
         InlineResultButton button = (InlineResultButton) items.get(position - 1);
-        ((TextView) holder.itemView).setText(button.getText().toUpperCase());
+        ((TextView) holder.itemView).setText(Lang.uppercase(button.getText()));
         holder.itemView.setTag(button);
         break;
       }
@@ -305,9 +315,9 @@ public class InlineResultsAdapter extends RecyclerView.Adapter<InlineResultsAdap
           textView.setPadding(Screen.dp(16f), 0, Screen.dp(16f), Screen.dp(1f));
           textView.setTypeface(Fonts.getRobotoMedium());
           textView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15f);
-          textView.setTextColor(useDarkMode ? Theme.getColor(R.id.theme_color_textNeutral, ThemeId.NIGHT_BLACK) : Theme.getColor(R.id.theme_color_textNeutral));
+          textView.setTextColor(useDarkMode ? Theme.getColor(ColorId.textNeutral, ThemeId.NIGHT_BLACK) : Theme.getColor(ColorId.textNeutral));
           if (themeList != null && !useDarkMode) {
-            themeList.addThemeColorListener(textView, R.id.theme_color_textNeutral);
+            themeList.addThemeColorListener(textView, ColorId.textNeutral);
             themeList.addThemeInvalidateListener(textView);
           }
           Views.setClickable(textView);

@@ -16,8 +16,9 @@ import android.graphics.Canvas;
 import android.graphics.Path;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BuildConfig;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.loader.ComplexReceiver;
@@ -31,6 +32,7 @@ import org.thunderdog.challegram.loader.gif.GifReceiver;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibEmojiManager;
 import org.thunderdog.challegram.telegram.TdlibThread;
+import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Views;
@@ -40,18 +42,18 @@ import java.util.List;
 
 import me.vkryl.core.ColorUtils;
 import me.vkryl.core.lambda.Destroyable;
-import me.vkryl.td.Td;
-import me.vkryl.td.TdConstants;
+import tgx.td.Td;
+import tgx.td.TdConstants;
 
 public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
   private final Text source;
 
   final List<TextPart> attachedToParts = new ArrayList<>();
-  private int displayMediaKeyOffset = -1;
+  private long displayMediaKeyOffset = -1;
 
   private final Tdlib tdlib;
   public final String keyId;
-  public final int id;
+  public final long id;
   private final int width, height;
   private boolean isDestroyed;
 
@@ -64,7 +66,7 @@ public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
   private ImageFile imageFile;
   private GifFile gifFile;
 
-  public TextMedia (Text source, Tdlib tdlib, String keyId, int id, int size, long customEmojiId) {
+  public TextMedia (Text source, Tdlib tdlib, String keyId, long id, int size, long customEmojiId) {
     if (tdlib == null)
       throw new IllegalArgumentException();
     this.source = source;
@@ -80,7 +82,7 @@ public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
     }
   }
 
-  public TextMedia (Text source, Tdlib tdlib, String keyId, int id, TdApi.RichTextIcon icon) {
+  public TextMedia (Text source, Tdlib tdlib, String keyId, long id, TdApi.RichTextIcon icon) {
     if (tdlib == null)
       throw new IllegalArgumentException();
     this.source = source;
@@ -116,6 +118,7 @@ public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
     } else {
       imageFile = new ImageFile(tdlib, icon.document.document);
       imageFile.setSize(Screen.dp(Math.max(icon.width, icon.height)));
+      imageFile.setNoBlur();
     }
   }
 
@@ -127,12 +130,22 @@ public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
     return "emoji_" + customEmojiId + "_" + size;
   }
 
+  private boolean isEmojiStatus;
+
+  public void setIsEmojiStatus (@Nullable String sharedUsageId) {
+    isEmojiStatus = true;
+    if (gifFile != null) {
+      gifFile.setRepeatCount(2);
+      gifFile.setPlayOnceId(sharedUsageId);
+    }
+  }
+
   private void buildCustomEmoji (@NonNull TdlibEmojiManager.Entry customEmoji) {
     TdApi.Sticker sticker = customEmoji.value;
     if (sticker == null)
       return;
 
-    this.outline = Td.buildOutline(sticker, width, height);
+    // FIXME this.outline = Td.buildOutline(sticker, width, height);
 
     thumbnail = TD.toImageFile(tdlib, sticker.thumbnail);
     if (thumbnail != null) {
@@ -148,15 +161,30 @@ public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
         this.gifFile.setScaleType(GifFile.FIT_CENTER);
         this.gifFile.setOptimizationMode(GifFile.OptimizationMode.EMOJI);
         this.gifFile.setRequestedSize(Math.max(width, height));
+        if (isEmojiStatus) {
+          this.gifFile.setRepeatCount(2);
+        }
         break;
       }
       case TdApi.StickerFormatWebp.CONSTRUCTOR: {
         this.imageFile = new ImageFile(tdlib, sticker.sticker);
         this.imageFile.setSize(Math.max(width, height));
         this.imageFile.setScaleType(ImageFile.FIT_CENTER);
+        this.imageFile.setNoBlur();
         break;
       }
     }
+  }
+
+  public void rebuild () {
+    if (customEmoji != null && !customEmoji.isNotFound()) {
+      buildCustomEmoji(customEmoji);
+    }
+    tdlib.ui().post(() -> {
+      if (!isDestroyed) {
+        source.notifyMediaChanged(this);
+      }
+    });
   }
 
   @TdlibThread
@@ -193,6 +221,11 @@ public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
     return customEmoji != null && customEmoji.value != null && Td.isAnimated(customEmoji.value.format);
   }
 
+  @Nullable
+  public TdApi.Sticker getSticker () {
+    return customEmoji != null ? customEmoji.value : null;
+  }
+
   public static float getScale (TdApi.Sticker sticker, int size) {
     // animated custom emoji must be:
     // 100x100 in 120x120 for webm
@@ -203,6 +236,10 @@ public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
       return 120.0f / 100.0f - (size != 0 ? Screen.dp(1f) * 2 / (float) size : 0);
     }
     return 1f;
+  }
+
+  public boolean needsRepainting () {
+    return isCustomEmoji() && customEmoji != null && TD.needThemedColorFilter(customEmoji.value);
   }
 
   public boolean isCustomEmoji () {
@@ -220,11 +257,11 @@ public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
     }
   }
 
-  void setDisplayMediaKeyOffset (int keyOffset) {
+  void setDisplayMediaKeyOffset (long keyOffset) {
     this.displayMediaKeyOffset = keyOffset;
   }
 
-  int getDisplayMediaKey () {
+  long getDisplayMediaKey () {
     if (displayMediaKeyOffset != -1) {
       return displayMediaKeyOffset + id;
     }
@@ -232,7 +269,7 @@ public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
   }
 
   public void requestFiles (ComplexReceiver receiver) {
-    int displayMediaKey = getDisplayMediaKey();
+    long displayMediaKey = getDisplayMediaKey();
     if (displayMediaKey == -1)
       throw new IllegalStateException();
     if (isCustomEmoji() && customEmoji == null && !customEmojiRequested) {
@@ -248,13 +285,16 @@ public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
     }
   }
 
-  public void draw (Canvas c, ComplexReceiver receiver, int left, int top, int right, int bottom, float alpha, int displayMediaKey) {
+  public void draw (Canvas c, ComplexReceiver receiver, int left, int top, int right, int bottom, float alpha, long displayMediaKey) {
     if (isCustomEmoji() && customEmoji == null) {
       if (BuildConfig.DEBUG) {
         c.drawCircle(left + (right - left) / 2f, top + (bottom - top) / 2f, height / 2f, Paints.fillingPaint(ColorUtils.alphaColor(alpha, 0xffff0000)));
       }
       return;
     }
+
+    final boolean needRepainting = needsRepainting();
+
     //noinspection ConstantConditions
     float scale = customEmoji != null && !customEmoji.isNotFound() ? getScale(customEmoji.value, (right - left)) : 1f;
     boolean needScaleUp = scale != 1f;
@@ -281,6 +321,12 @@ public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
     }
     DoubleImageReceiver preview = content == null || content.needPlaceholder() ? receiver.getPreviewReceiver(displayMediaKey) : null;
     if (preview != null) {
+      if (needRepainting) {
+        long complexColor = source.getMediaTextComplexColor();
+        Theme.applyComplexColor(preview, complexColor);
+      } else {
+        preview.disablePorterDuffColorFilter();
+      }
       preview.setBounds(left, top, right, bottom);
       preview.setPaintAlpha(alpha);
       if (outline != null && preview.needPlaceholder()) {
@@ -290,7 +336,13 @@ public class TextMedia implements Destroyable, TdlibEmojiManager.Watcher {
       preview.restorePaintAlpha();
     }
     if (content != null) {
-      if (outline != null && content.needPlaceholder()) {
+      if (needRepainting) {
+        long complexColor = source.getMediaTextComplexColor();
+        Theme.applyComplexColor(content, complexColor);
+      } else {
+        content.disablePorterDuffColorFilter();
+      }
+      if (preview == null && outline != null && content.needPlaceholder()) {
         content.drawPlaceholderContour(c, outline, alpha);
       }
       content.draw(c);

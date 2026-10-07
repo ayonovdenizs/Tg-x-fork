@@ -19,7 +19,7 @@ import android.view.MotionEvent;
 
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.data.ThreadInfo;
 import org.thunderdog.challegram.loader.AvatarReceiver;
 import org.thunderdog.challegram.navigation.ComplexHeaderView;
@@ -30,7 +30,7 @@ import org.thunderdog.challegram.theme.ThemeDeprecated;
 import org.thunderdog.challegram.tool.Screen;
 
 import me.vkryl.core.StringUtils;
-import me.vkryl.td.ChatId;
+import tgx.td.ChatId;
 
 public class ChatHeaderView extends ComplexHeaderView {
   public interface Callback {
@@ -105,15 +105,17 @@ public class ChatHeaderView extends ComplexHeaderView {
     setShowMute(tdlib.chatNeedsMuteIcon(chat));
     setShowLock(ChatId.isSecret(chat.id));
     if (messageThread != null) {
+      setEmojiStatus(null);
       setText(messageThread.chatHeaderTitle(), !StringUtils.isEmpty(forcedSubtitle) ? forcedSubtitle : messageThread.chatHeaderSubtitle());
       setExpandedSubtitle(null);
       setUseRedHighlight(false);
-      attachChatStatus(messageThread.getChatId(), messageThread.getMessageThreadId());
+      attachChatStatus(messageThread.getChatId(), messageThread.getMessageTopicId());
     } else {
+      setEmojiStatus(tdlib.isSelfChat(chat) ? null : tdlib.chatUser(chat));
       setText(tdlib.chatTitle(chat), !StringUtils.isEmpty(forcedSubtitle) ? forcedSubtitle : tdlib.status().chatStatus(chat));
       setExpandedSubtitle(tdlib.status().chatStatusExpanded(chat));
       setUseRedHighlight(tdlib.isRedTeam(chat.id));
-      attachChatStatus(chat.id, 0);
+      attachChatStatus(chat.id, null);
     }
   }
 

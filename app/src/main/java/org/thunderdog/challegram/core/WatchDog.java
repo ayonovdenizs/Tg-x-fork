@@ -14,18 +14,20 @@
  */
 package org.thunderdog.challegram.core;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.os.Build;
 import android.os.SystemClock;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import androidx.annotation.RequiresApi;
+
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.telegram.TdlibManager;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 
 import java.lang.ref.Reference;
@@ -242,7 +244,7 @@ public class WatchDog {
     }
   }
 
-  @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+  @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
   private boolean hasRouteChanged (ConnectivityManager manager, Object rawNetwork) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && manager != null && rawNetwork != null) {
       android.net.Network network = (android.net.Network) rawNetwork;
@@ -254,7 +256,7 @@ public class WatchDog {
     return false;
   }
 
-  @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+  @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
   private void saveRoute (ConnectivityManager manager, Object rawNetwork) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && manager != null && rawNetwork != null) {
       android.net.Network network = (android.net.Network) rawNetwork;
@@ -273,13 +275,13 @@ public class WatchDog {
     }
   }
 
-  @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+  @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
   private static boolean filter (NetworkInfo info) {
     return info.isConnectedOrConnecting() && info.getType() != ConnectivityManager.TYPE_VPN;
   }
 
   public void letsHelpDoge (boolean dataSaverOnly) {
-    ConnectivityManager manager = (ConnectivityManager) UI.getAppContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+    ConnectivityManager manager = (ConnectivityManager) AppContext.get().getSystemService(Context.CONNECTIVITY_SERVICE);
 
     if (manager == null) {
       return;

@@ -16,14 +16,13 @@ package org.thunderdog.challegram.data;
 
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.loader.ImageFile;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.tool.UI;
 
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
-@Deprecated
 public class TGAudio {
   private final Tdlib tdlib;
   private final TdApi.Message msg;
@@ -54,12 +53,6 @@ public class TGAudio {
     this.tdlib = tdlib;
     this.msg = msg;
     this.audio = audio;
-  }
-
-  public TGAudio (Tdlib tdlib, TGRecord record) {
-    this.tdlib = tdlib;
-    this.msg = null;
-    this.voice = new TdApi.VoiceNote(record.getDuration(), null, "audio/ogg", null, TD.newFile(record.getFile()));
   }
 
   public Tdlib tdlib () {

@@ -25,7 +25,7 @@ import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
@@ -42,9 +42,10 @@ import org.thunderdog.challegram.mediaview.MediaViewThumbLocation;
 import org.thunderdog.challegram.mediaview.data.MediaItem;
 import org.thunderdog.challegram.player.TGPlayerController;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.telegram.TdlibAccentColor;
 import org.thunderdog.challegram.telegram.TdlibFilesManager;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
-import org.thunderdog.challegram.theme.ThemeColorId;
 import org.thunderdog.challegram.tool.Drawables;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
@@ -60,6 +61,7 @@ import java.util.concurrent.TimeUnit;
 
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.animator.FactorAnimator;
+import me.vkryl.android.util.ClickHelper;
 import me.vkryl.core.ColorUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
@@ -72,6 +74,7 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
 
   private FileProgressComponent fileProgress;
   private boolean disableProgressInteract;
+  private boolean needCloseButton;
   private TdApi.File targetFile;
 
   private static final float AVATAR_PLACEHOLDER_RADIUS = 25f;
@@ -90,8 +93,8 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
 
     setMediaPreview(MediaPreview.valueOf(tdlib, data.video, Screen.dp(50f), Screen.dp(3f), false));
     if (getMediaPreview() == null) {
-      int placeholderColorId = TD.getColorIdForString(data.video.fileName.isEmpty() ? data.id : data.video.fileName);
-      avatarPlaceholder = new AvatarPlaceholder(AVATAR_PLACEHOLDER_RADIUS, new AvatarPlaceholder.Metadata(placeholderColorId, TD.getLetters(title)), null);
+      TdlibAccentColor accentColor = tdlib.accentColorForString(data.video.fileName.isEmpty() ? data.id : data.video.fileName);
+      avatarPlaceholder = new AvatarPlaceholder(AVATAR_PLACEHOLDER_RADIUS, new AvatarPlaceholder.Metadata(accentColor, TD.getLetters(title)), null);
     }
   }
 
@@ -123,8 +126,8 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
 
     if (getMediaPreview() == null) {
       Letters letters = TD.getLetters(data.contact.firstName, data.contact.lastName);
-      int placeholderColorId = data.contact.userId != 0 ? TD.getAvatarColorId(data.contact.userId, tdlib.myUserId()) : R.id.theme_color_avatarInactive; //TD.getColorIdForString(TD.getUserName(data.contact.firstName, data.contact.lastName));
-      avatarPlaceholder = new AvatarPlaceholder(AVATAR_PLACEHOLDER_RADIUS, new AvatarPlaceholder.Metadata(placeholderColorId, letters), null);
+      TdlibAccentColor accentColor = data.contact.userId != 0 ? tdlib.cache().userAccentColor(data.contact.userId) : tdlib.accentColor(TdlibAccentColor.InternalId.INACTIVE);
+      avatarPlaceholder = new AvatarPlaceholder(AVATAR_PLACEHOLDER_RADIUS, new AvatarPlaceholder.Metadata(accentColor, letters), null);
     }
   }
 
@@ -169,7 +172,7 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
     if (getMediaPreview() != null) {
       this.fileProgress.setBackgroundColor(0x44000000);
     } else {
-      this.fileProgress.setBackgroundColorId(R.id.theme_color_file);
+      this.fileProgress.setBackgroundColorId(ColorId.file);
     }
     if (msg != null) {
       this.fileProgress.setPlayPauseFile(msg, builder);
@@ -193,7 +196,7 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
     if (this.getMediaPreview() != null) {
       this.getMediaPreview().setCornerRadius(isQueueSong ? Screen.dp(4f) : Screen.dp(50f) / 2);
     }
-    this.fileProgress.setBackgroundColorId(R.id.theme_color_file);
+    this.fileProgress.setBackgroundColorId(ColorId.file);
     this.trackDuration = Strings.buildDuration(audio.duration);
     this.trackDurationWidth = U.measureText(trackDuration, Paints.getRegularTextPaint(11f));
   }
@@ -270,6 +273,11 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
     return title;
   }
 
+  @Nullable
+  public String getMimeType () {
+    return fileProgress != null ? fileProgress.getMimeType() : null;
+  }
+
   public String getTrackSubtitle () {
     return TD.getSubtitle(audio);
   }
@@ -312,7 +320,7 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
     this.fileProgress = new FileProgressComponent(context, tdlib, TdlibFilesManager.DOWNLOAD_FLAG_VOICE, false, message != null ? message.chatId : 0, message != null ? message.id : 0);
     this.fileProgress.setViewProvider(currentViews);
     this.fileProgress.setDownloadedIconRes(FileProgressComponent.PLAY_ICON);
-    this.fileProgress.setBackgroundColorId(R.id.theme_color_file);
+    this.fileProgress.setBackgroundColorId(ColorId.file);
     this.fileProgress.setPlayPauseFile(message != null ? message : TD.newFakeMessage(voiceNote), null);
   }
 
@@ -322,7 +330,7 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
   private int customColorId;
   private Drawable customIcon;
 
-  public InlineResultCommon (BaseActivity context, Tdlib tdlib, String path, @ThemeColorId int colorId, @DrawableRes int icon, String title, String subtitle) {
+  public InlineResultCommon (BaseActivity context, Tdlib tdlib, String path, @ColorId int colorId, @DrawableRes int icon, String title, String subtitle) {
     super(context, tdlib, TYPE_DOCUMENT, path, null);
 
     this.title = title;
@@ -356,7 +364,7 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
     this.fileProgress.setSimpleListener(this);
     if (this.getMediaPreview() == null) {
       this.fileProgress.setDownloadedIconRes(isFolder ? R.drawable.baseline_folder_24 : R.drawable.baseline_insert_drive_file_24);
-      this.fileProgress.setBackgroundColorId(TD.getFileColorId(file.getName(), mimeType, false));
+      this.fileProgress.setBackgroundColorId(TdlibAccentColor.getFileColorId(file.getName(), mimeType, false));
     } else {
       if (isFolder) {
         this.fileProgress.setBackgroundColor(0x66000000);
@@ -393,7 +401,7 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
     if (getMediaPreview() != null) {
       this.fileProgress.setBackgroundColor(0x44000000);
     } else {
-      this.fileProgress.setBackgroundColorId(R.id.theme_color_file);
+      this.fileProgress.setBackgroundColorId(ColorId.file);
     }
   }
 
@@ -414,7 +422,7 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
     if (entry.probablyHasArtwork()) {
       ImageFile art = new ImageFileLocal(entry.getArtwork().toString());
       art.setIsContentUri();
-      setMediaPreview(new MediaPreviewSimple(Screen.dp(50f), Screen.dp(50f) / 2, art));
+      setMediaPreview(new MediaPreviewSimple(tdlib, Screen.dp(50f), Screen.dp(50f) / 2, art));
     } else {
       setMediaPreview(null);
     }
@@ -427,7 +435,7 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
     if (getMediaPreview() != null) {
       this.fileProgress.setBackgroundColor(Color.TRANSPARENT);
     } else {
-      this.fileProgress.setBackgroundColorId(R.id.theme_color_file);
+      this.fileProgress.setBackgroundColorId(ColorId.file);
     }
     String fileName = U.getFileName(entry.getPath());
     TdApi.Audio audio = new TdApi.Audio((int) (entry.getDuration() / 1000l), entry.getTitle(), entry.getArtist(), fileName, U.resolveMimeType(U.getExtension(fileName)), null, null, null, targetFile);
@@ -456,7 +464,7 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
     this.fileProgress.setSimpleListener(this);
     this.fileProgress.setDocumentMetadata(document, this.getMediaPreview() == null);
     if (this.getMediaPreview() == null) {
-      this.fileProgress.setBackgroundColorId(TD.getFileColorId(document, false));
+      this.fileProgress.setBackgroundColorId(TdlibAccentColor.getFileColorId(document, false));
     } else {
       this.fileProgress.setBackgroundColor(0x44000000);
     }
@@ -487,7 +495,7 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
     this.fileProgress.setPausedIconRes(R.drawable.baseline_insert_drive_file_24);
     this.fileProgress.setDocumentMetadata(data.document, this.getMediaPreview() == null);
     if (this.getMediaPreview() == null) {
-      this.fileProgress.setBackgroundColorId(TD.getFileColorId(data.document, false));
+      this.fileProgress.setBackgroundColorId(TdlibAccentColor.getFileColorId(data.document, false));
     } else {
       this.fileProgress.setBackgroundColor(0x44000000);
     }
@@ -533,12 +541,33 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
     if (isTrack()) {
       lastAvailWidth -= Screen.dp(16f) + Screen.dp(23f) + Screen.dp(9f);
     }
+    if (needCloseButton) {
+      lastAvailWidth -= Screen.dp(36);
+    }
     trimmedTitle = !StringUtils.isEmpty(title) ? new Text.Builder(title, lastAvailWidth, Paints.getTitleStyleProvider(), TextColorSets.Regular.NORMAL).singleLine().allBold().build() : null;
     trimmedDesc = !StringUtils.isEmpty(description) ? new Text.Builder(description, lastAvailWidth, Paints.getSubtitleStyleProvider(), TextColorSets.Regular.LIGHT).singleLine().build() : null;
   }
 
+  public InlineResultCommon setDisableProgressInteract (boolean disableProgressInteract) {
+    this.disableProgressInteract = disableProgressInteract;
+    return this;
+  }
+
+  public void setNeedCloseButton (boolean needCloseButton) {
+    this.needCloseButton = needCloseButton;
+  }
+
+  private ClickHelper clickHelper;
+
+  public void setClickHelper (ClickHelper clickHelper) {
+    this.clickHelper = clickHelper;
+  }
+
   @Override
   public boolean onTouchEvent (View view, MotionEvent e) {
+    if (clickHelper != null && clickHelper.onTouchEvent(view, e)) {
+      return true;
+    }
     return !disableProgressInteract && fileProgress != null && fileProgress.onTouchEvent(view, e);
   }
 
@@ -565,13 +594,13 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
         c.drawCircle(cx, cy, Screen.dp(25f), Paints.fillingPaint(Theme.getColor(customColorId)));
       }
       if (customIcon != null) {
-        Drawables.draw(c, customIcon, cx - customIcon.getMinimumWidth() / 2f, cy - customIcon.getMinimumHeight() / 2f, Paints.getPorterDuffPaint(0xffffffff));
+        Drawables.draw(c, customIcon, cx - customIcon.getMinimumWidth() / 2f, cy - customIcon.getMinimumHeight() / 2f, Paints.whitePorterDuffPaint());
       }
     } else if (fileProgress == null || getMediaPreview() != null) {
       if (getMediaPreview() != null) {
         getMediaPreview().draw(view, c, receiver, (int) rectF.left, (int) rectF.top, (int) rectF.width(), (int) rectF.height(), getMediaPreview().getCornerRadius(), 1f);
       } else {
-        c.drawRoundRect(rectF, rectF.width() / 2f, rectF.height() / 2f, Paints.fillingPaint(Theme.getColor(avatarPlaceholder.metadata.colorId)));
+        c.drawRoundRect(rectF, rectF.width() / 2f, rectF.height() / 2f, Paints.fillingPaint(avatarPlaceholder.metadata.accentColor.getPrimaryColor()));
         avatarPlaceholder.draw(c, rectF.centerX(), rectF.centerY(), 1f, avatarPlaceholder.getRadius(), false);
       }
     }
@@ -579,11 +608,11 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
     if (fileProgress != null) {
       if (fileProgress.isTrack()) {
         if (!trackIsQueued && getMediaPreview() == null) {
-          c.drawCircle(rectF.centerX(), rectF.centerY(), radius, Paints.fillingPaint(Theme.getColor(R.id.theme_color_file)));
+          c.drawCircle(rectF.centerX(), rectF.centerY(), radius, Paints.fillingPaint(Theme.getColor(ColorId.file)));
         } else {
           if (getMediaPreview() == null || getMediaPreview().needPlaceholder(receiver)) {
-            c.drawRoundRect(rectF, radius, radius, Paints.fillingPaint(Theme.getColor(R.id.theme_color_playerCoverPlaceholder)));
-            Drawable drawable = view.getSparseDrawable(R.drawable.baseline_music_note_24, 0);
+            c.drawRoundRect(rectF, radius, radius, Paints.fillingPaint(Theme.getColor(ColorId.playerCoverPlaceholder)));
+            Drawable drawable = view.getSparseDrawable(R.drawable.baseline_music_note_24, ColorId.NONE);
             Drawables.draw(c, drawable, rectF.centerX() - drawable.getMinimumWidth() / 2f, rectF.centerY() - drawable.getMinimumHeight() / 2f, Paints.getNotePorterDuffPaint());
           }
           if (getMediaPreview() != null) {
@@ -603,6 +632,11 @@ public class InlineResultCommon extends InlineResult<TdApi.InlineQueryResult> im
         }
       }
       fileProgress.draw(view, c);
+    }
+
+    if (needCloseButton) {
+      Drawable drawable = view.getSparseDrawable(R.drawable.baseline_close_20, ColorId.NONE);
+      Drawables.draw(c, drawable, viewWidth - Screen.dp(11) - drawable.getMinimumWidth(), rectF.centerY() - drawable.getMinimumHeight() / 2f, Paints.getIconGrayPorterDuffPaint());
     }
 
     if (trimmedTitle != null) {

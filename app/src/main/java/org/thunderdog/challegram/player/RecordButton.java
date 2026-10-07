@@ -14,7 +14,6 @@
  */
 package org.thunderdog.challegram.player;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.os.Build;
@@ -23,9 +22,10 @@ import android.view.MotionEvent;
 import android.view.View;
 
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 
-import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
@@ -58,7 +58,7 @@ public class RecordButton extends View implements FactorAnimator.Target, ClickHe
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       setOutlineProvider(new android.view.ViewOutlineProvider() {
-        @TargetApi (Build.VERSION_CODES.LOLLIPOP)
+        @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
         @Override
         public void getOutline (View view, android.graphics.Outline outline) {
           if (expand <= 0f) {
@@ -181,7 +181,7 @@ public class RecordButton extends View implements FactorAnimator.Target, ClickHe
 
   @Override
   public void onDraw (Canvas c) {
-    int color = Theme.getColor(R.id.theme_color_circleButtonRegular);
+    int color = Theme.getColor(ColorId.circleButtonRegular);
     c.drawCircle(center, center, (radius + radiusAdd * volume) * expand, Paints.fillingPaint(ColorUtils.alphaColor(.3f, color)));
     c.drawCircle(center, center, radius * expand, Paints.fillingPaint(color));
   }

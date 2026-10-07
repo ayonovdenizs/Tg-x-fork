@@ -14,15 +14,18 @@
  */
 package org.thunderdog.challegram.util.text;
 
+import android.text.Spannable;
+import android.text.SpannableStringBuilder;
 import android.text.style.ClickableSpan;
 import android.view.View;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
+import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.telegram.Tdlib;
@@ -40,8 +43,8 @@ import java.util.List;
 import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.collection.IntList;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.Td;
+import tgx.td.ChatId;
+import tgx.td.Td;
 
 // TODO merge with TextEntityCustom into one type
 public class TextEntityMessage extends TextEntity {
@@ -56,7 +59,7 @@ public class TextEntityMessage extends TextEntity {
   private static final int FLAG_SPOILER = 1 << 8;
   private static final int FLAG_CUSTOM_EMOJI = 1 << 9;
 
-  private final TdApi.TextEntity clickableEntity, spoilerEntity, emojiEntity;
+  private final TdApi.TextEntity clickableEntity, spoilerEntity, emojiEntity, quoteEntity;
   private int flags;
   private ClickableSpan onClickListener;
 
@@ -81,6 +84,7 @@ public class TextEntityMessage extends TextEntity {
     if (isFullWidth(type)) {
       flags |= FLAG_FULL_WIDTH;
     }
+    //noinspection SwitchIntDef
     switch (type.getConstructor()) {
       case TdApi.TextEntityTypeBold.CONSTRUCTOR:
         flags |= FLAG_BOLD;
@@ -104,7 +108,7 @@ public class TextEntityMessage extends TextEntity {
 
   public TextEntityMessage (@Nullable Tdlib tdlib, String in, int offset, int end, TdApi.TextEntity entity, @Nullable List<TdApi.TextEntity> parentEntities, @Nullable TdlibUi.UrlOpenParameters openParameters) {
     this(tdlib,
-      (entity.type.getConstructor() == TdApi.TextEntityTypeBold.CONSTRUCTOR || hasEntityType(parentEntities, TdApi.TextEntityTypeBold.CONSTRUCTOR)) && Text.needFakeBold(in, offset, end),
+      (Td.isBold(entity.type) || hasEntityType(parentEntities, TdApi.TextEntityTypeBold.CONSTRUCTOR)) && Text.needFakeBold(in, offset, end),
       offset, end,
       entity, parentEntities,
       openParameters
@@ -114,8 +118,9 @@ public class TextEntityMessage extends TextEntity {
   private TextEntityMessage (@Nullable Tdlib tdlib, boolean needFakeBold, int offset, int end, TdApi.TextEntity entity, @Nullable List<TdApi.TextEntity> parentEntities, @Nullable TdlibUi.UrlOpenParameters openParameters) {
     super(tdlib, offset, end, needFakeBold, openParameters);
     TdApi.TextEntity clickableEntity = isClickable(entity.type) ? entity : null;
-    TdApi.TextEntity spoilerEntity = entity.type.getConstructor() == TdApi.TextEntityTypeSpoiler.CONSTRUCTOR ? entity : null;
-    TdApi.TextEntity emojiEntity = entity.type.getConstructor() == TdApi.TextEntityTypeCustomEmoji.CONSTRUCTOR ? entity : null;
+    TdApi.TextEntity quoteEntity = isQuote(entity.type) ? entity : null;
+    TdApi.TextEntity spoilerEntity = Td.isSpoiler(entity.type) ? entity : null;
+    TdApi.TextEntity emojiEntity = Td.isCustomEmoji(entity.type) ? entity : null;
     int flags = addFlags(entity.type);
     if (parentEntities != null) {
       for (int i = parentEntities.size() - 1; i >= 0; i--) {
@@ -123,16 +128,21 @@ public class TextEntityMessage extends TextEntity {
         flags |= addFlags(parentEntity.type);
         if (clickableEntity == null && isClickable(parentEntity.type)) {
           clickableEntity = parentEntity;
-        } else if (spoilerEntity == null && parentEntity.type.getConstructor() == TdApi.TextEntityTypeSpoiler.CONSTRUCTOR) {
+        } else if (spoilerEntity == null && Td.isSpoiler(parentEntity.type)) {
           spoilerEntity = parentEntity;
+        }
+        if (quoteEntity == null && isQuote(parentEntity.type)) {
+          quoteEntity = parentEntity;
         }
       }
     }
+
     this.clickableEntity = clickableEntity;
     if (clickableEntity != null) {
       flags |= FLAG_CLICKABLE;
     }
     this.spoilerEntity = spoilerEntity;
+    this.quoteEntity = quoteEntity;
     if (spoilerEntity != null) {
       flags |= FLAG_SPOILER;
     }
@@ -143,12 +153,17 @@ public class TextEntityMessage extends TextEntity {
     this.flags = flags;
   }
 
-  private TextEntityMessage (@Nullable Tdlib tdlib, boolean needFakeBold, int offset, int end, TdApi.TextEntity clickableEntity, TdApi.TextEntity spoilerEntity, TdApi.TextEntity emojiEntity, int flags, @Nullable TdlibUi.UrlOpenParameters openParameters) {
+  private TextEntityMessage (@Nullable Tdlib tdlib, boolean needFakeBold, int offset, int end, TdApi.TextEntity clickableEntity, TdApi.TextEntity spoilerEntity, TdApi.TextEntity emojiEntity, TdApi.TextEntity quoteEntity, int flags, @Nullable TdlibUi.UrlOpenParameters openParameters) {
     super(tdlib, offset, end, needFakeBold, openParameters);
     this.clickableEntity = clickableEntity;
     this.spoilerEntity = spoilerEntity;
+    this.quoteEntity = quoteEntity;
     this.emojiEntity = emojiEntity;
     this.flags = flags;
+  }
+
+  public TdApi.TextEntity getClickableEntity () {
+    return clickableEntity;
   }
 
   @Override
@@ -172,7 +187,7 @@ public class TextEntityMessage extends TextEntity {
 
   @Override
   public TextEntity createCopy () {
-    TextEntityMessage copy = new TextEntityMessage(tdlib, needFakeBold, start, end, clickableEntity, spoilerEntity, emojiEntity, flags, openParameters);
+    TextEntityMessage copy = new TextEntityMessage(tdlib, needFakeBold, start, end, clickableEntity, spoilerEntity, emojiEntity, quoteEntity, flags, openParameters);
     if (customColorSet != null) {
       copy.setCustomColorSet(customColorSet);
     }
@@ -234,6 +249,11 @@ public class TextEntityMessage extends TextEntity {
     return 0;
   }
 
+  public static boolean isQuote (TdApi.TextEntityType type) {
+    return type.getConstructor() == TdApi.TextEntityTypeBlockQuote.CONSTRUCTOR
+      || type.getConstructor() == TdApi.TextEntityTypeExpandableBlockQuote.CONSTRUCTOR;
+  }
+
   public static boolean isClickable (TdApi.TextEntityType type) {
     switch (type.getConstructor()) {
       case TdApi.TextEntityTypeEmailAddress.CONSTRUCTOR:
@@ -241,6 +261,7 @@ public class TextEntityMessage extends TextEntity {
       case TdApi.TextEntityTypeBankCardNumber.CONSTRUCTOR:
       case TdApi.TextEntityTypeUrl.CONSTRUCTOR:
       case TdApi.TextEntityTypeTextUrl.CONSTRUCTOR:
+      case TdApi.TextEntityTypeDateTime.CONSTRUCTOR:
       case TdApi.TextEntityTypeBotCommand.CONSTRUCTOR:
       case TdApi.TextEntityTypeHashtag.CONSTRUCTOR:
       case TdApi.TextEntityTypeCashtag.CONSTRUCTOR:
@@ -253,7 +274,8 @@ public class TextEntityMessage extends TextEntity {
         return true;
       }
       case TdApi.TextEntityTypeMediaTimestamp.CONSTRUCTOR: // TODO
-
+      case TdApi.TextEntityTypeBlockQuote.CONSTRUCTOR:
+      case TdApi.TextEntityTypeExpandableBlockQuote.CONSTRUCTOR:
       case TdApi.TextEntityTypeBold.CONSTRUCTOR:
       case TdApi.TextEntityTypeCustomEmoji.CONSTRUCTOR:
       case TdApi.TextEntityTypeItalic.CONSTRUCTOR:
@@ -262,11 +284,14 @@ public class TextEntityMessage extends TextEntity {
       case TdApi.TextEntityTypeUnderline.CONSTRUCTOR: {
         return false;
       }
+      default:
+        Td.assertTextEntityType_aefd8e69();
+        throw Td.unsupported(type);
     }
-    return false;
   }
 
   private static boolean isEssential (TdApi.TextEntityType type) {
+    //noinspection SwitchIntDef
     switch (type.getConstructor()) {
       // case TdApi.TextEntityTypeBotCommand.CONSTRUCTOR:
       // case TdApi.TextEntityTypeHashtag.CONSTRUCTOR:
@@ -283,6 +308,7 @@ public class TextEntityMessage extends TextEntity {
   }
 
   private static boolean isMonospace (TdApi.TextEntityType type) {
+    //noinspection SwitchIntDef
     switch (type.getConstructor()) {
       case TdApi.TextEntityTypeCode.CONSTRUCTOR:
       case TdApi.TextEntityTypePre.CONSTRUCTOR:
@@ -293,6 +319,7 @@ public class TextEntityMessage extends TextEntity {
   }
 
   private static boolean isFullWidth (TdApi.TextEntityType type) {
+    //noinspection SwitchIntDef
     switch (type.getConstructor()) {
       case TdApi.TextEntityTypePre.CONSTRUCTOR:
       case TdApi.TextEntityTypePreCode.CONSTRUCTOR:
@@ -352,6 +379,11 @@ public class TextEntityMessage extends TextEntity {
   }
 
   @Override
+  public TdApi.TextEntity getQuote () {
+    return quoteEntity;
+  }
+
+  @Override
   public boolean isClickable () {
     return (flags & FLAG_CLICKABLE) != 0;
   }
@@ -392,7 +424,17 @@ public class TextEntityMessage extends TextEntity {
   }
 
   @Override
-  public void performClick (View view, Text text, TextPart part, @Nullable Text.ClickCallback callback) {
+  public int getQuoteId () {
+    return quoteEntity != null ? quoteEntity.offset : -1;
+  }
+
+  @Override
+  public boolean isQuote () {
+    return quoteEntity != null;
+  }
+
+  @Override
+  public void performClick (View view, Text text, TextPart part, @Nullable Text.ClickCallback callback, boolean isFromLongPressMenu) {
     final ViewController<?> context = findRoot(view);
     if (context == null) {
       Log.v("performClick ignored, because ancestor not found");
@@ -406,7 +448,7 @@ public class TextEntityMessage extends TextEntity {
       case TdApi.TextEntityTypeUrl.CONSTRUCTOR: {
 
         String link = Td.substring(text.getText(), clickableEntity);
-        TdlibUi.UrlOpenParameters openParameters = this.openParameters(view, text, part);
+        TdlibUi.UrlOpenParameters openParameters = this.openParameters(view, text, part, isFromLongPressMenu);
         if (callback == null || !callback.onUrlClick(view, link, false, openParameters)) {
           if (tdlib != null) {
             tdlib.ui().openUrl(context, link, modifyUrlOpenParameters(openParameters, callback, link));
@@ -416,9 +458,17 @@ public class TextEntityMessage extends TextEntity {
       }
       case TdApi.TextEntityTypeTextUrl.CONSTRUCTOR: {
         String link = ((TdApi.TextEntityTypeTextUrl) clickableEntity.type).url;
-        TdlibUi.UrlOpenParameters openParameters = this.openParameters(view, text, part);
+        TdlibUi.UrlOpenParameters openParameters = this.openParameters(view, text, part, isFromLongPressMenu);
         if (callback == null || !callback.onUrlClick(view, link, true, openParameters)) {
           context.openLinkAlert(link, modifyUrlOpenParameters(openParameters, callback, link));
+        }
+        break;
+      }
+      case TdApi.TextEntityTypeDateTime.CONSTRUCTOR: {
+        TdApi.TextEntityTypeDateTime type = (TdApi.TextEntityTypeDateTime) clickableEntity.type;
+        String date = Td.substring(text.getText(), clickableEntity);
+        if (callback != null && !callback.onDateClick(view, text, part, date, type, false)) {
+          Intents.openDate(type.unixTime);
         }
         break;
       }
@@ -433,7 +483,7 @@ public class TextEntityMessage extends TextEntity {
         String username = Td.substring(text.getText(), clickableEntity);
         if (callback == null || !callback.onUsernameClick(username)) {
           if (tdlib != null) {
-            tdlib.ui().openPublicChat(context, username, this.openParameters(view, text, part));
+            tdlib.ui().openPublicChat(context, username, this.openParameters(view, text, part, isFromLongPressMenu));
           }
         }
         break;
@@ -442,7 +492,7 @@ public class TextEntityMessage extends TextEntity {
         TdApi.TextEntityTypeMentionName mentionEntity = (TdApi.TextEntityTypeMentionName) clickableEntity.type;
         if (callback == null || !callback.onUserClick(mentionEntity.userId)) {
           if (tdlib != null) {
-            tdlib.ui().openPrivateProfile(context, mentionEntity.userId, this.openParameters(view, text, part));
+            tdlib.ui().openPrivateProfile(context, mentionEntity.userId, this.openParameters(view, text, part, isFromLongPressMenu));
           }
         }
         break;
@@ -510,12 +560,22 @@ public class TextEntityMessage extends TextEntity {
       case TdApi.TextEntityTypeMediaTimestamp.CONSTRUCTOR:
       case TdApi.TextEntityTypePre.CONSTRUCTOR:
       case TdApi.TextEntityTypePreCode.CONSTRUCTOR:
+      case TdApi.TextEntityTypeBlockQuote.CONSTRUCTOR:
+      case TdApi.TextEntityTypeExpandableBlockQuote.CONSTRUCTOR:
       case TdApi.TextEntityTypeSpoiler.CONSTRUCTOR:
       case TdApi.TextEntityTypeStrikethrough.CONSTRUCTOR:
       case TdApi.TextEntityTypeUnderline.CONSTRUCTOR:
         // Non-clickable
         break;
+      default:
+        Td.assertTextEntityType_aefd8e69();
+        throw Td.unsupported(clickableEntity.type);
     }
+  }
+
+  @Override
+  public boolean forceDisableAnimations () {
+    return false;
   }
 
   @Override
@@ -529,19 +589,33 @@ public class TextEntityMessage extends TextEntity {
       return false;
     }
 
-    if (clickableEntity.type.getConstructor() == TdApi.TextEntityTypeBotCommand.CONSTRUCTOR) {
+    final TdApi.TextEntity clickableEntity = this.clickableEntity != null ? this.clickableEntity : quoteEntity;
+
+    if (Td.isBotCommand(clickableEntity.type)) {
       String command = Td.substring(text.getText(), clickableEntity);
       return clickCallback != null && clickCallback.onCommandClick(view, text, part, command, true);
     }
 
-    final String copyText;
-    if (clickableEntity.type.getConstructor() == TdApi.TextEntityTypeTextUrl.CONSTRUCTOR) {
+    final CharSequence copyText;
+    if (Td.isTextUrl(clickableEntity.type)) {
       copyText = ((TdApi.TextEntityTypeTextUrl) clickableEntity.type).url;
     } else {
-      copyText = Td.substring(text.getText(), clickableEntity);
+      SpannableStringBuilder sb = new SpannableStringBuilder(text.getText());
+      final TextEntity[] entities = text.getEntities();
+      if (entities != null) {
+        for (TextEntity entity : entities) {
+          Object[] spans = TD.toSpans(entity, TD.TextEntityOption.ALLOW_INTERNAL | BitwiseUtils.optional(TD.TextEntityOption.DISABLE_ANIMATIONS, forceDisableAnimations()), false);
+          if (spans != null) {
+            for (Object span : spans) {
+              sb.setSpan(span, entity.getStart(), entity.getEnd(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+            }
+          }
+        }
+      }
+      copyText = sb.subSequence(clickableEntity.offset, clickableEntity.offset + clickableEntity.length);
     }
 
-    final boolean canShare = clickableEntity.type.getConstructor() == TdApi.TextEntityTypeUrl.CONSTRUCTOR || clickableEntity.type.getConstructor() == TdApi.TextEntityTypeTextUrl.CONSTRUCTOR;
+    final boolean canShare = Td.isUrl(clickableEntity.type) || Td.isTextUrl(clickableEntity.type);
     final int size = canShare ? 3 : 2;
     IntList ids = new IntList(size);
     StringList strings = new StringList(size);
@@ -554,11 +628,12 @@ public class TextEntityMessage extends TextEntity {
       case TdApi.TextEntityTypeCashtag.CONSTRUCTOR:
 
       case TdApi.TextEntityTypeBankCardNumber.CONSTRUCTOR:
+      case TdApi.TextEntityTypeDateTime.CONSTRUCTOR:
 
       case TdApi.TextEntityTypeMention.CONSTRUCTOR:
       case TdApi.TextEntityTypeMentionName.CONSTRUCTOR: {
         ids.append(R.id.btn_openLink);
-        strings.append(clickableEntity.type.getConstructor() == TdApi.TextEntityTypeBankCardNumber.CONSTRUCTOR ? R.string.OpenInExternalApp : R.string.Open);
+        strings.append(Td.isBankCardNumber(clickableEntity.type) ? R.string.OpenInExternalApp : R.string.Open);
         icons.append(R.drawable.baseline_open_in_browser_24);
         break;
       }
@@ -566,7 +641,9 @@ public class TextEntityMessage extends TextEntity {
       case TdApi.TextEntityTypePhoneNumber.CONSTRUCTOR:
       case TdApi.TextEntityTypePreCode.CONSTRUCTOR:
       case TdApi.TextEntityTypeCode.CONSTRUCTOR:
-      case TdApi.TextEntityTypePre.CONSTRUCTOR: {
+      case TdApi.TextEntityTypePre.CONSTRUCTOR:
+      case TdApi.TextEntityTypeBlockQuote.CONSTRUCTOR:
+      case TdApi.TextEntityTypeExpandableBlockQuote.CONSTRUCTOR: {
         break;
       }
       case TdApi.TextEntityTypeBotCommand.CONSTRUCTOR: // Unreachable because of the condition above
@@ -577,26 +654,30 @@ public class TextEntityMessage extends TextEntity {
       case TdApi.TextEntityTypeItalic.CONSTRUCTOR:
       case TdApi.TextEntityTypeSpoiler.CONSTRUCTOR:
       case TdApi.TextEntityTypeStrikethrough.CONSTRUCTOR:
-      case TdApi.TextEntityTypeUnderline.CONSTRUCTOR:
-      default: {
+      case TdApi.TextEntityTypeUnderline.CONSTRUCTOR: {
         Log.i("Long press is unsupported for entity: %s", clickableEntity);
         return false;
       }
+
+      default: {
+        Td.assertTextEntityType_aefd8e69();
+        throw Td.unsupported(clickableEntity.type);
+      }
     }
 
-    if (clickableEntity.type.getConstructor() != TdApi.TextEntityTypeMentionName.CONSTRUCTOR) {
+    if (!Td.isMentionName(clickableEntity.type)) {
       ids.append(R.id.btn_copyText);
-      strings.append(clickableEntity.type.getConstructor() == TdApi.TextEntityTypeMention.CONSTRUCTOR ? R.string.CopyUsername : R.string.Copy);
+      strings.append(Td.isMention(clickableEntity.type) ? R.string.CopyUsername : R.string.Copy);
       icons.append(R.drawable.baseline_content_copy_24);
     }
 
     final String copyLink;
 
-    if (clickableEntity.type.getConstructor() == TdApi.TextEntityTypeMention.CONSTRUCTOR && copyText != null) {
+    if (Td.isMention(clickableEntity.type) && copyText != null) {
       ids.append(R.id.btn_copyLink);
       strings.append(R.string.CopyLink);
       icons.append(R.drawable.baseline_link_24);
-      copyLink = TD.getLink(copyText.substring(1));
+      copyLink = tdlib.tMeUrl(copyText.toString().substring(1));
     } else {
       copyLink = null;
     }
@@ -609,55 +690,49 @@ public class TextEntityMessage extends TextEntity {
 
     final int[] shareState = {0};
 
-    context.showOptions(copyText, ids.get(), strings.get(), null, icons.get(), (itemView, id) -> {
-      switch (id) {
-        case R.id.btn_copyLink: {
-          UI.copyText(copyLink != null ? copyLink : copyText, R.string.CopiedLink);
-          break;
-        }
-        case R.id.btn_copyText: {
-          int message;
-          switch (clickableEntity.type.getConstructor()) {
-            case TdApi.TextEntityTypeMention.CONSTRUCTOR: {
-              message = R.string.CopiedUsername;
-              break;
-            }
-            case TdApi.TextEntityTypeHashtag.CONSTRUCTOR:
-              message = R.string.CopiedHashtag;
-              break;
-            case TdApi.TextEntityTypeCashtag.CONSTRUCTOR:
-              message = R.string.CopiedCashtag;
-              break;
-            case TdApi.TextEntityTypePreCode.CONSTRUCTOR:
-            case TdApi.TextEntityTypeCode.CONSTRUCTOR:
-            case TdApi.TextEntityTypePre.CONSTRUCTOR: {
-              message = R.string.CopiedText;
-              break;
-            }
-            default: {
-              message = R.string.CopiedLink;
-              break;
-            }
+    context.showOptions(copyText, ids.get(), strings.get(), null, icons.get(), Config.MAX_COPY_TEXT_LINE_COUNT, (itemView, id) -> {
+      if (id == R.id.btn_copyLink) {
+        UI.copyText(copyLink != null ? copyLink : copyText, R.string.CopiedLink);
+      } else if (id == R.id.btn_copyText) {
+        int message;
+        switch (clickableEntity.type.getConstructor()) {
+          case TdApi.TextEntityTypeMention.CONSTRUCTOR: {
+            message = R.string.CopiedUsername;
+            break;
           }
-          UI.copyText(copyText, message);
-          break;
-        }
-        case R.id.btn_shareLink: {
-          if (shareState[0] == 0) {
-            shareState[0] = 1;
-            TD.shareLink(new TdlibContext(context.context(), tdlib), copyText);
+          case TdApi.TextEntityTypeHashtag.CONSTRUCTOR:
+            message = R.string.CopiedHashtag;
+            break;
+          case TdApi.TextEntityTypeCashtag.CONSTRUCTOR:
+            message = R.string.CopiedCashtag;
+            break;
+          case TdApi.TextEntityTypeBlockQuote.CONSTRUCTOR:
+          case TdApi.TextEntityTypeExpandableBlockQuote.CONSTRUCTOR:
+          case TdApi.TextEntityTypePreCode.CONSTRUCTOR:
+          case TdApi.TextEntityTypeCode.CONSTRUCTOR:
+          case TdApi.TextEntityTypePre.CONSTRUCTOR:
+          case TdApi.TextEntityTypeDateTime.CONSTRUCTOR: {
+            message = R.string.CopiedText;
+            break;
           }
-          break;
+          default: {
+            Td.assertTextEntityType_aefd8e69();
+            message = R.string.CopiedLink;
+            break;
+          }
         }
-        case R.id.btn_openLink: {
-          performClick(itemView, text, part, clickCallback);
-          break;
+        UI.copyText(copyText, message);
+      } else if (id == R.id.btn_shareLink) {
+        if (shareState[0] == 0) {
+          shareState[0] = 1;
+          TD.shareLink(new TdlibContext(context.context(), tdlib), copyText.toString());
         }
+      } else if (id == R.id.btn_openLink) {
+        performClick(itemView, text, part, clickCallback, true);
       }
       return true;
     }, clickCallback != null ? clickCallback.getForcedTheme(view, text) : null);
 
     return true;
   }
-
 }

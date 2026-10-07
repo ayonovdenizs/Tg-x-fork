@@ -14,7 +14,6 @@
  */
 package org.thunderdog.challegram.mediaview;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -49,24 +48,32 @@ import android.widget.RelativeLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.DrawableRes;
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
+import androidx.media3.common.PlaybackException;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
+import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.component.MediaCollectorDelegate;
 import org.thunderdog.challegram.component.attach.CustomItemAnimator;
 import org.thunderdog.challegram.component.attach.MediaLayout;
+import org.thunderdog.challegram.component.attach.MediaToReplacePickerManager;
 import org.thunderdog.challegram.component.chat.EmojiToneHelper;
 import org.thunderdog.challegram.component.chat.InlineResultsWrap;
 import org.thunderdog.challegram.component.chat.InputView;
 import org.thunderdog.challegram.component.preview.FlingDetector;
+import org.thunderdog.challegram.component.sticker.TGStickerObj;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
+import org.thunderdog.challegram.core.Media;
 import org.thunderdog.challegram.data.InlineResult;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.data.TGMessage;
@@ -106,6 +113,7 @@ import org.thunderdog.challegram.navigation.HeaderButton;
 import org.thunderdog.challegram.navigation.HeaderView;
 import org.thunderdog.challegram.navigation.Menu;
 import org.thunderdog.challegram.navigation.MoreDelegate;
+import org.thunderdog.challegram.navigation.NavigationStack;
 import org.thunderdog.challegram.navigation.RtlCheckListener;
 import org.thunderdog.challegram.navigation.StopwatchHeaderButton;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
@@ -113,9 +121,11 @@ import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.CallManager;
 import org.thunderdog.challegram.telegram.MessageListener;
+import org.thunderdog.challegram.telegram.RightId;
 import org.thunderdog.challegram.telegram.TGLegacyManager;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibUi;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeDelegate;
 import org.thunderdog.challegram.theme.ThemeId;
@@ -131,20 +141,26 @@ import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.ui.MessagesController;
 import org.thunderdog.challegram.ui.SetSenderController;
 import org.thunderdog.challegram.ui.ShareController;
+import org.thunderdog.challegram.ui.TextController;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.unsorted.Size;
 import org.thunderdog.challegram.util.HapticMenuHelper;
 import org.thunderdog.challegram.util.StringList;
 import org.thunderdog.challegram.util.text.Text;
 import org.thunderdog.challegram.util.text.TextEntity;
+import org.thunderdog.challegram.v.MaxHeightScrollView;
 import org.thunderdog.challegram.widget.AttachDelegate;
 import org.thunderdog.challegram.widget.CheckView;
 import org.thunderdog.challegram.widget.CustomTextView;
 import org.thunderdog.challegram.widget.EmojiLayout;
 import org.thunderdog.challegram.widget.FileProgressComponent;
+import org.thunderdog.challegram.widget.FillingSpace;
+import org.thunderdog.challegram.widget.KeyboardFrameLayout;
 import org.thunderdog.challegram.widget.NoScrollTextView;
 import org.thunderdog.challegram.widget.PopupLayout;
+import org.thunderdog.challegram.widget.RootFrameLayout;
 import org.thunderdog.challegram.widget.ShadowView;
+import org.thunderdog.challegram.widget.TextFormattingLayout;
 import org.thunderdog.challegram.widget.VideoTimelineView;
 
 import java.io.File;
@@ -168,16 +184,20 @@ import me.vkryl.core.StringUtils;
 import me.vkryl.core.collection.IntList;
 import me.vkryl.core.lambda.Destroyable;
 import me.vkryl.core.lambda.RunnableData;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.MessageId;
-import me.vkryl.td.Td;
-import me.vkryl.td.TdConstants;
+import tgx.td.ChatId;
+import tgx.td.MessageId;
+import tgx.td.Td;
+import tgx.td.TdConstants;
 
 public class MediaViewController extends ViewController<MediaViewController.Args> implements
   PopupLayout.AnimatedPopupProvider, FactorAnimator.Target, View.OnClickListener,
   MediaStackCallback, MediaFiltersAdapter.Callback, Watcher, RotationControlView.Callback, MediaView.ClickListener,
   EmojiLayout.Listener, InputView.InputListener, InlineResultsWrap.OffsetProvider,
-  MediaCellView.Callback, SliderView.Listener, TGLegacyManager.EmojiLoadListener, Menu, MoreDelegate, PopupLayout.TouchSectionProvider, FlingDetector.Callback, CallManager.CurrentCallListener, ColorPreviewView.BrushChangeListener, PaintState.UndoStateListener, MediaView.FactorChangeListener, EmojiToneHelper.Delegate, MessageListener {
+  MediaCellView.Callback, SliderView.Listener, TGLegacyManager.EmojiLoadListener, Menu, MoreDelegate,
+  PopupLayout.TouchSectionProvider, FlingDetector.Callback, CallManager.CurrentCallListener,
+  ColorPreviewView.BrushChangeListener, PaintState.UndoStateListener, MediaView.FactorChangeListener,
+  EmojiToneHelper.Delegate, MessageListener, InputView.SelectionChangeListener, PopupLayout.ShowListener,
+  RootFrameLayout.InsetsChangeListener{
 
   private static final long REVEAL_ANIMATION_DURATION = /*BuildConfig.DEBUG ? 1800l :*/ 180;
   private static final long REVEAL_OPEN_ANIMATION_DURATION = /*BuildConfig.DEBUG ? 1800l :*/ 180l;
@@ -188,6 +208,10 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   public static final int MODE_GALLERY = 3; // opened from gallery, need photo editor and stuff
   public static final int MODE_SECRET = 4; // just single photo, no animations and etc
   public static final int MODE_SIMPLE = 5;
+
+  private boolean useEdgeToEdge () {
+    return Settings.instance().useEdgeToEdge();
+  }
 
   public MediaViewController (Context context, Tdlib tdlib) {
     super(context, tdlib);
@@ -216,9 +240,10 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     private boolean reverseMode;
 
-    private long receiverChatId, messageThreadId;
+    private long receiverChatId;
+    private @Nullable TdApi.MessageTopic topicId;
 
-    private boolean areOnlyScheduled, deleteOnExit;
+    private boolean areOnlyScheduled;
 
     public Args (ViewController<?> parentController, int mode, MediaViewDelegate delegate, MediaSelectDelegate selectDelegate, MediaSendDelegate sendDelegate, MediaStack stack) {
       this.parentController = parentController;
@@ -238,8 +263,35 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       return this;
     }
 
-    public Args setDeleteOnExit (boolean deleteOnExit) {
-      this.deleteOnExit = deleteOnExit;
+    private @AvatarPickerMode int avatarPickerMode;
+
+    public Args setCustomSubtitle (String subtitle) {
+      this.customSubtitle = subtitle;
+      return this;
+    }
+
+    public Args setAvatarPickerMode (@AvatarPickerMode int avatarPickerMode) {
+      if (mode != MODE_GALLERY) {
+        throw new IllegalStateException();
+      }
+      this.avatarPickerMode = avatarPickerMode;
+      setSendButtonIcon(MediaViewController.getResId(avatarPickerMode, 0,
+        R.drawable.dot_baseline_profile_accept_24,
+        R.drawable.dot_baseline_group_accept_24,
+        R.drawable.dot_baseline_channel_accept_24,
+        R.drawable.dot_baseline_bot_accept_24
+      ));
+
+      final int textRes = getResId(avatarPickerMode, 0,
+        R.string.ProfilePhoto, R.string.GroupPhoto, R.string.ChannelPhoto, R.string.BotPhoto);
+      setReceiverRow(getResId(avatarPickerMode, 0,
+        R.drawable.dot_baseline_account_circle_18,
+        R.drawable.dot_baseline_group_circle_18,
+        R.drawable.dot_baseline_channel_circle_18,
+        R.drawable.dot_baseline_bot_circle_18),
+        textRes != 0 ? Lang.getString(textRes) : null
+      );
+
       return this;
     }
 
@@ -258,8 +310,8 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       return this;
     }
 
-    public Args setMessageThreadId (long messageThreadId) {
-      this.messageThreadId = messageThreadId;
+    public Args setTopicId (TdApi.MessageTopic topicId) {
+      this.topicId = topicId;
       return this;
     }
 
@@ -271,6 +323,46 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     public static Args fromGallery (ViewController<?> context, MediaViewDelegate delegate, MediaSelectDelegate selectDelegate, MediaSendDelegate sendDelegate, MediaStack galleryStack, boolean areOnlyScheduled) {
       return new Args(context, MODE_GALLERY, delegate, selectDelegate, sendDelegate, galleryStack).setOnlyScheduled(areOnlyScheduled);
+    }
+
+    /* * */
+
+    private @DrawableRes int sendButtonIcon;
+
+    public Args setSendButtonIcon (@DrawableRes int icon) {
+      this.sendButtonIcon = icon;
+      return this;
+    }
+
+    private @DrawableRes int receiverRowIcon;
+    private CharSequence receiverRowText;
+
+    public Args setReceiverRow (@DrawableRes int receiverRowIcon, CharSequence receiverRowText) {
+      this.receiverRowIcon = receiverRowIcon;
+      this.receiverRowText = receiverRowText;
+      return this;
+    }
+
+    /* * */
+
+    private int flags;
+    public static final int FLAG_DISALLOW_MULTI_SELECTION_MEDIA = 1;
+    public static final int FLAG_DISALLOW_SET_DESTRUCTION_TIMER = 1 << 1;
+    public static final int FLAG_DELETE_FILE_ON_EXIT = 1 << 2;
+    public static final int FLAG_DISALLOW_SEND_BUTTON_HAPTIC_MENU = 1 << 3;
+
+    public Args setFlag (int flag) {
+      this.flags = BitwiseUtils.setFlag(flags, flag, true);
+      return this;
+    }
+
+    public Args setFlag (int flag, boolean value) {
+      this.flags = BitwiseUtils.setFlag(flags, flag, value);
+      return this;
+    }
+
+    public boolean hasFlag (int flag) {
+      return BitwiseUtils.hasFlag(flags, flag);
     }
   }
 
@@ -289,7 +381,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private @Nullable MediaSendDelegate sendDelegate;
   private MediaStack stack;
   private @Nullable TdApi.SearchMessagesFilter filter;
-  private long messageThreadId;
+  private @Nullable TdApi.MessageTopic topicId;
 
   @Override
   public void setArguments (Args args) {
@@ -301,7 +393,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     this.stack = args.stack;
     this.reverseMode = args.reverseMode;
     this.filter = args.filter;
-    this.messageThreadId = args.messageThreadId;
+    this.topicId = args.topicId;
   }
 
   public MediaViewThumbLocation getCurrentTargetLocation () {
@@ -394,6 +486,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         break;
       }
     }
+    updateBottomSpaceAlpha();
   }
 
   private boolean hasCaption () {
@@ -409,15 +502,17 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   }
 
   private void setBottomAlpha (float alpha) {
+    float visibility = alpha * headerVisible.getFloatValue() * (1f - pipFactor);
     if (hasCaption() || mode == MODE_GALLERY) {
-      captionWrapView.setAlpha(alpha * headerVisible.getFloatValue() * (1f - pipFactor));
+      captionWrapView.setAlpha(visibility);
     }
     if (videoSliderView != null) {
-      videoSliderView.setAlpha(alpha * headerVisible.getFloatValue() * (1f - pipFactor));
+      videoSliderView.setAlpha(visibility);
     }
     if (thumbsRecyclerView != null) {
-      thumbsRecyclerView.setAlpha(alpha * headerVisible.getFloatValue() * (1f - pipFactor));
+      thumbsRecyclerView.setAlpha(visibility);
     }
+    updateBottomSpaceAlpha();
   }
 
   private void updateMainItemsAlpha () {
@@ -451,13 +546,8 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
   @Override
   public int provideOffset (InlineResultsWrap v) {
-    final int offset = emojiLayout != null && emojiLayout.getVisibility() == View.VISIBLE && emojiLayout.getParent() != null ? emojiLayout.getMeasuredHeight() : 0;
-    return (captionView.getMeasuredHeight() /*- Screen.dp(50f)*/) + offset;
-  }
-
-  @Override
-  public int provideParentHeight (InlineResultsWrap v) {
-    return popupView.getMeasuredHeight();
+    final int offset = keyboardFrameLayout != null && emojiShown ? Math.max(0, keyboardFrameLayout.getMeasuredHeight() - bottomInnerMargin) : 0;
+    return (captionWrapView.getMeasuredHeight()) + offset;
   }
 
   @Override
@@ -467,19 +557,11 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         return;
       }
 
-      FrameLayoutFix.LayoutParams params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
-      // params.bottomMargin = Screen.dp(50f);
-      inlineResultsView = new InlineResultsWrap(context()) {
-        @Override
-        protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
-          super.onMeasure(widthMeasureSpec, popupView.getMeasuredHeight());
-        }
-      };
+      inlineResultsView = new InlineResultsWrap(context());
       inlineResultsView.setListener((InlineResultsWrap.PickListener) captionView);
       inlineResultsView.setAlpha(inCaptionFactor);
       inlineResultsView.setOffsetProvider(this);
       inlineResultsView.setUseDarkMode(true);
-      inlineResultsView.setLayoutParams(params);
     }
 
     if (results != null && !results.isEmpty()) {
@@ -555,14 +637,16 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     }
   }
 
+  private KeyboardFrameLayout keyboardFrameLayout;
   private EmojiLayout emojiLayout;
+  private TextFormattingLayout textFormattingLayout;
 
   private boolean emojiShown, emojiState;
 
   private void processEmojiClick () {
     if (emojiShown) {
       setInCaption(emojiState || getKeyboardState());
-      closeEmojiKeyboard(false);
+      closeEmojiKeyboard();
     } else {
       openEmojiKeyboard();
       setInCaption();
@@ -576,6 +660,11 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   @Override
   public void onEnterEmoji (String emoji) {
     ((InputView) captionView).onEmojiSelected(emoji);
+  }
+
+  @Override
+  public void onEnterCustomEmoji (TGStickerObj sticker) {
+    ((InputView) captionView).onCustomEmojiSelected(sticker);
   }
 
   @Override
@@ -598,61 +687,96 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   @Override
   public void onSearchRequested (EmojiLayout layout, boolean areStickers) { }
 
+
+  private float getKeyboardOffset () {
+    return keyboardFrameLayout != null ? keyboardFrameLayout.getLayoutTranslationOffset() : 0f;
+  }
+
+  private void onKeyboardLayoutTranslation (float translationY) {
+    checkBottomWrapY();
+  }
+
+
   private void openEmojiKeyboard () {
     if (!emojiShown) {
-      if (emojiLayout == null) {
-        emojiLayout = new EmojiLayout(context());
-        emojiLayout.initWithMediasEnabled(this, false, this, this, false); // FIXME shall we use dark mode?
-        emojiLayout.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
-        bottomWrap.addView(emojiLayout);
-        popupView.getViewTreeObserver().addOnPreDrawListener(emojiLayout);
-      } else if (emojiLayout.getParent() == null) {
-        bottomWrap.addView(emojiLayout);
-      }
+      if (keyboardFrameLayout == null) {
+        keyboardFrameLayout = new KeyboardFrameLayout(context()) {
+          @Override
+          protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+            if (inlineResultsView != null) {
+              inlineResultsView.updatePosition(true);
+            }
+            checkCaptionButtonsY();
+          }
+        };
+        keyboardFrameLayout.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+        keyboardFrameLayout.setParentView(bottomWrap, contentView, popupView);
+        keyboardFrameLayout.setUpdateTranslationListener(this::onKeyboardLayoutTranslation);
+        keyboardFrameLayout.useHideByDetachView();
+        keyboardFrameLayout.setExtraBottomInset(systemInsets.bottom, systemInsets.bottom);
 
+        textFormattingLayout = keyboardFrameLayout.contentView.textFormattingLayout;
+        textFormattingLayout.init(this, inputView, new TextFormattingLayout.Delegate() {
+          @Override
+          public void onWantsCloseTextFormattingKeyboard () {
+            closeTextFormattingKeyboard();
+          }
+
+          @Override
+          public void onWantsOpenTextFormattingKeyboard () {
+            openEmojiKeyboard();
+          }
+        });
+
+        emojiLayout = keyboardFrameLayout.contentView.emojiLayout;
+        emojiLayout.initWithMediasEnabled(this, false, this, this, false); // FIXME shall we use dark mode?
+        emojiLayout.setAllowPremiumFeatures(tdlib.isSelfChat(getOutputChatId()));
+        emojiLayout.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        bottomWrap.addView(keyboardFrameLayout);
+      }
+      keyboardFrameLayout.setVisible(true);
       emojiState = getKeyboardState();
 
-      emojiShown = true;
+      setEmojiShown(true);
       if (emojiState) {
         captionEmojiButton.setImageResource(R.drawable.baseline_keyboard_24);
-        emojiLayout.hideKeyboard((EditText) captionView);
+        keyboardFrameLayout.hideKeyboard((EditText) captionView);
       } else {
-        captionEmojiButton.setImageResource(MessagesController.BOT_CLOSE_RES);
+        captionEmojiButton.setImageResource(R.drawable.baseline_direction_arrow_down_24);
       }
     }
   }
 
   private void removeEmojiView () {
-    if (emojiLayout != null && emojiLayout.getParent() != null) {
-      ViewGroup parent = ((ViewGroup) emojiLayout.getParent());
-      parent.removeView(emojiLayout);
-      parent.requestLayout();
+    if (keyboardFrameLayout != null) {
+      keyboardFrameLayout.setVisible(false);
     }
   }
 
   private void forceCloseEmojiKeyboard () {
     if (emojiShown) {
       removeEmojiView();
-      emojiShown = false;
-      captionEmojiButton.setImageResource(R.drawable.deproko_baseline_insert_emoticon_26);
+      setEmojiShown(false);
+      captionEmojiButton.setImageResource(getTargetIcon());
       setInCaption();
     }
   }
 
-  private void closeEmojiKeyboard (boolean eventually) {
+  private void closeEmojiKeyboard () {
+    closeEmojiKeyboard(false);
+  }
+
+  private void closeEmojiKeyboard (boolean byKeyboardOpen) {
     if (emojiShown) {
-      if (emojiLayout != null) {
+      if (keyboardFrameLayout != null) {
         removeEmojiView();
-        if (emojiState) {
-          if (eventually) {
-            emojiLayout.showKeyboard((EditText) captionView);
-          } else {
-            emojiLayout.showKeyboard((EditText) captionView);
-          }
+        if (emojiState && !byKeyboardOpen) {
+          keyboardFrameLayout.showKeyboard((EditText) captionView);
         }
       }
-      emojiShown = false;
-      captionEmojiButton.setImageResource(R.drawable.deproko_baseline_insert_emoticon_26);
+      setEmojiShown(false);
+      captionEmojiButton.setImageResource(getTargetIcon());
     }
   }
 
@@ -660,7 +784,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
   @Override
   public int[] displayBaseViewWithAnchor (EmojiToneHelper context, View anchorView, View viewToDisplay, int viewWidth, int viewHeight, int horizontalMargin, int horizontalOffset, int verticalOffset) {
-    return EmojiToneHelper.defaultDisplay(context, anchorView, viewToDisplay, viewWidth, viewHeight, horizontalMargin, horizontalOffset, verticalOffset, contentView, bottomWrap, emojiLayout);
+    return EmojiToneHelper.defaultDisplay(context, anchorView, viewToDisplay, viewWidth, viewHeight, horizontalMargin, horizontalOffset, verticalOffset, contentView, bottomWrap, keyboardFrameLayout);
   }
 
   @Override
@@ -671,7 +795,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   // Other
 
   private void checkCaptionButtonsY () {
-    final int offset = emojiLayout != null && emojiLayout.getVisibility() == View.VISIBLE && emojiLayout.getParent() != null ? emojiLayout.getMeasuredHeight() : 0;
+    final float offset = keyboardFrameLayout != null && keyboardFrameLayout.getVisibility() == View.VISIBLE && keyboardFrameLayout.getParent() != null ? keyboardFrameLayout.getMeasuredHeight() : 0;
     captionEmojiButton.setTranslationY(-offset);
     captionDoneButton.setTranslationY(-offset);
     captionWrapView.setTranslationY(-offset);
@@ -690,7 +814,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   }
 
   private int getBottomWrapMargin () {
-    return (inCaption ? 0 : Screen.dp(56f)) + controlsMargin;
+    return (inCaption || mode != MODE_GALLERY ? 0 : Screen.dp(56f)) + (emojiShown ? 0 : controlsMargin);
   }
 
   private void setInCaption (boolean inCaption) {
@@ -708,9 +832,10 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       mediaView.setDisableTouch(inCaption);
       mediaView.setButStillNeedClick(inCaption ? this : null);
 
-      Views.setBottomMargin(bottomWrap, getBottomWrapMargin());
+      updateBottomWrapMargin();
       editWrap.setVisibility(inCaption ? View.GONE : View.VISIBLE);
       updateSliderAlpha();
+      updateBottomSpaceAlpha();
       if (this.inCaptionAnimator == null) {
         this.inCaptionAnimator = new FactorAnimator(ANIMATOR_ID_CAPTION, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 180l, this.inCaptionFactor);
       }
@@ -856,8 +981,8 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         closeEmojiKeyboard(true);
       }
       boolean res = super.onKeyboardStateChanged(visible);
-      if (emojiLayout != null) {
-        emojiLayout.onKeyboardStateChanged(visible);
+      if (keyboardFrameLayout != null) {
+        keyboardFrameLayout.onKeyboardStateChanged(visible);
       }
       setInCaption(visible || emojiShown);
       mediaView.layoutCells();
@@ -1000,7 +1125,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   }
 
   public void onMediaZoomStart () {
-    if (mode == MODE_GALLERY && currentSection == SECTION_PAINT) {
+    if (mode == MODE_GALLERY && currentSection == SECTION_PAINT && paintView != null) {
       paintView.getContentWrap().cancelDrawingByZoom();
     }
   }
@@ -1050,6 +1175,10 @@ public class MediaViewController extends ViewController<MediaViewController.Args
             break;
           }
         }
+        break;
+      }
+      case ANIMATOR_EDIT_MODE_VISIBILITY: {
+        setHeaderAlpha(revealAnimator != null ? revealAnimator.getFactor(): 1f);
         break;
       }
       case ANIMATOR_COUNTER: {
@@ -1116,6 +1245,11 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         setImageRotateFactor(factor);
         break;
       }
+      case ANIMATOR_IMAGE_FLIP_HORIZONTALLY:
+      case ANIMATOR_IMAGE_FLIP_VERTICALLY: {
+        setImageMirrorFactors();
+        break;
+      }
       case ANIMATOR_PAINT_HIDE: {
         setHidePaint(factor);
         break;
@@ -1132,6 +1266,13 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         setAutoThumbScrollFactor(factor);
         break;
       }
+    }
+  }
+
+  @Override
+  public void onPopupCompletelyShown (PopupLayout popup) {
+    if (inProfilePhotoEditMode()) {
+      UI.post(() -> openCrop(true));
     }
   }
 
@@ -1158,16 +1299,15 @@ public class MediaViewController extends ViewController<MediaViewController.Args
           }
           onHide();
         } else if (finalFactor == 1f) {
+          context().getRootView().forceHideKeyboard();
           popupView.onCustomShowComplete();
           mediaView.setDisableAnimations(false);
           if (!SET_FULLSCREEN_ON_OPEN) {
             setFullScreen(true);
           }
           mediaView.autoplayIfNeeded(false);
-          if (mode == MODE_SECRET) {
-            final MediaItem secretItem = stack.getCurrent();
-            UI.post(() -> secretItem.viewSecretContent(), 20);
-          }
+          final MediaItem openedItem = stack.getCurrent();
+          UI.post(() -> openedItem.viewContent(false), 20);
           if (canSendAsFile() != SEND_MODE_NONE && Settings.instance().needTutorial(Settings.TUTORIAL_SEND_AS_FILE)) {
             Settings.instance().markTutorialAsShown(Settings.TUTORIAL_SEND_AS_FILE);
             context().tooltipManager().builder(sendButton).color(context().tooltipManager().overrideColorProvider(getForcedTheme())).locate((targetView, outRect) -> {
@@ -1187,7 +1327,9 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         break;
       }
       case ANIMATOR_SECTION: {
-        applySection();
+        if (finalFactor == 1f) {
+          applySection();
+        }
         break;
       }
       case ANIMATOR_CAPTION: {
@@ -1224,7 +1366,14 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         break;
       }
       case ANIMATOR_IMAGE_ROTATE: {
-        applyImageRotation();
+        if (finalFactor == 1f) {
+          applyImageRotation();
+        }
+        break;
+      }
+      case ANIMATOR_IMAGE_FLIP_HORIZONTALLY:
+      case ANIMATOR_IMAGE_FLIP_VERTICALLY: {
+        applyImageMirror();
         break;
       }
       case ANIMATOR_THUMBS: {
@@ -1310,6 +1459,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     if (this.captionFactor != factor) {
       this.captionFactor = factor;
       captionWrapView.setAlpha(factor * headerVisible.getFloatValue());
+      updateBottomSpaceAlpha();
     }
   }
 
@@ -1331,11 +1481,15 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       boolean isVideo = item.isVideo();
       if (isVideo) {
         adjustOrTextButton.setIcon(R.drawable.baseline_settings_24, animated, false);
-        cropOrStickerButton.setIcon(R.drawable.baseline_rotate_90_degrees_ccw_24, animated, false);
+        if (!Config.MODERN_VIDEO_TRANSCODING_ENABLED) {
+          cropOrStickerButton.setIcon(R.drawable.baseline_rotate_90_degrees_ccw_24, animated, false);
+        }
         paintOrMuteButton.setIcon(R.drawable.baseline_volume_up_24, animated, item.needMute());
       } else {
         adjustOrTextButton.setIcon(R.drawable.baseline_tune_24, animated, false);
-        cropOrStickerButton.setIcon(R.drawable.baseline_crop_rotate_24, animated, false);
+        if (!Config.MODERN_VIDEO_TRANSCODING_ENABLED) {
+          cropOrStickerButton.setIcon(R.drawable.baseline_crop_rotate_24, animated, false);
+        }
         paintOrMuteButton.setIcon(R.drawable.baseline_brush_24, animated, false);
       }
       // paintButton.setVisibility(isVideo ? View.GONE : View.VISIBLE);
@@ -1420,21 +1574,25 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
   @Override
   protected int getHeaderColorId () {
-    return R.id.theme_color_transparentEditor;
+    return ColorId.transparentEditor;
   }
 
   @Override
   protected int getHeaderTextColorId () {
-    return R.id.theme_color_white;
+    return ColorId.white;
   }
 
   @Override
   protected int getHeaderIconColorId () {
-    return R.id.theme_color_white;
+    return ColorId.white;
   }
 
   @Override
   protected int getMenuId () {
+    MediaItem current = stack.getCurrent();
+    if (current != null && current.isViewOnce()) {
+      return 0;
+    }
     return R.id.menu_photo;
   }
 
@@ -1453,6 +1611,11 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     return current != null && current.isVideo() && !current.isGifType();
   }
 
+  private boolean canEdit () {
+    MediaItem current = stack.getCurrent();
+    return (mode == MODE_MESSAGES || mode == MODE_SIMPLE) && current != null && !current.isVideo() && !current.isGifType() && (current.canBeShared() && current.canBeSaved() && !tdlib.hasRestriction(current.getSourceChatId(), RightId.SEND_PHOTOS));
+  }
+
   private boolean canShare () {
     return false;
   }
@@ -1464,100 +1627,108 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   @Override
   public void fillMenuItems (int id, HeaderView header, LinearLayout menu) {
     if (Config.MASKS_TEXTS_AVAILABLE) {
-      HeaderButton masksButton = header.genButton(R.id.menu_btn_masks, R.drawable.deproko_baseline_masks_24, R.id.theme_color_white, null, Screen.dp(49f), header);
+      HeaderButton masksButton = header.genButton(R.id.menu_btn_masks, R.drawable.deproko_baseline_masks_24, ColorId.white, null, Screen.dp(49f), header);
       masksButton.setBackgroundResource(R.drawable.bg_btn_header_light);
       masksButton.setVisibility(canViewMasks() ? View.VISIBLE : View.GONE);
       menu.addView(masksButton);
     }
 
-    HeaderButton pipButton = header.genButton(R.id.menu_btn_pictureInPicture, R.drawable.deproko_baseline_outinline_24, R.id.theme_color_white, null, Screen.dp(49f), header);
+    HeaderButton pipButton = header.genButton(R.id.menu_btn_pictureInPicture, R.drawable.deproko_baseline_outinline_24, ColorId.white, null, Screen.dp(49f), header);
     pipButton.setBackgroundResource(R.drawable.bg_btn_header_light);
     pipButton.setVisibility(canGoPip() ? View.VISIBLE : View.GONE);
     menu.addView(pipButton);
 
-    HeaderButton shareButton = header.addForwardButton(menu, null, R.id.theme_color_white);
+    HeaderButton shareButton = header.addForwardButton(menu, null, ColorId.white);
     shareButton.setBackgroundResource(R.drawable.bg_btn_header_light);
     shareButton.setVisibility(canShare() ? View.VISIBLE : View.GONE);
 
-    HeaderButton moreButton = header.addMoreButton(menu, null, R.id.theme_color_white);
+    HeaderButton editButton = header.addEditButton(menu, null, ColorId.white);
+    editButton.setImageResource(R.drawable.baseline_brush_24);
+    editButton.setBackgroundResource(R.drawable.bg_btn_header_light);
+    editButton.setVisibility(canEdit() ? View.VISIBLE : View.GONE);
+
+    HeaderButton moreButton = header.addMoreButton(menu, null, ColorId.white);
     moreButton.setBackgroundResource(R.drawable.bg_btn_header_light);
+  }
+
+  private void openMoreMenu () {
+    IntList ids = new IntList(4);
+    StringList strings = new StringList(4);
+
+    MediaItem item = stack.getCurrent();
+
+    TdApi.Chat chat = tdlib.chat(item.getSourceChatId());
+    TdApi.Message message = item.getMessage();
+
+    if (message != null && tdlib.canEditMedia(message, tdlib.getMessagePropertiesSync(message), true)) {
+      ids.append(R.id.btn_replace);
+      strings.append(item.isVideo() ? R.string.ReplaceVideo : R.string.ReplaceImage);
+    }
+
+    if (item.isLoaded() && item.canBeSaved()) {
+      if ((item.isVideo() && !item.isGifType()) || (getArgumentsStrict().forceOpenIn)) {
+        ids.append(R.id.btn_open);
+        strings.append(R.string.OpenInExternalApp);
+      }
+      ids.append(R.id.btn_saveToGallery);
+      strings.append(R.string.SaveToGallery);
+    }
+
+    if (mode != MODE_SECRET && mode != MODE_GALLERY && item.canBeSaved() && item.canBeShared()) {
+      ids.append(R.id.btn_share);
+      strings.append(R.string.Share);
+    }
+
+    if (item.isGifType() && item.canBeSaved()) {
+      ids.append(R.id.btn_saveGif);
+      strings.append(R.string.SaveGif);
+    }
+
+    if (!StringUtils.isEmpty(getArgumentsStrict().copyLink) || (chat != null && tdlib.canCopyPostLink(item.getMessage()))) {
+      ids.append(R.id.btn_copyLink);
+      strings.append(R.string.CopyLink);
+    }
+
+    if (item.getSourceChatId() != 0 && item.getSourceMessageId() != 0 && mode == MODE_MESSAGES) {
+      ids.append(R.id.btn_showInChat);
+      strings.append(R.string.ShowInChat);
+    }
+
+    if (item.canBeReported() && (item.getMessage() != null || stack.getCurrentIndex() == 0)) {
+      ids.append(R.id.btn_messageReport);
+      strings.append(R.string.Report);
+    }
+
+    boolean isSelfProfile = mode == MODE_PROFILE && tdlib.isSelfSender(item.getSourceSender());
+    boolean canDelete = isSelfProfile;
+    if (!canDelete && mode == MODE_CHAT_PROFILE) {
+      canDelete = chat != null && tdlib.canChangeInfo(chat);
+    }
+    if (isSelfProfile && stack.getCurrentIndex() != 0) {
+      ids.append(R.id.btn_setProfilePhoto);
+      strings.append(R.string.SetAsCurrent);
+    }
+    if (canDelete) {
+      ids.append(R.id.btn_deleteProfilePhoto);
+      strings.append(R.string.Delete);
+    }
+
+    if (!ids.isEmpty()) {
+      showMore(ids.get(), strings.get(), 0, canRunFullscreen());
+    }
   }
 
   @Override
   public void onMenuItemPressed (int id, View view) {
-    switch (id) {
-      case R.id.menu_btn_pictureInPicture: {
-        enterPictureInPicture();
-        break;
-      }
-      case R.id.menu_btn_forward: {
-        break;
-      }
-      case R.id.menu_btn_more: {
-        IntList ids = new IntList(4);
-        StringList strings = new StringList(4);
-
-        MediaItem item = stack.getCurrent();
-
-        TdApi.Chat chat = tdlib.chat(item.getSourceChatId());
-
-        if (item.isLoaded() && item.canBeSaved()) {
-          if ((item.isVideo() && !item.isGifType()) || (getArgumentsStrict().forceOpenIn)) {
-            ids.append(R.id.btn_open);
-            strings.append(R.string.OpenInExternalApp);
-          }
-          ids.append(R.id.btn_saveToGallery);
-          strings.append(R.string.SaveToGallery);
-        }
-
-        if (mode != MODE_SECRET && mode != MODE_GALLERY && item.canBeSaved() && item.canBeShared()) {
-          ids.append(R.id.btn_share);
-          strings.append(R.string.Share);
-        }
-
-        if (item.isGifType() && item.canBeSaved()) {
-          ids.append(R.id.btn_saveGif);
-          strings.append(R.string.SaveGif);
-        }
-
-        if (!StringUtils.isEmpty(getArgumentsStrict().copyLink) || (chat != null && tdlib.canCopyPostLink(item.getMessage()))) {
-          ids.append(R.id.btn_copyLink);
-          strings.append(R.string.CopyLink);
-        }
-
-        if (item.getSourceChatId() != 0 && item.getSourceMessageId() != 0 && mode == MODE_MESSAGES) {
-          ids.append(R.id.btn_showInChat);
-          strings.append(R.string.ShowInChat);
-        }
-
-        if (item.canBeReported() && (item.getMessage() != null || stack.getCurrentIndex() == 0)) {
-          ids.append(R.id.btn_messageReport);
-          strings.append(R.string.Report);
-        }
-
-        boolean isSelfProfile = mode == MODE_PROFILE && tdlib.isSelfSender(item.getSourceSender());
-        boolean canDelete = isSelfProfile;
-        if (!canDelete && mode == MODE_CHAT_PROFILE) {
-          canDelete = chat != null && tdlib.canChangeInfo(chat);
-        }
-        if (isSelfProfile && stack.getCurrentIndex() != 0) {
-          ids.append(R.id.btn_setProfilePhoto);
-          strings.append(R.string.SetAsCurrent);
-        }
-        if (canDelete) {
-          ids.append(R.id.btn_deleteProfilePhoto);
-          strings.append(R.string.Delete);
-        }
-
-        if (!ids.isEmpty()) {
-          showMore(ids.get(), strings.get(), 0, canRunFullscreen());
-        }
-
-        break;
-      }
-      case R.id.menu_btn_masks: {
-        break;
-      }
+    if (id == R.id.menu_btn_pictureInPicture) {
+      enterPictureInPicture();
+    } else if (id == R.id.menu_btn_forward) {
+      // ...
+    } else if (id == R.id.menu_btn_edit) {
+      openForceEditMode();
+    } else if (id == R.id.menu_btn_more) {
+      openMoreMenu();
+    } else if (id == R.id.menu_btn_masks) {
     }
   }
   
@@ -1567,184 +1738,188 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
   @Override
   public boolean shouldDisallowScreenshots () {
-    return mode == MODE_SECRET || !stack.getCurrent().canBeSaved();
+    return mode == MODE_SECRET || !stack.getCurrent().canBeSaved() || super.shouldDisallowScreenshots();
   }
 
   @Override
   public void onMoreItemPressed (int id) {
     MediaItem item = stack.getCurrent();
-    switch (id) {
-      case R.id.btn_saveToGallery: {
-        TdApi.File file = item.getTargetFile();
-        tdlib.files().isFileLoadedAndExists(file, isLoadedAndExists -> {
-          if (isLoadedAndExists) {
-            runOnUiThreadOptional(() -> {
-              U.copyToGallery(context, file.local.path, item.isAnimatedAvatar() || item.isGifType() ? U.TYPE_GIF : item.isVideo() ? U.TYPE_VIDEO : U.TYPE_PHOTO);
+    if (id == R.id.btn_saveToGallery) {
+      TdApi.File file = item.getTargetFile();
+      tdlib.files().isFileLoadedAndExists(file, isLoadedAndExists -> {
+        if (isLoadedAndExists) {
+          runOnUiThreadOptional(() -> {
+            U.copyToGallery(context, file.local.path, item.isAnimatedAvatar() || item.isGifType() ? U.TYPE_GIF : item.isVideo() ? U.TYPE_VIDEO : U.TYPE_PHOTO);
+          });
+        }
+      });
+    } else if (id == R.id.btn_saveGif) {
+      TdApi.File file = item.getTargetFile();
+      if (file != null) {
+        tdlib.ui().saveGif(file.id);
+      }
+    } else if (id == R.id.btn_messageReport) {
+      TdApi.Message message = item.getMessage();
+      if (message != null) {
+        TdlibUi.reportChat(this, item.getSourceChatId(), new TdApi.Message[] {message}, getForcedTheme(), null, true);
+      } else {
+        final long chatId = Td.getSenderId(item.getSourceSender());
+        final RunnableData<TdApi.PhotoSize> act = (photoSize) -> {
+          if (photoSize != null) {
+            tdlib.ui().post(() ->
+              TdlibUi.reportChatPhoto(this, chatId, photoSize.photo.id, null, getForcedTheme())
+            );
+          }
+        };
+        switch (ChatId.getType(chatId)) {
+          case TdApi.ChatTypeBasicGroup.CONSTRUCTOR: {
+            tdlib.cache().basicGroupFull(ChatId.toBasicGroupId(chatId), groupFull -> {
+              if (groupFull != null && groupFull.photo != null) {
+                act.runWithData(Td.findBiggest(groupFull.photo.sizes));
+              }
             });
+            break;
+          }
+          case TdApi.ChatTypePrivate.CONSTRUCTOR:
+          case TdApi.ChatTypeSecret.CONSTRUCTOR: {
+            final long userId = tdlib.chatUserId(chatId);
+            tdlib.cache().userFull(userId, userFull -> {
+              if (userFull != null && userFull.photo != null) {
+                act.runWithData(Td.findBiggest(userFull.photo.sizes));
+              }
+            });
+            break;
+          }
+          case TdApi.ChatTypeSupergroup.CONSTRUCTOR: {
+            tdlib.cache().supergroupFull(ChatId.toSupergroupId(chatId), supergroupFull -> {
+              if (supergroupFull != null && supergroupFull.photo != null) {
+                act.runWithData(Td.findBiggest(supergroupFull.photo.sizes));
+              }
+            });
+            break;
+          }
+        }
+      }
+    } else if (id == R.id.btn_copyLink) {
+      if (!StringUtils.isEmpty(getArgumentsStrict().copyLink)) {
+        UI.copyText(getArgumentsStrict().copyLink, R.string.CopiedLink);
+      } else if (item.getSourceChatId() != 0) {
+        if (tdlib.canCopyPostLink(item.getMessage())) {
+          tdlib.getMessageLink(item.getMessage(), false, Td.messageThreadId(topicId) != 0, link -> UI.copyText(link.url, link.isPublic ? R.string.CopiedLink : R.string.CopiedLinkPrivate));
+        }
+      }
+    } else if (id == R.id.btn_open) {
+      if (item.getSourceVideo() != null) {
+        TdApi.Video video = item.getSourceVideo();
+        U.openFile(this, video);
+      } else if (item.getSourceDocument() != null) {
+        TdApi.Document document = item.getSourceDocument();
+        U.openFile(this, document.fileName, new File(document.document.local.path), document.mimeType, 0);
+      }
+    } else if (id == R.id.btn_replace) {
+      if (mediaPickerManager == null) {
+        mediaPickerManager = new MediaToReplacePickerManager(this);
+      }
+
+      stopFullScreenTemporarily(true);
+      mediaPickerManager.openMediaView(file -> Media.instance().post(() -> {
+        if (!file.imageGalleryFile.hasCaption()) {
+          file.imageGalleryFile.setCaption(item.getCaption());
+        }
+        TdApi.InputMessageContent content = TD.toContent(tdlib, file.imageGalleryFile, false, false, item.showCaptionAboveMedia(), item.hasSpoiler(), ChatId.isSecret(item.getSourceChatId()));
+        UI.post(() -> {
+          tdlib.editMessageMedia(item.getSourceChatId(), item.getSourceMessageId(), content, new MediaToReplacePickerManager.LocalPickedFile(file.imageGalleryFile, null));
+          forceClose();
+
+          ViewController<?> c = context.navigation().getCurrentStackItem();
+          if (c instanceof MessagesController) {
+            ((MessagesController) c).highlightMessage(new MessageId(item.getSourceChatId(), item.getSourceMessageId()));
           }
         });
-        break;
-      }
-      case R.id.btn_saveGif: {
-        TdApi.File file = item.getTargetFile();
-        if (file != null) {
-          tdlib.ui().saveGif(file.id);
-        }
-        break;
-      }
-      case R.id.btn_messageReport: {
-        TdApi.Message message = item.getMessage();
-        if (message != null) {
-          TdlibUi.reportChat(this, item.getSourceChatId(), new TdApi.Message[] {message}, null, getForcedTheme());
+      }), item.getSourceChatId(), () -> stopFullScreenTemporarily(false), true, null, (1 << RightId.SEND_PHOTOS) | (1 << RightId.SEND_VIDEOS), false);
+    } else if (id == R.id.btn_share) {
+      ShareController c;
+      if (item.getMessage() != null) {
+        c = new ShareController(context, tdlib);
+        if (Td.isText(item.getMessage().content)) {
+          TdApi.LinkPreview linkPreview = ((TdApi.MessageText) item.getMessage().content).linkPreview;
+          c.setArguments(new ShareController.Args(item, linkPreview.displayUrl, linkPreview.displayUrl));
         } else {
-          final long chatId = Td.getSenderId(item.getSourceSender());
-          final RunnableData<TdApi.PhotoSize> act = (photoSize) -> {
-            if (photoSize != null) {
-              tdlib.ui().post(() ->
-                TdlibUi.reportChatPhoto(this, chatId, photoSize.photo.id, null, getForcedTheme())
-              );
-            }
-          };
-          switch (ChatId.getType(chatId)) {
-            case TdApi.ChatTypeBasicGroup.CONSTRUCTOR: {
-              tdlib.cache().basicGroupFull(ChatId.toBasicGroupId(chatId), groupFull -> {
-                if (groupFull != null && groupFull.photo != null) {
-                  act.runWithData(Td.findBiggest(groupFull.photo.sizes));
-                }
-              });
-              break;
-            }
-            case TdApi.ChatTypePrivate.CONSTRUCTOR:
-            case TdApi.ChatTypeSecret.CONSTRUCTOR: {
-              final long userId = tdlib.chatUserId(chatId);
-              tdlib.cache().userFull(userId, userFull -> {
-                if (userFull != null && userFull.photo != null) {
-                  act.runWithData(Td.findBiggest(userFull.photo.sizes));
-                }
-              });
-              break;
-            }
-            case TdApi.ChatTypeSupergroup.CONSTRUCTOR: {
-              tdlib.cache().supergroupFull(ChatId.toSupergroupId(chatId), supergroupFull -> {
-                if (supergroupFull != null && supergroupFull.photo != null) {
-                  act.runWithData(Td.findBiggest(supergroupFull.photo.sizes));
-                }
-              });
-              break;
-            }
-          }
+          c.setArguments(new ShareController.Args(item.getMessage()));
         }
-        break;
-      }
-      case R.id.btn_copyLink: {
-        if (!StringUtils.isEmpty(getArgumentsStrict().copyLink)) {
-          UI.copyText(getArgumentsStrict().copyLink, R.string.CopiedLink);
-        } else if (item.getSourceChatId() != 0) {
-          if (tdlib.canCopyPostLink(item.getMessage())) {
-            tdlib.getMessageLink(item.getMessage(), false, messageThreadId != 0, link -> UI.copyText(link.url, link.isPublic ? R.string.CopiedLink : R.string.CopiedLinkPrivate));
+      } else if (item.getShareFile() != null) {
+        c = new ShareController(context, tdlib);
+        CharSequence caption = null, exportCaption = null;
+        switch (mode) {
+          case MODE_PROFILE: {
+            long userId = Td.getSenderUserId(stack.getCurrent().getSourceSender());
+            String userName = tdlib.cache().userName(userId);
+            if (!StringUtils.isEmpty(userName)) {
+              exportCaption = Lang.getString(R.string.ShareTextProfile, userName);
+            }
+            String username = tdlib.cache().userUsername(userId);
+            if (!StringUtils.isEmpty(username)) {
+              exportCaption = Lang.getString(R.string.format_ShareTextSignature, exportCaption, tdlib.tMeUrl(username));
+            }
+            break;
           }
-        }
-        break;
-      }
-      case R.id.btn_open: {
-        if (item.getSourceVideo() != null) {
-          TdApi.Video video = item.getSourceVideo();
-          U.openFile(this, video);
-        } else if (item.getSourceDocument() != null) {
-          TdApi.Document document = item.getSourceDocument();
-          U.openFile(this, document.fileName, new File(document.document.local.path), document.mimeType, 0);
-        }
-        break;
-      }
-      case R.id.btn_share: {
-        ShareController c;
-        if (item.getMessage() != null) {
-          c = new ShareController(context, tdlib);
-          if (item.getMessage().content.getConstructor() != TdApi.MessageText.CONSTRUCTOR) {
-            c.setArguments(new ShareController.Args(item.getMessage()));
-          } else {
-            TdApi.WebPage webPage = ((TdApi.MessageText) item.getMessage().content).webPage;
-            c.setArguments(new ShareController.Args(item, webPage.displayUrl, webPage.displayUrl));
-          }
-        } else if (item.getShareFile() != null) {
-          c = new ShareController(context, tdlib);
-          CharSequence caption = null, exportCaption = null;
-          switch (mode) {
-            case MODE_PROFILE: {
-              long userId = Td.getSenderUserId(stack.getCurrent().getSourceSender());
-              String userName = tdlib.cache().userName(userId);
-              if (!StringUtils.isEmpty(userName)) {
-                exportCaption = Lang.getString(R.string.ShareTextProfile, userName);
+          case MODE_CHAT_PROFILE: {
+            long chatId = stack.getCurrent().getSourceChatId();
+            String chatTitle = tdlib.chatTitle(chatId);
+            if (!StringUtils.isEmpty(chatTitle)) {
+              if (tdlib.isChannel(chatId)) {
+                exportCaption = Lang.getString(R.string.ShareTextChannel, chatTitle);
+              } else {
+                exportCaption = Lang.getString(R.string.ShareTextChat, chatTitle);
               }
-              String username = tdlib.cache().userUsername(userId);
+              String username = tdlib.chatUsername(chatId);
               if (!StringUtils.isEmpty(username)) {
                 exportCaption = Lang.getString(R.string.format_ShareTextSignature, exportCaption, tdlib.tMeUrl(username));
               }
-              break;
             }
-            case MODE_CHAT_PROFILE: {
-              long chatId = stack.getCurrent().getSourceChatId();
-              String chatTitle = tdlib.chatTitle(chatId);
-              if (!StringUtils.isEmpty(chatTitle)) {
-                if (tdlib.isChannel(chatId)) {
-                  exportCaption = Lang.getString(R.string.ShareTextChannel, chatTitle);
-                } else {
-                  exportCaption = Lang.getString(R.string.ShareTextChat, chatTitle);
-                }
-                String username = tdlib.chatUsername(chatId);
-                if (!StringUtils.isEmpty(username)) {
-                  exportCaption = Lang.getString(R.string.format_ShareTextSignature, exportCaption, tdlib.tMeUrl(username));
-                }
-              }
-              break;
-            }
-            case MODE_SIMPLE: {
-              caption = exportCaption = Td.isEmpty(item.getCaption()) ? null : TD.toCharSequence(item.getCaption());
-              break;
-            }
+            break;
           }
-          c.setArguments(new ShareController.Args(item, caption, exportCaption));
-        } else {
-          return;
+          case MODE_SIMPLE: {
+            caption = exportCaption = Td.isEmpty(item.getCaption()) ? null : TD.toCharSequence(item.getCaption());
+            break;
+          }
         }
-
-        c.show();
-
-        forceAnimationType = ANIMATION_TYPE_FADE;
-        close();
-        break;
+        c.setArguments(new ShareController.Args(item, caption, exportCaption));
+      } else {
+        return;
       }
-      case R.id.btn_showInChat: {
-        forceAnimationType = ANIMATION_TYPE_FADE;
 
-        ViewController<?> c = context.navigation().getCurrentStackItem();
-        if (c instanceof MessagesController && c.getChatId() == item.getSourceChatId() && ((MessagesController) c).getMessageThreadId() == messageThreadId) {
-          ((MessagesController) c).highlightMessage(new MessageId(item.getSourceChatId(), item.getSourceMessageId()));
-        } else {
-          tdlib.ui().openMessage(this, item.getSourceChatId(), new MessageId(item.getSourceChatId(), item.getSourceMessageId()), null);
-        }
+      c.show();
 
-        close();
-        break;
+      forceAnimationType = ANIMATION_TYPE_FADE;
+      close();
+    } else if (id == R.id.btn_showInChat) {
+      forceAnimationType = ANIMATION_TYPE_FADE;
+
+      ViewController<?> c = context.navigation().getCurrentStackItem();
+      if (c instanceof MessagesController && ((MessagesController) c).compareChat(item.getSourceChatId(), topicId)) {
+        ((MessagesController) c).highlightMessage(new MessageId(item.getSourceChatId(), item.getSourceMessageId()));
+      } else {
+        tdlib.ui().openMessage(this, item.getSourceChatId(), new MessageId(item.getSourceChatId(), item.getSourceMessageId()), null);
       }
-      case R.id.btn_setProfilePhoto: {
-        final long photoId = item.getPhotoId();
-        tdlib.client().send(new TdApi.SetProfilePhoto(new TdApi.InputChatPhotoPrevious(photoId), false), tdlib.okHandler());
-        close();
-        break;
+
+      close();
+    } else if (id == R.id.btn_setProfilePhoto) {
+      final long photoId = item.getPhotoId();
+      tdlib.send(new TdApi.SetProfilePhoto(new TdApi.InputChatPhotoPrevious(photoId), false), tdlib.typedOkHandler());
+      close();
+    } else if (id == R.id.btn_deleteProfilePhoto) {
+      if (mode == MODE_PROFILE) {
+        tdlib.send(new TdApi.DeleteProfilePhoto(item.getPhotoId()), tdlib.typedOkHandler());
+      } else if (mode == MODE_CHAT_PROFILE) {
+        tdlib.send(new TdApi.SetChatPhoto(item.getSourceChatId(), null), tdlib.typedOkHandler());
       }
-      case R.id.btn_deleteProfilePhoto: {
-        if (mode == MODE_PROFILE) {
-          tdlib.client().send(new TdApi.DeleteProfilePhoto(item.getPhotoId()), tdlib.okHandler());
-        } else if (mode == MODE_CHAT_PROFILE) {
-          tdlib.client().send(new TdApi.SetChatPhoto(item.getSourceChatId(), null), tdlib.okHandler());
-        }
-        forceAnimationType = ANIMATION_TYPE_FADE;
-        close();
-        break;
-      }
+      forceAnimationType = ANIMATION_TYPE_FADE;
+      close();
     }
   }
+
+  private MediaToReplacePickerManager mediaPickerManager;
 
   @Override
   public View getCustomHeaderCell () {
@@ -1754,6 +1929,9 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private int measureButtonsPadding () {
     int width = Screen.dp(49f);
     if (canShare()) {
+      width += Screen.dp(49f);
+    }
+    if (canEdit()) {
       width += Screen.dp(49f);
     }
     if (canGoPip()) {
@@ -1770,6 +1948,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       headerView.updateButton(R.id.menu_photo, R.id.menu_btn_masks, canViewMasks() ? View.VISIBLE : View.GONE, 0);
       headerView.updateButton(R.id.menu_photo, R.id.menu_btn_pictureInPicture, canGoPip() ? View.VISIBLE : View.GONE, 0);
       headerView.updateButton(R.id.menu_photo, R.id.menu_btn_forward, canShare() ? View.VISIBLE : View.GONE, 0);
+      headerView.updateButton(R.id.menu_photo, R.id.menu_btn_edit, canEdit() ? View.VISIBLE : View.GONE, 0);
       updateTitleMargins();
     }
   }
@@ -1778,24 +1957,15 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     if (headerCell != null) {
       int rightMargin = measureButtonsPadding();
       int leftMargin = Screen.dp(68f);
-      if (Views.setMargins((FrameLayout.LayoutParams) headerCell.getLayoutParams(), Lang.rtl() ? rightMargin : leftMargin, headerView.needOffsets() ? HeaderView.getTopOffset() : 0, Lang.rtl() ? leftMargin : rightMargin, 0)) {
+      if (Views.setMargins((FrameLayout.LayoutParams) headerCell.getLayoutParams(), Lang.rtl() ? rightMargin : leftMargin, headerView.getEffectiveTopOffset(), Lang.rtl() ? leftMargin : rightMargin, 0)) {
         Views.updateLayoutParams(headerCell);
       }
     }
   }
 
   private boolean toggleHeaderVisibility () {
-    if (headerView != null) {
+    if (headerView != null && needHeader()) {
       boolean isVisible = headerVisible.toggleValue(true);
-      // FIXME: currently there is a "jump" (by the height of navigation bar) effect upon entering/leaving full screen mode
-      // In order to properly fix it:
-      // 1. Bug in third-party dependency has to be fixed (caused by SubsamplingScaleImageView.java:1435-1436)
-      // 2. MediaViewController.dispatchInnerMargins should start passing non-zero values to MediaView
-      // 3. MediaCellView.setOffsets should start properly handling non-zero parameters (currently some of them are unsupported)
-      // For now, it is considered that having proper full-screen mode is more important
-      // than not seeing this visual "glitch".
-      //
-      // Leaving this comment for whoever going to invest time to properly resolve this issue in the future.
       if (isVisible) {
         context().removeHideNavigationView(this);
       } else {
@@ -1816,6 +1986,26 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     }
   }
 
+  private void updateBottomWrapMargin () {
+    int newMargin = getBottomWrapMargin();
+    Views.setBottomMargin(bottomWrap, newMargin);
+  }
+
+  private void updateBottomSpaceAlpha () {
+    if (bottomSpace != null) {
+      float alpha;
+      if (mode == MODE_GALLERY) {
+        alpha = editWrap != null ? editWrap.getAlpha() : 0f;
+      } else {
+        float captionWrapAlpha = Views.isValid(captionWrapView) ? captionWrapView.getAlpha() : 0f;
+        float sliderAlpha = Views.isValid(videoSliderView) ? videoSliderView.getAlpha() * videoSliderView.getInnerAlpha() : 0f;
+        float thumbsAlpha = Views.isValid(thumbsRecyclerView) ? thumbsRecyclerView.getAlpha() : 0f;
+        alpha = Math.max(captionWrapAlpha, Math.max(thumbsAlpha, sliderAlpha));
+      }
+      bottomSpace.setAlpha(alpha);
+    }
+  }
+
   private void updateSliderAlpha () {
     if (videoSliderView != null) {
       float alpha = headerVisible.getFloatValue() * (1f - pipFactor) * (inCaption ? 0f : 1f);
@@ -1829,12 +2019,14 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     if (this.headerAlpha != alpha) {
       this.headerAlpha = alpha;
       updateThumbsAlpha();
+      updateBottomSpaceAlpha();
     }
   }
 
   private void updateThumbsAlpha () {
     if (thumbsRecyclerView != null) {
       thumbsRecyclerView.setAlpha(headerAlpha * headerVisible.getFloatValue() * (1f - pipFactor));
+      updateBottomSpaceAlpha();
     }
   }
 
@@ -1853,6 +2045,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     updateCaptionAlpha();
     updateSliderAlpha();
     updateThumbsAlpha();
+    updateBottomSpaceAlpha();
   }
 
   private void onMediaStackChanged (boolean itemCountChanged) {
@@ -1862,7 +2055,10 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         String currentIndex = Strings.buildCounter(stack.getEstimatedIndex() + 1);
         String totalIndex = Strings.buildCounter(stack.getEstimatedSize());
         if (getArgumentsStrict().noLoadMore && stack.getEstimatedSize() == 1) {
-          if (stack.getCurrent().isVideo()) {
+          TdApi.SponsoredMessage sponsoredMessage = stack.getCurrent().getSourceSponsoredMessage();
+          if (sponsoredMessage != null) {
+            headerCell.setTitle(sponsoredMessage.isRecommended ? R.string.MediaRecommendation : R.string.MediaAd);
+          } else if (stack.getCurrent().isVideo()) {
             headerCell.setTitle(R.string.Video);
           } else if (stack.getCurrent().isGif()) {
             headerCell.setTitle(R.string.Gif);
@@ -1895,7 +2091,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private void initHeaderStyle () {
     if (headerView != null) {
       if (revealAnimationType == ANIMATION_TYPE_REVEAL) {
-        headerView.setTranslationY(-HeaderView.getSize(headerView.needOffsets()));
+        headerView.setTranslationY(-headerView.getSize());
       } else {
         headerView.setAlpha(0f);
       }
@@ -1908,13 +2104,13 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     switch (revealAnimationType) {
       case ANIMATION_TYPE_REVEAL: {
         if (headerView != null) {
-          headerView.setTranslationY(-HeaderView.getSize(headerView.needOffsets()) * (1f - alpha));
+          headerView.setTranslationY(-headerView.getSize() * Math.max(1f - alpha, getForceEditModeVisibility()));
         }
         break;
       }
       case ANIMATION_TYPE_FADE: {
         if (headerView != null) {
-          headerView.setAlpha(alpha);
+          headerView.setAlpha(Math.min(alpha, getForceEditModeVisibility()));
         }
         break;
       }
@@ -1943,13 +2139,14 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     switch (mode) {
       case MODE_MESSAGES: {
         TdApi.Message message = item.getMessage();
-        if (message != null && message.content.getConstructor() == TdApi.MessageText.CONSTRUCTOR) {
+        if (message != null && Td.isText(message.content)) {
           TdApi.MessageText messageText = (TdApi.MessageText) message.content;
-          if (messageText.webPage != null) {
-            if (!StringUtils.isEmpty(messageText.webPage.author)) {
-              return messageText.webPage.author;
+          if (messageText.linkPreview != null) {
+            String author = messageText.linkPreview.author;
+            if (!StringUtils.isEmpty(author)) {
+              return author;
             }
-            return messageText.webPage.displayUrl;
+            return messageText.linkPreview.displayUrl;
           }
         }
         String authorText = getAuthorText(item);
@@ -1974,7 +2171,15 @@ public class MediaViewController extends ViewController<MediaViewController.Args
           return stack.getEstimatedSize() != 1 ? Lang.getString(R.string.format_mediaIndexAndTime, getXofY(), time) : time;
         }
         int resId;
-        if (mode == MODE_CHAT_PROFILE) {
+        if (getArgumentsStrict().avatarPickerMode != AvatarPickerMode.NONE) {
+          resId = getResId(getArgumentsStrict().avatarPickerMode,
+            R.string.ProfilePhoto,
+            R.string.ProfilePhoto,
+            R.string.GroupPhoto,
+            R.string.ChannelPhoto,
+            R.string.BotPhoto
+          );
+        } else if (mode == MODE_CHAT_PROFILE) {
           resId = (tdlib.isChannel(stack.getCurrent().getSourceChatId()) ? R.string.ChannelPhoto : R.string.GroupPhoto);
         } else {
           resId = R.string.ProfilePhoto;
@@ -2011,13 +2216,13 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     return this.filter != null ? this.filter : mode == MODE_CHAT_PROFILE ? new TdApi.SearchMessagesFilterChatPhoto() : new TdApi.SearchMessagesFilterPhotoAndVideo();
   }
 
-  private Client.ResultHandler foundChatMessagesHandler (long chatId, long fromMessageId, int loadCount) {
+  private Client.ResultHandler foundChatMessagesHandler (long chatId, TdApi.MessageTopic topicId, long fromMessageId, int loadCount) {
     return result -> {
       switch (result.getConstructor()) {
         case TdApi.FoundChatMessages.CONSTRUCTOR: {
           TdApi.FoundChatMessages foundChatMessages = (TdApi.FoundChatMessages) result;
           runOnUiThreadOptional(() ->
-            addItems(chatId, fromMessageId, loadCount, foundChatMessages)
+            addItems(chatId, topicId, fromMessageId, loadCount, foundChatMessages)
           );
           break;
         }
@@ -2044,12 +2249,11 @@ public class MediaViewController extends ViewController<MediaViewController.Args
           MediaItem item = reverseMode ? stack.lastAvalable() : stack.firstAvailable();
           long initialFromMessageId = item.getSourceMessageId();
           TdApi.SearchChatMessages searchFunction = new TdApi.SearchChatMessages(
-            chatId, null, null,
+            chatId, topicId, null, null,
             initialFromMessageId, 0,
-            LOAD_COUNT, searchFilter(),
-            messageThreadId
+            LOAD_COUNT, searchFilter()
           );
-          tdlib.client().send(searchFunction, foundChatMessagesHandler(chatId, initialFromMessageId, LOAD_COUNT));
+          tdlib.client().send(searchFunction, foundChatMessagesHandler(chatId, topicId, initialFromMessageId, LOAD_COUNT));
         }
         break;
       }
@@ -2060,12 +2264,11 @@ public class MediaViewController extends ViewController<MediaViewController.Args
           MediaItem item = stack.lastAvalable();
           long initialFromMessageId = item.getSourceMessageId();
           TdApi.SearchChatMessages searchFunction = new TdApi.SearchChatMessages(
-            chatId, null, null,
+            chatId, topicId, null, null,
             initialFromMessageId, 0,
-            LOAD_COUNT_PROFILE, searchFilter(),
-            messageThreadId
+            LOAD_COUNT_PROFILE, searchFilter()
           );
-          tdlib.client().send(searchFunction, foundChatMessagesHandler(chatId, initialFromMessageId, LOAD_COUNT_PROFILE));
+          tdlib.client().send(searchFunction, foundChatMessagesHandler(chatId, topicId, initialFromMessageId, LOAD_COUNT_PROFILE));
         }
         break;
       }
@@ -2147,7 +2350,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     }
   }
 
-  private void addItems (long chatId, long fromMessageId, int loadCount, TdApi.FoundChatMessages messages) {
+  private void addItems (long chatId, TdApi.MessageTopic topicId, long fromMessageId, int loadCount, TdApi.FoundChatMessages messages) {
     long messagesChatId = TD.getChatId(messages.messages);
     if (messagesChatId == 0) {
       messagesChatId = chatId;
@@ -2167,12 +2370,11 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       getArgumentsStrict().noLoadMore = true;
     } else if (addedCount == 0) {
       TdApi.SearchChatMessages retryFunction = new TdApi.SearchChatMessages(
-        chatId, null, null,
+        chatId, topicId, null, null,
         messages.nextFromMessageId, 0,
-        loadCount, searchFilter(),
-        messageThreadId
+        loadCount, searchFilter()
       );
-      tdlib.client().send(retryFunction, foundChatMessagesHandler(chatId, messages.nextFromMessageId, loadCount));
+      tdlib.client().send(retryFunction, foundChatMessagesHandler(chatId, topicId, messages.nextFromMessageId, loadCount));
       return;
     }
     isLoading = false;
@@ -2216,7 +2418,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         skipCount--;
         continue;
       }
-      if (TD.isSecret(msg) || (!ChatId.isSecret(msg.chatId) && msg.selfDestructTime != 0)) // skip self-destructing images
+      if (Td.isSecret(msg.content)) // skip self-destructing images
         continue;
 
       MediaItem item = MediaItem.valueOf(context(), tdlib, msg);
@@ -2278,9 +2480,13 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         MediaItem newItem = MediaItem.valueOf(context(), tdlib, message);
         if (newItem != null) {
           replaceMedia(index, oldItem, newItem);
-          headerCell.setSubtitle(genSubtitle());
+          if (headerCell != null) {
+            headerCell.setSubtitle(genSubtitle());
+          }
         } else if (stack.getCurrentIndex() == index) {
-          forceClose();
+          // if (message.selfDestructType == null || message.selfDestructType.getConstructor() != TdApi.MessageSelfDestructTypeImmediately.CONSTRUCTOR) {
+            forceClose();
+          // }
         } else {
           deleteMedia(index, oldItem);
         }
@@ -2542,6 +2748,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       updateCaptionAlpha();
       updateSliderAlpha();
       updateThumbsAlpha();
+      updateBottomSpaceAlpha();
 
       updatePhotoRevealFactor();
     }
@@ -2926,16 +3133,17 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       if (isLeft) {
         c.save();
         c.rotate(180, getMeasuredWidth() / 2, getMeasuredHeight() / 2);
-        Drawables.draw(c, backIcon, 0, y, Paints.getPorterDuffPaint(0xffffffff));
+        Drawables.draw(c, backIcon, 0, y, Paints.whitePorterDuffPaint());
         c.restore();
       } else {
-        Drawables.draw(c, backIcon, 0, y, Paints.getPorterDuffPaint(0xffffffff));
+        Drawables.draw(c, backIcon, 0, y, Paints.whitePorterDuffPaint());
       }
     }
   }
 
   private FrameLayoutFix contentView;
   private MediaView mediaView;
+  private FillingSpace bottomSpace;
   private FrameLayoutFix pipControlsWrap;
   private EditButton pipOpenButton, pipCloseButton;
   private View pipBackgroundView;
@@ -2947,13 +3155,14 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private LinearLayout editButtons;
   private EditButton cropOrStickerButton;
   private EditButton paintOrMuteButton;
+  private EditButton mirrorButton;
   private EditButton adjustOrTextButton;
   private StopwatchHeaderButton stopwatchButton;
-  private @Nullable MediaLayout.SenderSendIcon senderSendIcon;
 
   private FrameLayoutFix bottomWrap;
-  private LinearLayout captionWrapView;
+  private ViewGroup captionWrapView;
   private View captionView;
+  private InputView inputView;
   private ImageView captionEmojiButton, captionDoneButton;
   private @Nullable VideoControlView videoSliderView;
 
@@ -2994,27 +3203,41 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private float counterFactor;
 
   @Override
-  public boolean onBackPressed (boolean fromTop) {
+  public boolean performOnBackPressed (boolean fromTop, boolean commit) {
     if (inSlideMode || (slideAnimator != null && slideAnimator.isAnimating())) {
       return true;
     }
     if (showOtherMedias) {
-      setShowOtherMedias(false);
+      if (commit) {
+        setShowOtherMedias(false);
+      }
       return true;
     }
     if (currentSection != SECTION_CAPTION) {
-      goBackToCaption(true);
+      if (commit) {
+        goBackToCaption(true);
+      }
       return true;
     }
     if (emojiShown) {
-      forceCloseEmojiKeyboard();
+      if (commit) {
+        forceCloseEmojiKeyboard();
+      }
       return true;
     }
     if (mediaView.isZoomed()) {
-      mediaView.normalizeZoom();
+      if (commit) {
+        mediaView.normalizeZoom();
+      }
       return true;
     }
-    return false;
+    if (inForceEditMode()) {
+      if (commit) {
+        closeForceEditMode();
+      }
+      return true;
+    }
+    return super.performOnBackPressed(fromTop, commit);
   }
 
   private void setCounterFactor (float counterFactor) {
@@ -3069,9 +3292,11 @@ public class MediaViewController extends ViewController<MediaViewController.Args
             videoSliderView.resetDuration(timeTotal, timeNow, isLoaded, animated && videoFactor != 0f);
           }
           videoSliderView.setFile(stack.getCurrent().getSourceGalleryFile());
-          boolean value = isLoaded && (stack.getCurrent().isGifType() || (commonFactor < 1f && !MediaItem.isGalleryType(stack.getCurrent().getType())));
-          videoSliderView.setShowPlayPause(value, animated && videoFactor != 0f);
-          if (value && commonFactor < 1f) {
+          MediaItem item = stack.getCurrent();
+          videoSliderView.setShowPlayPause(item.isVideoOrGif(), animated && videoFactor != 0f);
+          videoSliderView.setIsPlaying(false, true);
+          videoSliderView.setSlideEnabled(item.canSeekVideo());
+          if (item.isVideoOrGif() && commonFactor < 1f) {
             videoSliderView.setIsPlaying(true, animated && videoFactor != 0f);
             updatePipState(true);
           }
@@ -3094,10 +3319,13 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         } else {
           videoSliderView.resetDuration(timeTotal, timeNow, isLoaded, animated);
         }
-        videoSliderView.setFile(stack.getCurrent().getSourceGalleryFile());
-        boolean value = isLoaded && (stack.getCurrent().isGifType() || commonFactor < 1f);
-        videoSliderView.setShowPlayPause(value, animated);
-        if (value && (commonFactor < 1f || stack.getCurrent().isAutoplay())) {
+        MediaItem item = stack.getCurrent();
+        videoSliderView.updateSecondarySeek(TD.getFileOffsetProgress(item.getTargetFile()), TD.getFilePrefixProgress(item.getTargetFile()));
+        videoSliderView.setFile(item.getSourceGalleryFile());
+        videoSliderView.setShowPlayPause(item.isVideoOrGif(), animated);
+        videoSliderView.setIsPlaying(false, true);
+        videoSliderView.setSlideEnabled(item.canSeekVideo());
+        if (item.isVideoOrGif() && (commonFactor < 1f || item.isAutoplay())) {
           videoSliderView.setIsPlaying(true, animated);
           updatePipState(true);
         }
@@ -3124,7 +3352,8 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     boolean needMargin = videoFactor == 1f && !inCaption;
     if (this.needVideoMargin != needMargin) {
       this.needVideoMargin = needMargin;
-      captionWrapView.setTranslationY((needMargin ? 0 : (float) -Screen.dp(56f) * videoFactor * (inCaption ? 0f : 1f)) + (thumbsFactor * Screen.dp(THUMBS_PADDING)));
+      float y = (needMargin ? 0 : (float) -Screen.dp(56f) * videoFactor * (inCaption ? 0f : 1f)) + (thumbsFactor * Screen.dp(THUMBS_PADDING));
+      captionWrapView.setTranslationY(y);
       Views.setBottomMargin(captionWrapView, (needVideoMargin ? Screen.dp(56f) : 0));
     }
   }
@@ -3134,7 +3363,8 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     if (captionWrapView != null) {
       updateCaptionLayout();
       if (!needVideoMargin) {
-        captionWrapView.setTranslationY((float) -Screen.dp(56f) * videoFactor + thumbOffset);
+        float y = (float) -Screen.dp(56f) * videoFactor + thumbOffset;
+        captionWrapView.setTranslationY(y);
       }
     }
     if (videoSliderView != null) {
@@ -3148,6 +3378,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       checkBottomComponentOffsets();
       if (videoSliderView != null) {
         videoSliderView.setInnerAlpha(factor);
+        updateBottomSpaceAlpha();
       }
     }
   }
@@ -3157,6 +3388,30 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       videoAnimator.forceFactor(factor);
     }
     setVideoFactor(factor);
+  }
+
+  @Override
+  public boolean onDisplayError (@NonNull PlaybackException error, @Nullable MediaItem item) {
+    boolean isGif = item != null && item.isGifType();
+    String info = Lang.getString(U.isUnsupportedFormat(error) ? (isGif ? R.string.GifPlaybackUnsupported : R.string.VideoPlaybackUnsupported) : (isGif ? R.string.GifPlaybackError : R.string.VideoPlaybackError));
+    showOptions(info, new int[]{R.id.btn_view, R.id.btn_cancel}, new String[]{Lang.getString(R.string.ViewVideoError), Lang.getString(R.string.Cancel)}, new int[] {OptionColor.RED, OptionColor.NORMAL}, new int[] {R.drawable.baseline_bug_report_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
+      if (id == R.id.btn_view) {
+        forceClose();
+        TextController c = new TextController(context, tdlib);
+
+        String log =
+          Log.toPreviewString(error) +
+          "\n\n" +
+          U.getUsefulMetadata(tdlib) +
+          "\n\n" +
+          Log.toString(error, true);
+
+        c.setArguments(TextController.Arguments.fromRawText(Lang.getString(R.string.VideoErrorLog), log, "text/plain"));
+        context.navigation().navigateTo(c);
+      }
+      return true;
+    }, getForcedTheme());
+    return true;
   }
 
   @Override
@@ -3218,6 +3473,9 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private boolean ignoreCaptionUpdate;
 
   private boolean canRunFullscreen () {
+    if (useEdgeToEdge()) {
+      return true;
+    }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && Config.CUTOUT_ENABLED && mode == MODE_MESSAGES) {
       return true;
     }
@@ -3268,6 +3526,9 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     if (captionFactor == 1f && captionWrapView != null) {
       height += captionWrapView.getMeasuredHeight();
     }
+    if (useEdgeToEdge()) {
+      height += bottomInnerMargin;
+    }
     return height;
   }
 
@@ -3280,7 +3541,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       setCommonFactor(1f - dismissFactor);
 
       if (headerView != null) {
-        headerView.setTranslationY(-HeaderView.getSize(headerView.needOffsets()) * dismissFactor);
+        headerView.setTranslationY(-headerView.getSize() * Math.max(dismissFactor, getForceEditModeVisibility()));
       }
 
       if (mode == MODE_GALLERY) {
@@ -3292,15 +3553,22 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   }
 
   private void checkBottomWrapY () {
-    int thumbsDistance = Screen.dp(THUMBS_PADDING) * 2 + Screen.dp(THUMBS_HEIGHT);
-    float offsetDistance = (float) measureBottomWrapHeight() * dismissFactor;
-    // int appliedBottomPadding = -this.appliedBottomPadding;
+    int thumbsDistance = (Screen.dp(THUMBS_PADDING) * 2 + Screen.dp(THUMBS_HEIGHT)) * (inForceEditMode() ? 0 : 1);
+    float offsetDistance = (float) measureBottomWrapHeight() * dismissFactor - getKeyboardOffset();
+    float maxY = 0;
     if (bottomWrap != null) {
-      bottomWrap.setTranslationY(offsetDistance - (thumbsFactor * (float) thumbsDistance) * (1f - dismissFactor) - appliedBottomPadding);
+      float y = offsetDistance - (thumbsFactor * (float) thumbsDistance) * (1f - dismissFactor);
+      bottomWrap.setTranslationY(y);
+      maxY = Math.max(0, y);
     }
     if (thumbsRecyclerView != null) {
       float dy = ((float) thumbsDistance * Math.max((1f - thumbsFactor), dismissFactor));
-      thumbsRecyclerView.setTranslationY(offsetDistance + dy - appliedBottomPadding);
+      float y = offsetDistance + dy;
+      thumbsRecyclerView.setTranslationY(y);
+      maxY = Math.max(0, y);
+    }
+    if (bottomSpace != null) {
+      bottomSpace.setTranslationY(maxY);
     }
   }
 
@@ -3458,6 +3726,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       checkBottomWrapY();
       checkThumbsItemAnimator();
       updateThumbsAlpha();
+      updateBottomSpaceAlpha();
     }
   }
 
@@ -3816,12 +4085,13 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     thumbsRecyclerView.setController(this);
     thumbsRecyclerView.addItemDecoration(new ThumbItemDecoration(thumbsAdapter));
     thumbsRecyclerView.setItemAnimator(null);
-    thumbsRecyclerView.setBackgroundColor(Theme.getColor(R.id.theme_color_transparentEditor));
+    thumbsRecyclerView.setBackgroundColor(Theme.getColor(ColorId.transparentEditor));
     thumbsRecyclerView.setLayoutManager(thumbsLayoutManager);
     thumbsRecyclerView.setAdapter(thumbsAdapter);
 
     thumbsRecyclerView.setAlpha(0f);
-    thumbsRecyclerView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(THUMBS_PADDING) * 2 + Screen.dp(THUMBS_HEIGHT), Gravity.BOTTOM));
+    thumbsRecyclerView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+    Views.setBottomMargin(thumbsRecyclerView, controlsMargin);
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && !Config.DISABLE_VIEWER_ELEVATION) {
       thumbsRecyclerView.setElevation(Screen.dp(3f));
     }
@@ -4135,7 +4405,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         ThumbView thumbView = ThumbViewHolder.getThumbView(child);
         MediaItem item = thumbView.getItem();
         ThumbItems items = thumbView.getItems();
-        if (items != null && thumbView.preview.isInsideReceiver(x, y)) {
+        if (items != null && thumbView.getPreviewReceiver().isInsideReceiver(x, y)) {
           if (controller.fastShowMediaItem(item, items, items.indexOf(item), true)) {
             ViewUtils.onClick(this);
             return;
@@ -4151,6 +4421,10 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     private ThumbItems items;
     private MediaItem item;
+
+    private Receiver getPreviewReceiver () {
+      return item != null && item.isAvatar() ? avatarReceiver : this.preview;
+    }
 
     public ThumbView (Context context, RecyclerView drawTarget) {
       super(context);
@@ -4286,7 +4560,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       float expandFactor = items != null ? items.getExpandFactor(item) * expandAllowance : 0f;
       int thumbWidth = thumbStartWidth + (int) ((float) (thumbEndWidth - thumbStartWidth) * expandFactor);
 
-      Receiver preview = item != null && item.isAvatar() ? avatarReceiver : this.preview;
+      Receiver preview = getPreviewReceiver();
       if (alpha != 1f) {
         preview.setPaintAlpha(alpha);
       }
@@ -4310,7 +4584,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     public static ThumbViewHolder create (Context context, MediaViewController controller) {
       ThumbView thumbView = new ThumbView(context, controller.thumbsRecyclerView);
-      thumbView.setLayoutParams(new RecyclerView.LayoutParams(controller.calculateThumbWidth(), ViewGroup.LayoutParams.MATCH_PARENT));
+      thumbView.setLayoutParams(new RecyclerView.LayoutParams(controller.calculateThumbWidth(), Screen.dp(THUMBS_PADDING) * 2 + Screen.dp(THUMBS_HEIGHT)));
       return new ThumbViewHolder(thumbView);
       /*thumbView.setLayoutParams(FrameLayout.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
       FrameLayout wrapView = new FrameLayout(context);
@@ -4649,6 +4923,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     popupView = new PopupLayout(context);
     popupView.setOverlayStatusBar(true);
+    popupView.setShowListener(this);
     if (mode == MODE_SECRET) {
       popupView.setIgnoreHorizontal();
     }
@@ -4663,6 +4938,10 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       @Override
       public void onActivityPause () {
         mediaView.onMediaActivityPause();
+        MediaItem item = stack.getCurrent();
+        if (item != null && item.isViewOnce()) {
+          item.viewContent(true);
+        }
       }
 
       @Override
@@ -4690,6 +4969,18 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     flingDetector = new FlingDetector(context, this);
     contentView = new FrameLayoutFix(context) {
       private int lastWidth, lastHeight;
+
+      @Override
+      protected void onAttachedToWindow () {
+        super.onAttachedToWindow();
+        setRootView(Views.findAncestor(this, RootFrameLayout.class, false));
+      }
+
+      @Override
+      protected void onDetachedFromWindow () {
+        super.onDetachedFromWindow();
+        setRootView(null);
+      }
 
       @Override
       protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
@@ -4849,35 +5140,8 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     mediaView = new MediaView(context);
     mediaView.setFactorChangeListener(this);
-    if (mode == MODE_GALLERY) {
-      mediaView.setDisableDoubleTapZoom(true);
-    }
     mediaView.prepare(mode != MODE_SECRET);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && (mode == MODE_MESSAGES || mode == MODE_SIMPLE) && !Config.DISABLE_VIEWER_ELEVATION) {
-      mediaView.setElevation(Screen.dp(2f));
-      mediaView.setOutlineProvider(new android.view.ViewOutlineProvider() {
-        private final int[] size = new int[2];
-        @Override
-        @TargetApi(Build.VERSION_CODES.LOLLIPOP)
-        public void getOutline (View view, android.graphics.Outline outline) {
-          if (getPipSize(size)) {
-            // size[0] /= view.getScaleX();
-            // size[1] /= view.getScaleY();
-
-            int width = view.getMeasuredWidth();
-            int height = view.getMeasuredHeight();
-
-            int left = width / 2 - size[0] / 2;
-            int right = width / 2 + size[0] / 2;
-            int top = height / 2 - size[1] / 2;
-            int bottom = height / 2 + size[1] / 2;
-            outline.setRect(left, top, right, bottom);
-          } else {
-            outline.setEmpty();
-          }
-        }
-      });
-    }
+    updateMediaView();
     mediaView.setCellCallback(this);
     mediaView.setBoundController(this);
     mediaView.initWithStack(stack);
@@ -4904,477 +5168,17 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         headerView.setElevation(Screen.dp(3f));
       }
       attachHeaderViewWithoutNavigation(headerView);
-      headerView.initWithSingleController(this, (SET_FULLSCREEN_ON_OPEN || canRunFullscreen()) && !Config.CUTOUT_ENABLED);
+      headerView.initWithSingleController(this, useEdgeToEdge() || ((SET_FULLSCREEN_ON_OPEN || canRunFullscreen()) && !Config.CUTOUT_ENABLED));
       headerView.getFilling().setShadowAlpha(0f);
       int leftMargin = Screen.dp(68f);
       int rightMargin = measureButtonsPadding();
-      Views.setMargins((FrameLayout.LayoutParams) headerCell.getLayoutParams(), Lang.rtl() ? rightMargin : leftMargin, headerView.needOffsets() ? HeaderView.getTopOffset() : 0, Lang.rtl() ? leftMargin : rightMargin, 0);
+      Views.setMargins((FrameLayout.LayoutParams) headerCell.getLayoutParams(), Lang.rtl() ? rightMargin : leftMargin, headerView.getEffectiveTopOffset(), Lang.rtl() ? leftMargin : rightMargin, 0);
       contentView.addView(headerView);
     }
 
     switch (mode) {
       case MODE_GALLERY: {
-        TdApi.Chat chat = getArgumentsStrict().receiverChatId != 0 ? tdlib.chat(getArgumentsStrict().receiverChatId) : null;
-
-        mediaView.setOffsets(0, 0, 0, 0, 0); // Screen.dp(56f)
-        editWrap = new FrameLayoutFix(context);
-        editWrap.setBackgroundColor(Theme.getColor(R.id.theme_color_transparentEditor));
-        editWrap.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(56f), Gravity.BOTTOM));
-
-        backButton = new EditButton(context);
-        backButton.setId(R.id.btn_back);
-        backButton.setIcon(R.drawable.baseline_arrow_back_24, false, false);
-        backButton.setOnClickListener(this);
-        backButton.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT));
-        editWrap.addView(backButton);
-
-        sendButton = new EditButton(context);
-        sendButton.setId(R.id.btn_send);
-        sendButton.setIcon(R.drawable.deproko_baseline_send_24, false, false);
-        sendButton.setOnClickListener(this);
-        sendButton.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.RIGHT));
-        sendButton.setBackgroundResource(R.drawable.bg_btn_header_light);
-        editWrap.addView(sendButton);
-
-        if (chat != null && chat.messageSenderId != null) {
-          senderSendIcon = new MediaLayout.SenderSendIcon(context, tdlib(), chat.id);
-          senderSendIcon.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(19), Screen.dp(19), Gravity.RIGHT | Gravity.BOTTOM, 0, 0, Screen.dp(11), Screen.dp(8)));
-          senderSendIcon.setBackgroundColorId(getHeaderColorId());
-          senderSendIcon.update(chat.messageSenderId);
-          editWrap.addView(senderSendIcon);
-        }
-
-        if (chat != null) {
-          tdlib.ui().createSimpleHapticMenu(this, chat.id, () -> currentActiveButton == 0, this::canDisableMarkdown, () -> true, hapticItems -> {
-            if (sendDelegate != null && sendDelegate.allowHideMedia()) {
-              hapticItems.add(0,
-                new HapticMenuHelper.MenuItem(R.id.btn_spoiler, Lang.getString(R.string.HideMedia), R.drawable.deproko_baseline_whatshot_24)
-                  .setIsCheckbox(true, sendDelegate.isHideMediaEnabled())
-                  .setOnClickListener(new HapticMenuHelper.OnItemClickListener() {
-                    private TooltipOverlayView.TooltipInfo hotTooltipInfo;
-
-                    @Override
-                    public boolean onHapticMenuItemClick (View view, View parentView, HapticMenuHelper.MenuItem item) {
-                      if (view.getId() == R.id.btn_spoiler) {
-                        if (item.isCheckboxSelected) {
-                          hotTooltipInfo = context().tooltipManager().builder(view)
-                            .icon(R.drawable.baseline_whatshot_24)
-                            .color(context().tooltipManager().overrideColorProvider(getForcedTheme()))
-                            .locate((targetView, outRect) -> {
-                              int centerX = outRect.left + Screen.dp(29f);
-                              int centerY = outRect.centerY();
-                              int radius = Screen.dp(11f);
-                              outRect.left = centerX - radius;
-                              outRect.right = centerX + radius;
-                              outRect.top = centerY - radius;
-                              outRect.bottom = centerY + radius;
-                            })
-                            .show(tdlib, R.string.MediaSpoilerHint)
-                            .hideDelayed();
-                        } else {
-                          if (hotTooltipInfo != null) {
-                            hotTooltipInfo.hideNow();
-                            hotTooltipInfo = null;
-                          }
-                        }
-                        sendDelegate.onHideMediaStateChanged(item.isCheckboxSelected);
-                        return true;
-                      }
-                      return false;
-                    }
-                  })
-              );
-            }
-            int sendAsFile = canSendAsFile();
-            if (sendAsFile != SEND_MODE_NONE) {
-              boolean onlyVideos = sendAsFile == SEND_MODE_VIDEOS;
-              int count = selectDelegate != null ? selectDelegate.getSelectedMediaCount() : 1;
-              hapticItems.add(new HapticMenuHelper.MenuItem(R.id.btn_sendAsFile, count <= 1 ? Lang.getString(onlyVideos ? R.string.SendOriginal : R.string.SendAsFile) : Lang.plural(onlyVideos ? R.string.SendXOriginals : R.string.SendAsXFiles, count), R.drawable.baseline_insert_drive_file_24).setOnClickListener((view, parentView, item) -> {
-                if (view.getId() == R.id.btn_sendAsFile) {
-                  send(sendButton, Td.newSendOptions(), false, true);
-                }
-                return true;
-              }).bindTutorialFlag(Settings.TUTORIAL_SEND_AS_FILE));
-            }
-            if (senderSendIcon != null) {
-              hapticItems.add(0, senderSendIcon.createHapticSenderItem(chat).setOnClickListener((view, parentView, item) -> {
-                openSetSenderPopup(chat);
-                return true;
-              }));
-            }
-          }, (sendOptions, disableMarkdown) -> {
-            send(sendButton, sendOptions, disableMarkdown, false);
-          }, getForcedTheme()).attachToView(sendButton);
-        }
-
-        editButtons = new LinearLayout(context);
-        editButtons.setOrientation(LinearLayout.HORIZONTAL);
-        editButtons.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER_HORIZONTAL));
-
-        cropOrStickerButton = new EditButton(context);
-        cropOrStickerButton.setOnClickListener(this);
-        cropOrStickerButton.setId(R.id.btn_crop);
-        // cropOrStickerButton.setSecondIcon(R.drawable.deproko_baseline_insert_sticker_24);
-        cropOrStickerButton.setIcon(R.drawable.baseline_crop_rotate_24, false, false);
-        cropOrStickerButton.setLayoutParams(new LinearLayout.LayoutParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT));
-        editButtons.addView(cropOrStickerButton);
-
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT);
-        params.leftMargin = Screen.dp(8f);
-        params.rightMargin = Screen.dp(8f);
-
-        paintOrMuteButton = new EditButton(context);
-        paintOrMuteButton.setOnClickListener(this);
-        paintOrMuteButton.setId(R.id.btn_paint);
-        paintOrMuteButton.setIcon(R.drawable.baseline_brush_24, false, false);
-        paintOrMuteButton.setLayoutParams(params);
-        editButtons.addView(paintOrMuteButton);
-
-        adjustOrTextButton = new EditButton(context);
-        adjustOrTextButton.setId(R.id.btn_adjust);
-        adjustOrTextButton.setOnClickListener(this);
-        adjustOrTextButton.setSecondIcon(R.drawable.deproko_baseline_text_add_24);
-        adjustOrTextButton.setIcon(R.drawable.baseline_tune_24, false, false);
-        adjustOrTextButton.setLayoutParams(new LinearLayout.LayoutParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT));
-        editButtons.addView(adjustOrTextButton);
-
-        if (chat != null && chat.type.getConstructor() == TdApi.ChatTypePrivate.CONSTRUCTOR && !tdlib.isBotChat(chat)) {
-          stopwatchButton = new StopwatchHeaderButton(context);
-          stopwatchButton.setBackgroundResource(R.drawable.bg_btn_header_light);
-          stopwatchButton.forceValue(null, true);
-          stopwatchButton.setId(R.id.menu_btn_stopwatch);
-          stopwatchButton.setOnClickListener(this);
-          stopwatchButton.setLayoutParams(new LinearLayout.LayoutParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT));
-          editButtons.addView(stopwatchButton);
-        }
-
-
-        /*if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-          editWrap.setOutlineProvider(new android.view.ViewOutlineProvider() {
-            @TargetApi(Build.VERSION_CODES.LOLLIPOP)
-            @Override
-            public void getOutline (View view, android.graphics.Outline outline) {
-              int centerX = view.getMeasuredWidth() / 2;
-              int centerY = view.getMeasuredHeight() / 2;
-              int radius = Screen.dp(16f);
-              outline.setRoundRect(centerX - radius, centerY - radius, centerX + radius, centerY + radius, radius);
-            }
-          });
-        }*/
-
-        editWrap.addView(editButtons);
-
-        updateIconStates(false);
-
-        contentView.addView(editWrap);
-
-        // Bottom wrap
-
-        FrameLayoutFix.LayoutParams fp = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.BOTTOM);
-        fp.bottomMargin = Screen.dp(56f);
-
-        bottomWrap = new FrameLayoutFix(context);
-        bottomWrap.setLayoutParams(fp);
-        checkBottomWrapY();
-
-        InputView captionView = new InputView(context, tdlib, this) {
-          @Override
-          protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
-            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-            if (inlineResultsView != null) {
-              inlineResultsView.updatePosition(true);
-            }
-          }
-
-          private boolean isDown;
-
-          @Override
-          public boolean onTouchEvent (MotionEvent event) {
-            boolean res = Views.onTouchEvent(this, event) && super.onTouchEvent(event);
-            switch (event.getAction()) {
-              case MotionEvent.ACTION_DOWN:
-                isDown = true;
-                break;
-              case MotionEvent.ACTION_CANCEL:
-              case MotionEvent.ACTION_UP:
-                isDown = false;
-                break;
-            }
-            return res;
-          }
-
-          @Override
-          protected void onScrollChanged (int horiz, int vert, int oldHoriz, int oldVert) {
-            super.onScrollChanged(horiz, vert, oldHoriz, oldVert);
-            contentView.requestDisallowInterceptTouchEvent(isDown);
-          }
-        };
-        if (chat != null) {
-          captionView.setNoPersonalizedLearning(Settings.instance().needsIncognitoMode(chat));
-        }
-        captionView.setHighlightColor(ColorUtils.alphaColor(0.2f, Theme.fillingTextSelectionColor()));
-        captionView.setHighlightColor(getForcedTheme().getColor(R.id.theme_color_textSelectionHighlight));
-        // addThemeHighlightColorListener(captionView, R.id.theme_color_textSelectionHighlight);
-        captionView.setMaxCodePointCount(tdlib.maxCaptionLength());
-        captionView.setIgnoreCustomStuff(false);
-        captionView.getInlineSearchContext().setIsCaption(true);
-        captionView.setInputListener(this);
-        captionView.setBackgroundColor(0);
-        captionView.addTextChangedListener(new TextWatcher() {
-          @Override
-          public void beforeTextChanged (CharSequence s, int start, int count, int after) {
-
-          }
-
-          @Override
-          public void onTextChanged (CharSequence s, int start, int before, int count) {
-            if (ignoreCaptionUpdate) {
-              ignoreCaptionUpdate = false;
-            } else {
-              stack.getCurrent().setCaption(captionView.getOutputText(false));
-            }
-          }
-
-          @Override
-          public void afterTextChanged (Editable s) {
-
-          }
-        });
-        captionView.setSpanChangeListener(v -> {
-          if (!ignoreCaptionUpdate) {
-            stack.getCurrent().setCaption(v.getOutputText(false));
-          }
-        });
-        captionView.setHint(Lang.getString(R.string.AddCaption));
-        captionView.setMaxLines(4);
-        captionView.setId(R.id.input);
-        captionView.setPadding(Screen.dp(55f), Screen.dp(15f), Screen.dp(55f), Screen.dp(14f));
-        captionView.setTranslationX(-(Screen.dp(55f) - Screen.dp(14f)));
-        captionView.setHintTextColor(0xbaffffff);
-        captionView.setTextColor(0xffffffff);
-        captionView.setTypeface(Fonts.getRobotoRegular());
-        captionView.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        captionView.setInputType(captionView.getInputType() | EditorInfo.TYPE_TEXT_FLAG_CAP_SENTENCES | EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE);
-        this.captionView = captionView;
-
-        captionDoneButton = new ImageView(context);
-        captionDoneButton.setId(R.id.btn_caption_done);
-        captionDoneButton.setOnClickListener(this);
-        captionDoneButton.setScaleType(ImageView.ScaleType.CENTER);
-        captionDoneButton.setImageResource(R.drawable.baseline_check_24);
-        captionDoneButton.setColorFilter(0xffffffff);
-        captionDoneButton.setAlpha(0f);
-        captionDoneButton.setEnabled(false);
-        captionDoneButton.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(55f), Screen.dp(52f), Gravity.RIGHT | Gravity.BOTTOM));
-
-        captionEmojiButton = new ImageView(context());
-        captionEmojiButton.setId(R.id.btn_caption_emoji);
-        captionEmojiButton.setOnClickListener(this);
-        captionEmojiButton.setScaleType(ImageView.ScaleType.CENTER);
-        captionEmojiButton.setImageResource(R.drawable.deproko_baseline_insert_emoticon_26);
-        captionEmojiButton.setColorFilter(0xffffffff);
-        captionEmojiButton.setAlpha(0f);
-        captionEmojiButton.setEnabled(false);
-        captionEmojiButton.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(55f), Screen.dp(52f), Gravity.LEFT | Gravity.BOTTOM));
-
-        captionWrapView = new LinearLayout(context) {
-          @Override
-          public boolean onInterceptTouchEvent (MotionEvent ev) {
-            return getVisibility() != View.VISIBLE || getAlpha() != 1f;
-          }
-
-          @Override
-          protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
-            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-            checkCaptionButtonsY();
-          }
-
-          @Override
-          protected void onLayout (boolean changed, int l, int t, int r, int b) {
-            super.onLayout(changed, l, t, r, b);
-            checkCaptionButtonsY();
-          }
-
-          @Override
-          public boolean onTouchEvent (MotionEvent event) {
-            return getVisibility() == View.VISIBLE && getAlpha() == 1f && super.onTouchEvent(event);
-          }
-        };
-        captionWrapView.setOrientation(LinearLayout.VERTICAL);
-        captionWrapView.setBackgroundColor(Theme.getColor(R.id.theme_color_transparentEditor));
-        captionWrapView.addView(captionView);
-        captionWrapView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
-
-        bottomWrap.addView(captionWrapView);
-
-        bottomWrap.addView(captionDoneButton);
-        bottomWrap.addView(captionEmojiButton);
-
-        videoSliderView = new VideoControlView(context);
-        videoSliderView.setSliderListener(this);
-        videoSliderView.setOnPlayPauseClick(v -> {
-          FileProgressComponent c = stack.getCurrent().getFileProgress();
-          if (c != null) {
-            c.performClick(v);
-          }
-        });
-        videoSliderView.setInnerAlpha(0f);
-        videoSliderView.setTranslationY(Screen.dp(56f));
-        videoSliderView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        videoSliderView.setSlideEnabled(stack.getCurrent().canSeekVideo());
-        bottomWrap.addView(videoSliderView);
-        if (needTrim()) {
-          videoSliderView.addTrim(new VideoTimelineView.TimelineDelegate() {
-            @Override
-            public boolean canTrimTimeline (VideoTimelineView v) {
-              return true; // TODO check if video is rendered
-            }
-
-            @Override
-            public void onVideoLoaded (VideoTimelineView v, double totalDuration, double width, double height, int frameRate, long bitrate) {
-              stack.getCurrent().getSourceGalleryFile().setVideoInformation((long) (totalDuration * 1_000_000.0), width, height, frameRate, bitrate);
-            }
-
-            private boolean needResume;
-
-            @Override
-            public void onTrimStartEnd (VideoTimelineView v, boolean isStarted) {
-              if (isStarted) {
-                if (needResume = isPlayingVideo) {
-                  pauseVideoIfPlaying();
-                }
-              } else if (needResume) {
-                stack.getCurrent().performClick(pipPlayPauseButton);
-              }
-            }
-
-            @Override
-            public void onSeekTo (VideoTimelineView v, float progress) {
-              mediaView.setSeekProgress(progress);
-            }
-
-            @Override
-            public void onTimelineTrimChanged (VideoTimelineView v, double totalDuration, double startTimeSeconds, double endTimeSeconds) {
-              MediaItem item = stack.getCurrent();
-              boolean changed;
-              if (startTimeSeconds == 0 && endTimeSeconds == totalDuration) {
-                changed = item.getSourceGalleryFile().setTrim(-1, -1, (long) (totalDuration * 1_000_000.0));
-              } else {
-                changed = item.getSourceGalleryFile().setTrim((long) (startTimeSeconds * 1_000_000.0), (long) (endTimeSeconds * 1_000_000.0), (long) (totalDuration * 1_000_000.0));
-              }
-              if (changed) {
-                boolean needFrameUpdate = item.checkTrim();
-                MediaCellView cellView = mediaView != null ? mediaView.findCellForItem(stack.getCurrent()) : null;
-                if (cellView != null) {
-                  cellView.checkTrim(needFrameUpdate);
-                  long timeNow = cellView.getTimeNow();
-                  long timeTotal = cellView.getTimeTotal();
-                  if (timeNow == -1 || timeTotal == -1) {
-                    timeNow = 0;
-                    timeTotal = (long) ((endTimeSeconds - startTimeSeconds) * 1000.0);
-                  }
-                  videoSliderView.resetDuration(timeTotal, timeNow, true, true);
-                } else {
-                  item.invalidateContent(item);
-                }
-              }
-            }
-          }, getForcedTheme());
-        }
-
-        contentView.addView(bottomWrap);
-
-        // Image overlay
-
-        overlayView = new View(context) {
-          @Override
-          public boolean onTouchEvent (MotionEvent event) {
-            if (event.getAction() == MotionEvent.ACTION_DOWN && showOtherMedias) {
-              setShowOtherMedias(false);
-              return true;
-            }
-            return false;
-          }
-        };
-        overlayView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        overlayView.setBackgroundColor(0xa0000000);
-        overlayView.setAlpha(0f);
-        contentView.addView(overlayView);
-
-        // Checks
-
-        int innerPadding = Screen.dp(9f);
-        int size = Screen.dp(20f) * 2 + Screen.dp(1f) * 2 + innerPadding * 2;
-        fp = FrameLayoutFix.newParams(size, size, Gravity.TOP | Gravity.RIGHT);
-        fp.rightMargin = Screen.dp(20f) - innerPadding;
-        fp.topMargin = Screen.dp(20f) - innerPadding + HeaderView.getTopOffset() / 2;
-
-        checkView = new CheckView(context);
-        checkView.setId(R.id.btn_check);
-        checkView.initWithMode(CheckView.MODE_GALLERY);
-        checkView.setPadding(innerPadding, innerPadding, 0, 0);
-        checkView.setLayoutParams(fp);
-        checkView.setOnClickListener(this);
-        checkView.forceSetChecked(isCurrentItemSelected());
-        contentView.addView(checkView);
-
-        fp = FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, Screen.dp(30f), Gravity.RIGHT);
-        fp.rightMargin = Screen.dp(78f);
-        fp.topMargin = Screen.dp(26f) + HeaderView.getTopOffset() / 2;
-
-        counterView = new CounterView(context);
-        counterView.setId(R.id.btn_counter);
-        counterView.setOnClickListener(this);
-        counterView.setLayoutParams(fp);
-
-        int count = getSelectedMediaCount();
-        counterView.initCounter(Math.max(count, 1), false);
-        forceCounterFactor(count == 0 ? 0f : 1f);
-        contentView.addView(counterView);
-
-        if (chat != null) {
-          fp = FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, Screen.getStatusBarHeight());
-          if (HeaderView.getTopOffset() > 0) {
-            fp.leftMargin = Screen.dp(8f);
-            fp.topMargin = HeaderView.getTopOffset() + Screen.dp(4f);
-          } else {
-            fp.leftMargin = Screen.dp(12f);
-            fp.topMargin = Screen.dp(4f);
-          }
-
-          receiverView = new LinearLayout(context);
-          receiverView.setOrientation(LinearLayout.HORIZONTAL);
-          receiverView.setAlpha(0f);
-          receiverView.setLayoutParams(fp);
-
-          LinearLayout.LayoutParams lp;
-
-          lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Screen.dp(17f));
-
-          ImageView imageView = new ImageView(context);
-          imageView.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-          imageView.setImageResource(R.drawable.baseline_arrow_upward_18);
-          imageView.setColorFilter(0xffffffff);
-          imageView.setAlpha((float) 0xaa / (float) 0xff);
-          imageView.setLayoutParams(lp);
-          receiverView.addView(imageView);
-
-          lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-          lp.leftMargin = Screen.dp(6f);
-
-          TextView textView = new NoScrollTextView(context);
-          textView.setTextColor(0xaaffffff);
-          textView.setSingleLine(true);
-          textView.setEllipsize(TextUtils.TruncateAt.END);
-          textView.setTypeface(Fonts.getRobotoMedium());
-          textView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13f);
-          textView.setText(tdlib.chatTitle(chat));
-          textView.setLayoutParams(lp);
-          receiverView.addView(textView);
-
-          contentView.addView(receiverView);
-        }
-
+        createViewGalleryMode(context, false);
         break;
       }
       case MODE_SIMPLE:
@@ -5465,6 +5269,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         contentView.addView(pipControlsWrap);
 
         fp = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.BOTTOM);
+        fp.bottomMargin = getBottomWrapMargin();
 
         bottomWrap = new FrameLayoutFix(context);
         bottomWrap.setLayoutParams(fp);
@@ -5480,23 +5285,30 @@ public class MediaViewController extends ViewController<MediaViewController.Args
           }
         };
         captionView.setPadding(Screen.dp(14f), Screen.dp(14f), Screen.dp(14f), Screen.dp(14f));
-        captionView.setTextColorId(R.id.theme_color_white);
+        captionView.setTextColorId(ColorId.white, true);
         captionView.setTextSize(Screen.dp(16f));
         captionView.setTextStyleProvider(TGMessage.getTextStyleProvider());
-        captionView.setLinkColorId(R.id.theme_color_caption_textLink, R.id.theme_color_caption_textLinkPressHighlight);
+        captionView.setLinkColorId(ColorId.caption_textLink, ColorId.caption_textLinkPressHighlight);
         captionView.setForcedTheme(getForcedTheme());
         captionView.setId(R.id.input);
         captionView.setLayoutParams(new RelativeLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         this.captionView = captionView;
 
-        captionWrapView = new LinearLayout(context);
-        captionWrapView.setOrientation(LinearLayout.VERTICAL);
-        captionWrapView.setBackgroundColor(Theme.getColor(R.id.theme_color_transparentEditor));
-        captionWrapView.setAlpha(0f);
-        captionWrapView.addView(captionView);
-        captionWrapView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
 
-        bottomWrap.addView(captionWrapView);
+        LinearLayout captionWrap = new LinearLayout(context);
+        captionWrap.setOrientation(LinearLayout.VERTICAL);
+        captionWrap.addView(captionView);
+        captionWrap.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        MaxHeightScrollView scrollView = new MaxHeightScrollView(context);
+        scrollView.setMaxHeight(Text.getLineHeight(TGMessage.getTextStyleProvider(), true) * 10 + Screen.dp(14f));
+        scrollView.addView(captionWrap);
+        scrollView.setAlpha(0f);
+        scrollView.setBackgroundColor(Theme.getColor(ColorId.transparentEditor));
+        scrollView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+        this.captionWrapView = scrollView;
+
+        bottomWrap.addView(this.captionWrapView);
 
         videoSliderView = new VideoControlView(context);
         videoSliderView.setOnPlayPauseClick(v -> {
@@ -5528,6 +5340,17 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       }
     }
 
+    bottomSpace = new FillingSpace(context);
+    bottomSpace.setThemedBackground(ColorId.transparentEditor, this);
+    bottomSpace.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, Gravity.BOTTOM));
+    bottomSpace.setAlpha(0f);
+    bottomSpace.setLayoutHeight(bottomInnerMargin, false);
+    bottomSpace.setVisibility(bottomInnerMargin > 0 ? View.VISIBLE : View.GONE);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && !Config.DISABLE_VIEWER_ELEVATION) {
+      bottomSpace.setElevation(Screen.dp(3f));
+    }
+    contentView.addView(bottomSpace);
+
     updateVideoState(false);
     updateCaption(false);
 
@@ -5542,13 +5365,44 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     return contentView;
   }
 
+  private static int getResId (@AvatarPickerMode int mode,
+                               int defaultResId,
+                               int profileResId, int groupResId, int channelResId, int botResId) {
+    switch (mode) {
+      case AvatarPickerMode.PROFILE:
+        return profileResId;
+      case AvatarPickerMode.CHANNEL:
+        return channelResId;
+      case AvatarPickerMode.GROUP:
+        return groupResId;
+      case AvatarPickerMode.BOT:
+        return botResId;
+    }
+    return defaultResId;
+  }
+
+  private boolean inProfilePhotoEditMode () {
+    return getArgumentsStrict().avatarPickerMode != AvatarPickerMode.NONE;
+  }
+
+  private boolean inSingleMediaMode () {
+    return hasFlag(Args.FLAG_DISALLOW_MULTI_SELECTION_MEDIA) || inProfilePhotoEditMode();
+  }
+
+  private boolean hasFlag (int flag) {
+    return getArgumentsStrict().hasFlag(flag);
+  }
+
   private int controlsMargin;
 
   private void setControlsMargin (int margin) {
     if (this.controlsMargin != margin) {
       this.controlsMargin = margin;
+      Views.setBottomMargin(thumbsRecyclerView, margin);
       Views.setBottomMargin(editWrap, margin);
-      Views.setBottomMargin(bottomWrap, getBottomWrapMargin());
+      updateBottomWrapMargin();
+      bottomSpace.setLayoutHeight(margin, false);
+      bottomSpace.setVisibility(margin > 0 && !emojiShown ? View.VISIBLE : View.GONE);
     }
   }
 
@@ -5558,34 +5412,72 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     return bottomInnerMargin;
   }
 
-  private int appliedBottomPadding;
+  private int topOffset;
 
-  private void setAppliedBottomPadding (int padding) {
-    if (this.appliedBottomPadding != padding) {
-      this.appliedBottomPadding = padding;
-      checkBottomWrapY();
+  private void setTopOffset (int topOffset) {
+    if (this.topOffset != topOffset) {
+      this.topOffset = topOffset;
+      Views.setPaddingTop(othersView, topOffset);
+      if (receiverView != null) {
+        FrameLayout.LayoutParams fp = (FrameLayout.LayoutParams) receiverView.getLayoutParams();
+        if (topOffset > 0) {
+          fp.leftMargin = Screen.dp(8f);
+          fp.topMargin = topOffset + Screen.dp(4f);
+        } else {
+          fp.leftMargin = Screen.dp(12f);
+          fp.topMargin = Screen.dp(4f);
+        }
+        receiverView.setLayoutParams(fp);
+      }
+
+      Views.setTopMargin(checkView, Screen.dp(20f) - Screen.dp(9f) + topOffset / 2);
+      Views.setTopMargin(counterView, Screen.dp(26f) + topOffset / 2);
+    }
+  }
+
+  private RootFrameLayout rootView;
+
+  private void setRootView (RootFrameLayout rootView) {
+    if (this.rootView != rootView) {
+      if (this.rootView != null) {
+        this.rootView.removeInsetsChangeListener(this);
+      }
+      this.rootView = rootView;
+      if (rootView != null) {
+        rootView.addInsetsChangeListener(this);
+        setTopOffset(rootView.getSystemInsets().top);
+      }
     }
   }
 
   @Override
-  public void dispatchInnerMargins (int left, int top, int right, int bottom) {
-    boolean changed = this.bottomInnerMargin != bottom;
-    this.bottomInnerMargin = bottom;
-    if (mode == MODE_GALLERY && isFromCamera) {
-      setControlsMargin(bottom > Screen.getNavigationBarHeight() ? 0 : bottom);
+  public void onInsetsChanged (RootFrameLayout viewGroup, Rect effectiveInsets, Rect effectiveInsetsWithoutIme, Rect systemInsets, Rect systemInsetsWithoutIme, boolean isUpdate) {
+    setTopOffset(systemInsets.top);
+  }
+
+  @Override
+  public void dispatchSystemInsets (View parentView, ViewGroup.MarginLayoutParams originalParams, Rect legacyInsets, Rect insets, Rect insetsWithoutIme, Rect systemInsets, Rect systemInsetsWithoutIme, boolean fitsSystemWindows) {
+    super.dispatchSystemInsets(parentView, originalParams, legacyInsets, insets, insetsWithoutIme, systemInsets, systemInsetsWithoutIme, fitsSystemWindows);
+    int bottomInset = insets.bottom;
+    boolean changed = this.bottomInnerMargin != bottomInset;
+    this.bottomInnerMargin = bottomInset;
+    if (useEdgeToEdge() || (mode == MODE_GALLERY && isFromCamera)) {
+      int controlsMargin = useEdgeToEdge() || bottomInset <= Screen.getNavigationBarHeight() ? bottomInset : 0;
+      setControlsMargin(controlsMargin);
       int bottomOffset = getSectionBottomOffset(SECTION_CROP);
       Views.setBottomMargin(cropTargetView, bottomOffset);
       if (cropAreaView != null) {
         cropAreaView.setOffsetBottom(bottomOffset);
+      }
+      checkBottomWrapY();
+      if (keyboardFrameLayout != null) {
+        keyboardFrameLayout.setExtraBottomInset(insets.bottom, insetsWithoutIme.bottom);
       }
     }
     if (mediaView != null) {
       if (changed) {
         int offsetBottom = getSectionBottomOffset(currentSection);
         mediaView.setNavigationalOffsets(0, 0, offsetBottom);
-        if (canRunFullscreen() && mode != MODE_SECRET) {
-          setAppliedBottomPadding(offsetBottom);
-        }
       }
       mediaView.layoutCells();
     }
@@ -5594,7 +5486,11 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   @Override
   public void destroy () {
     super.destroy();
-    if (!isMediaSent && getArguments() != null && getArgumentsStrict().deleteOnExit && stack != null) {
+    MediaItem current = stack.getCurrent();
+    if (current != null && current.isViewOnce()) {
+      current.viewContent(true);
+    }
+    if (!isMediaSent && getArguments() != null && hasFlag(Args.FLAG_DELETE_FILE_ON_EXIT) && stack != null) {
       for (int i = 0; i < stack.getCurrentSize(); i++) {
         MediaItem item = stack.get(i);
         if (item.getSourceGalleryFile().isFromCamera()) {
@@ -5617,6 +5513,12 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     context.removeHideNavigationView(this);
     if (captionView instanceof Destroyable) {
       ((Destroyable) captionView).performDestroy();
+    }
+    if (forceEditModeOld_captionView instanceof Destroyable) {
+      ((Destroyable) forceEditModeOld_captionView).performDestroy();
+    }
+    if (sendButton != null) {
+      sendButton.destroySlowModeCounterController();
     }
     subscribeToChatId(0);
   }
@@ -5711,15 +5613,15 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
       FrameLayoutFix.LayoutParams params;
 
-      params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(112f) + HeaderView.getTopOffset(), Gravity.TOP);
+      params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(112f) + topOffset, Gravity.TOP);
 
       othersView = new MediaOtherRecyclerView(context());
-      othersView.setPadding(Screen.dp(2f), HeaderView.getTopOffset(), Screen.dp(2f), 0);
+      othersView.setPadding(Screen.dp(2f), topOffset, Screen.dp(2f), 0);
       othersView.setLayoutManager(new LinearLayoutManager(context(), LinearLayoutManager.HORIZONTAL, true));
       othersView.setHasFixedSize(true);
       othersView.setItemAnimator(new CustomItemAnimator(AnimatorUtils.DECELERATE_INTERPOLATOR, 180l));
       othersView.setClipToPadding(false);
-      othersView.setBackgroundColor(Theme.getColor(R.id.theme_color_transparentEditor));
+      othersView.setBackgroundColor(Theme.getColor(ColorId.transparentEditor));
       othersView.setOverScrollMode(View.OVER_SCROLL_NEVER);
       othersView.addItemDecoration(new RecyclerView.ItemDecoration() {
         @Override
@@ -5832,7 +5734,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     if (mode != MODE_GALLERY) {
       return 0;
     }
-    int add = isFromCamera ? this.bottomInnerMargin : 0;
+    int add = useEdgeToEdge() || isFromCamera ? this.bottomInnerMargin : 0;
     switch (section) {
       case SECTION_CAPTION: {
         return 0; // Screen.dp(56f);
@@ -5986,7 +5888,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private void setEditBitmap (ImageFile file, Bitmap bitmap) {
     UI.post(() -> {
       if (currentTargetImageFile == file) {
-        setSourceBitmap(currentTargetImageFile, currentSourceFile, (Bitmap) bitmap);
+        setSourceBitmap(currentTargetImageFile, currentSourceFile, bitmap);
         editorView.reset(currentSourceFile, sourceBitmap.getWidth(), sourceBitmap.getHeight(), sourceBitmap, currentFiltersState, currentSourceFile.getPaintState());
         editorView.setEditorVisible(true);
       }
@@ -6129,7 +6031,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
           });
           filtersView.setLayoutManager(manager);
           filtersView.setAdapter(filtersAdapter);
-          filtersView.setBackgroundColor(Theme.getColor(R.id.theme_color_transparentEditor));
+          filtersView.setBackgroundColor(Theme.getColor(ColorId.transparentEditor));
           filtersView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, getSectionHeight(SECTION_FILTERS), Gravity.BOTTOM));
           filtersView.setTranslationY(getSectionHeight(SECTION_FILTERS));
           filtersView.setAlpha(0f);
@@ -6149,7 +6051,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
           int infoHeight = Screen.dp(18f);
 
           qualityControlWrap = new FrameLayoutFix(context());
-          qualityControlWrap.setBackgroundColor(Theme.getColor(R.id.theme_color_transparentEditor));
+          qualityControlWrap.setBackgroundColor(Theme.getColor(ColorId.transparentEditor));
           qualityControlWrap.setAlpha(0f);
           qualityControlWrap.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, totalHeight, Gravity.BOTTOM));
 
@@ -6187,19 +6089,19 @@ public class MediaViewController extends ViewController<MediaViewController.Args
           qualitySlider.setAnchorMode(SliderView.ANCHOR_MODE_START);
           qualitySlider.setAddPaddingLeft(Screen.dp(18f));
           qualitySlider.setAddPaddingRight(Screen.dp(18f));
-          qualitySlider.setColorId(R.id.theme_color_white, false);
+          qualitySlider.setColorId(ColorId.white, false);
           qualityControlWrap.addView(qualitySlider);
 
-          TextView textView = Views.newTextView(context(), 14f, Theme.getColor(R.id.theme_color_white), Gravity.LEFT, Views.TEXT_FLAG_SINGLE_LINE);
+          TextView textView = Views.newTextView(context(), 14f, Theme.getColor(ColorId.white), Gravity.LEFT, Views.TEXT_FLAG_SINGLE_LINE);
           textView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.LEFT | Gravity.TOP, Screen.dp(15f), Screen.dp(10f), Screen.dp(15f), 0));
-          textView.setText(R.string.QualityWorse);
+          textView.setText(Lang.getString(R.string.QualityWorse));
           qualityControlWrap.addView(textView);
-          textView = Views.newTextView(context(), 14f, Theme.getColor(R.id.theme_color_white), Gravity.RIGHT, Views.TEXT_FLAG_SINGLE_LINE);
+          textView = Views.newTextView(context(), 14f, Theme.getColor(ColorId.white), Gravity.RIGHT, Views.TEXT_FLAG_SINGLE_LINE);
           textView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.RIGHT | Gravity.TOP, Screen.dp(15f), Screen.dp(10f), Screen.dp(15f), 0));
-          textView.setText(R.string.QualityBetter);
+          textView.setText(Lang.getString(R.string.QualityBetter));
           qualityControlWrap.addView(textView);
 
-          qualityInfo = Views.newTextView(context(), 15f, Theme.getColor(R.id.theme_color_white), Gravity.CENTER, Views.TEXT_FLAG_SINGLE_LINE);
+          qualityInfo = Views.newTextView(context(), 15f, Theme.getColor(ColorId.white), Gravity.CENTER, Views.TEXT_FLAG_SINGLE_LINE);
           qualityInfo.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER_HORIZONTAL | Gravity.BOTTOM, 0, 0, 0, Screen.dp(8f)));
           qualityControlWrap.addView(qualityInfo);
         }
@@ -6209,13 +6111,14 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       }
       case SECTION_CROP: {
         if (cropControlsWrap == null) {
+          final boolean inProfilePhotoEditMode = inProfilePhotoEditMode();
           FrameLayoutFix.LayoutParams params;
 
           params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, getSectionHeight(SECTION_CROP), Gravity.BOTTOM);
 
           cropControlsWrap = new FrameLayoutFix(context());
           cropControlsWrap.setPadding(0, Screen.dp(CROP_PADDING_TOP), 0, 0);
-          cropControlsWrap.setBackgroundColor(Theme.getColor(R.id.theme_color_transparentEditor));
+          cropControlsWrap.setBackgroundColor(Theme.getColor(ColorId.transparentEditor));
           cropControlsWrap.setLayoutParams(params);
           cropControlsWrap.setAlpha(0f);
 
@@ -6231,10 +6134,19 @@ public class MediaViewController extends ViewController<MediaViewController.Args
           proportionButton.setOnClickListener(this);
           proportionButton.setIcon(R.drawable.baseline_image_aspect_ratio_24, false, false);
           proportionButton.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT));
-          cropControlsWrap.addView(proportionButton);
+          if (!inProfilePhotoEditMode) {
+            cropControlsWrap.addView(proportionButton);
+          }
+
+          mirrorButton = new EditButton(context());
+          mirrorButton.setId(R.id.btn_mirrorHorizontal);
+          mirrorButton.setOnClickListener(this);
+          mirrorButton.setIcon(R.drawable.dot_baseline_flip_horizontal_24, false, false);
+          mirrorButton.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT, inProfilePhotoEditMode ? 0 : Screen.dp(56), 0, 0, 0));
+          cropControlsWrap.addView(mirrorButton);
 
           params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-          params.leftMargin = Screen.dp(56f);
+          params.leftMargin = Screen.dp(inProfilePhotoEditMode ? 56f : (56f * 2));
           params.rightMargin = Screen.dp(56f);
 
           rotationControlView = new RotationControlView(context());
@@ -6270,7 +6182,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
           params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(12f) + padding * 2, Gravity.BOTTOM);
           View backgroundView = new View(context());
-          backgroundView.setBackgroundColor(Theme.getColor(R.id.theme_color_transparentEditor));
+          backgroundView.setBackgroundColor(Theme.getColor(ColorId.transparentEditor));
           backgroundView.setLayoutParams(params);
           paintControlsWrap.addView(backgroundView);
 
@@ -6280,12 +6192,9 @@ public class MediaViewController extends ViewController<MediaViewController.Args
           undoButton.setOnClickListener(this);
           undoButton.setOnLongClickListener(v -> {
             if (paintView != null && !paintView.getContentWrap().isBusy()) {
-              showOptions(null, new int[]{R.id.paint_clear, R.id.btn_cancel}, new String[]{Lang.getString(R.string.ClearDrawing), Lang.getString(R.string.Cancel)}, new int[] {OPTION_COLOR_RED, OPTION_COLOR_NORMAL}, new int[] {R.drawable.baseline_delete_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
-                switch (id) {
-                  case R.id.paint_clear: {
-                    undoAllPaintActions();
-                    break;
-                  }
+              showOptions(null, new int[]{R.id.paint_clear, R.id.btn_cancel}, new String[]{Lang.getString(R.string.ClearDrawing), Lang.getString(R.string.Cancel)}, new int[] {OptionColor.RED, OptionColor.NORMAL}, new int[] {R.drawable.baseline_delete_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
+                if (id == R.id.paint_clear) {
+                  undoAllPaintActions();
                 }
                 return true;
               }, getForcedTheme());
@@ -6392,6 +6301,15 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         break;
       }
     }
+    if (section != SECTION_CAPTION) {
+      MediaItem item = stack.getCurrent();
+      if (item != null && item.isVideo()) {
+        MediaCellView cellView = mediaView.findCellForItem(item);
+        if (cellView != null) {
+          cellView.stopPlaying();
+        }
+      }
+    }
   }
 
   private FiltersState getFilterState (boolean createIfEmpty) {
@@ -6413,7 +6331,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
   private static final int ANIMATOR_CROP = 18;
 
-  private BoolAnimator cropAnimator = new BoolAnimator(ANIMATOR_CROP, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 140l);
+  private final BoolAnimator cropAnimator = new BoolAnimator(ANIMATOR_CROP, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 140l);
 
   private int sectionAfterCrop = -1;
   private boolean sectionAfterCropReady;
@@ -6453,6 +6371,8 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       if (!inCrop) {
         prepareSectionToHide(SECTION_CROP);
         mediaView.setVisibility(View.VISIBLE);
+      } else if (inProfilePhotoEditMode()) {
+        setCropProportion(1, 1, false);
       }
       cropAnimator.setDuration(inCrop ? (currentCropState.isEmpty() ? CROP_OUT_DURATION : CROP_IN_DURATION) : 120l);
       cropAnimator.setValue(inCrop, true);
@@ -6472,8 +6392,18 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   }
 
   @Override
-  public boolean allowPreciseRotation () {
-    return (sectionChangeAnimator == null || !sectionChangeAnimator.isAnimating()) && inCrop && (cropAreaView.canRotate());
+  public boolean allowPreciseRotation (RotationControlView view) {
+    if ((sectionChangeAnimator == null || !sectionChangeAnimator.isAnimating()) && inCrop && (cropAreaView.canRotate())) {
+      MediaItem item = stack.getCurrent();
+      if (item.isVideoOrGif()) {
+        context().tooltipManager().builder(view).icon(R.drawable.baseline_warning_24)
+          .show(tdlib, R.string.MediaFeatureUnavailable)
+          .hideDelayed();
+        return false;
+      }
+      return true;
+    }
+    return false;
   }
 
   private static final int ANIMATOR_IMAGE_ROTATE = 19;
@@ -6583,6 +6513,51 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     cropTargetView.setDegreesAroundCenter(newValue);
   }
 
+  /**/
+
+  private static final int ANIMATOR_IMAGE_FLIP_HORIZONTALLY = 192;
+  private static final int ANIMATOR_IMAGE_FLIP_VERTICALLY = 193;
+  private final BoolAnimator imageFlipAnimatorHorizontally = new BoolAnimator(ANIMATOR_IMAGE_FLIP_HORIZONTALLY, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 250L);
+  private final BoolAnimator imageFlipAnimatorVertically = new BoolAnimator(ANIMATOR_IMAGE_FLIP_VERTICALLY, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 250L);
+
+  private boolean imageMirrorAnimate (int mirrorFlag, boolean needMirror, boolean animated) {
+    if (mirrorFlag == 0) {
+      return false;
+    }
+    int oldFlags = currentCropState.getFlags();
+    int newFlags = BitwiseUtils.setFlag(oldFlags, mirrorFlag, needMirror);
+    if (oldFlags == newFlags) {
+      return false;
+    }
+
+    final BoolAnimator animator = mirrorFlag == CropState.Flags.MIRROR_HORIZONTALLY ?
+      imageFlipAnimatorHorizontally : imageFlipAnimatorVertically;
+
+    if (!animator.isAnimating()) {
+      animator.setValue(!needMirror, false);
+    } else {
+      return false;
+    }
+    currentCropState.setFlags(newFlags);
+    animator.setValue(needMirror, animated);
+    return true;
+  }
+
+  private void setImageMirrorFactors () {
+    cropTargetView.setMirrorFactors(imageFlipAnimatorHorizontally.getFloatValue(), imageFlipAnimatorVertically.getFloatValue());
+  }
+
+  private void applyImageMirror () {
+    cropTargetView.setMirrorFactors(currentCropState.hasFlag(CropState.Flags.MIRROR_HORIZONTALLY) ? 1 : 0, currentCropState.hasFlag(CropState.Flags.MIRROR_VERTICALLY) ? 1 : 0);
+  }
+
+  private void cancelImageMirrorAnimations () {
+    imageFlipAnimatorHorizontally.cancel();
+    imageFlipAnimatorVertically.cancel();
+  }
+
+  /**/
+
   private CropState currentCropState;
   private CropState oldCropState;
 
@@ -6613,6 +6588,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       cropLayout.addView(cropTargetView);
 
       cropAreaView = new CropAreaView(context());
+      cropAreaView.setProfilePhotoMode(inProfilePhotoEditMode());
       cropAreaView.setRectChangeListener((left, top, right, bottom) -> {
         if (inCrop) {
           currentCropState.setRect(left, top, right, bottom);
@@ -6640,6 +6616,8 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     proportionButton.setActive(false, false);
     int cropRotation = MathUtils.modulo(this.cropRotation + (oldCropState != null ? oldCropState.getRotateBy() : 0), 360);
     cropTargetView.resetState(cropBitmap, cropRotation, currentCropState.getDegreesAroundCenter(), currentPaintState);
+    cropTargetView.setMirrorFactors(currentCropState.hasFlag(CropState.Flags.MIRROR_HORIZONTALLY) ? 1f : 0f, currentCropState.hasFlag(CropState.Flags.MIRROR_VERTICALLY) ? 1f : 0f);
+    mirrorButton.setActive(currentCropState.needMirror(), false);
     rotationControlView.reset(currentCropState.getDegreesAroundCenter(), false);
     cropAreaView.resetProportion();
     cropAreaView.resetState(U.getWidth(cropBitmap, cropRotation), U.getHeight(cropBitmap, cropRotation), currentCropState.getLeft(), currentCropState.getTop(), currentCropState.getRight(), currentCropState.getBottom(), false);
@@ -6651,8 +6629,8 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     }
     MediaItem item = stack.getCurrent();
     ImageReceiver receiver = mediaView.getBaseCell().getImageReceiver();
-    if (item.isVideo() || item.isGif() || receiver == null) {
-      UI.showToast(R.string.MediaTypeUnsupported, Toast.LENGTH_SHORT);
+    if ((!Config.MODERN_VIDEO_TRANSCODING_ENABLED && item.isVideoOrGif()) || receiver == null) {
+      UI.showToast(R.string.MediaFeatureUnavailable, Toast.LENGTH_SHORT);
       return false;
     }
 
@@ -6660,7 +6638,11 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     if (cropBitmap == null || cropBitmap.isRecycled()) {
       return false;
     }
-    cropRotation = item.getSourceGalleryFile().getRotation();
+    if (item.isVideoOrGif()) {
+      cropRotation = 0;
+    } else {
+      cropRotation = item.getSourceGalleryFile().getRotation();
+    }
     currentCropState = obtainCropState(true);
     currentPaintState = obtainPaintState(false);
     oldCropState = new CropState(currentCropState);
@@ -6668,16 +6650,34 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   }
 
   private boolean hasCropChanges () {
-    return !oldCropState.compare(currentCropState);
+    return !oldCropState.equalsTo(currentCropState);
   }
 
   private void resetCropState () {
     oldCropState = null;
   }
 
-  private void setCropProportion (int big, int small) {
-    cropAreaView.setFixedProportion(big, small);
-    proportionButton.setActive(big != 0 && small != 0, true);
+  private void setCropProportion (int big, int small, boolean animated) {
+    cropAreaView.setFixedProportion(big, small, animated);
+    proportionButton.setActive(big != 0 && small != 0, animated);
+  }
+
+  public int getMirrorHorizontallyFlag () {
+    MediaItem item = stack != null ? stack.getCurrent() : null;
+    if (item == null) {
+      return 0;
+    }
+    if (item.isVideoOrGif()) {
+      return U.isRotated(item.getCropRotateBy()) ? CropState.Flags.MIRROR_VERTICALLY : CropState.Flags.MIRROR_HORIZONTALLY;
+    } else {
+      return item.isRotated() ? CropState.Flags.MIRROR_VERTICALLY : CropState.Flags.MIRROR_HORIZONTALLY;
+    }
+  }
+
+  private void setMirrorHorizontally (boolean newValue) {
+    if (imageMirrorAnimate(getMirrorHorizontallyFlag(), newValue, true)) {
+      mirrorButton.setActive(newValue, true);
+    }
   }
 
   private float cropStartDegrees, cropEndDegrees;
@@ -6692,6 +6692,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     }
 
     cancelImageRotation();
+    cancelImageMirrorAnimations();
 
     cropStartDegrees = currentCropState.getDegreesAroundCenter();
     cropEndDegrees = zero || oldCropState == null ? 0 : oldCropState.getDegreesAroundCenter();
@@ -6705,6 +6706,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     proportionButton.setActive(false, true);
     resettingCrop = resetCropDegrees || rotatingByDegrees != 0;
     closeCropAfterReset = !zero;
+    setMirrorHorizontally(!zero && oldCropState != null && oldCropState.hasFlag(getMirrorHorizontallyFlag()));
     if (zero || oldCropState == null || oldCropState.isEmpty()) {
       if (cropAreaView.resetArea(resettingCrop, !zero)) {
         resettingCrop = true;
@@ -6751,7 +6753,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       return;
     }
 
-    if (!item.isVideo()) {
+    if (Config.MODERN_VIDEO_TRANSCODING_ENABLED || !item.isVideoOrGif()) {
       cropRotateByDegrees(-90);
       return;
     }
@@ -6788,8 +6790,8 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private boolean preparePaint () {
     MediaItem item = stack.getCurrent();
     ImageReceiver receiver = mediaView.getBaseCell().getImageReceiver();
-    if (item.isVideo() || item.isGif() || receiver == null) {
-      UI.showToast(R.string.MediaTypeUnsupported, Toast.LENGTH_SHORT);
+    if (item.isVideoOrGif() || receiver == null) {
+      UI.showToast(R.string.MediaFeatureUnavailable, Toast.LENGTH_SHORT);
       return false;
     }
 
@@ -6908,13 +6910,19 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private TooltipOverlayView.TooltipInfo brushToneHint;
 
   private void hidePaintEditor () {
-    paintView.setEditorVisible(false);
-    if (paintingItem.setPaintState(paintingItem.getPaintState(), false)) {
-      mediaView.getBaseReceiver().invalidate();
+    if (paintView != null) {
+      paintView.setEditorVisible(false);
     }
-    paintView.pause();
-    paintView.setScaleX(1f);
-    paintView.setScaleY(1f);
+    if (paintingItem != null && paintingItem.setPaintState(paintingItem.getPaintState(), false)) {
+      if (mediaView != null) {
+        mediaView.getBaseReceiver().invalidate();
+      }
+    }
+    if (paintView != null) {
+      paintView.pause();
+      paintView.setScaleX(1f);
+      paintView.setScaleY(1f);
+    }
     showDefaultBrushHint();
   }
 
@@ -6984,35 +6992,27 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     showOptions(null, ids.get(), strings.get(), null, icons.get(), (itemView, id) -> {
       final int paintMode;
-      switch (id) {
-        case R.id.paint_mode_path:
-          paintMode = PaintMode.PATH;
-          break;
-        case R.id.paint_mode_arrow:
-          paintMode = PaintMode.ARROW;
-          break;
-        case R.id.paint_mode_rect: {
-          paintMode = PaintMode.RECTANGLE;
-          break;
-        }
-        case R.id.paint_mode_zoom: {
-          paintMode = PaintMode.FREE_MOVEMENT;
-          break;
-        }
-        case R.id.paint_mode_fill: {
-          int color = colorPickerView.getPreview().getBrushColor();
-          SimpleDrawing drawing = new SimpleDrawing(SimpleDrawing.TYPE_FILLING);
-          drawing.setBrushParameters(color, 0);
-          currentPaintState.addSimpleDrawing(drawing);
-          currentPaintState.trackSimpleDrawingAction(drawing);
-          return true;
-        }
+      if (id == R.id.paint_mode_path) {
+        paintMode = PaintMode.PATH;
+      } else if (id == R.id.paint_mode_arrow) {
+        paintMode = PaintMode.ARROW;
+      } else if (id == R.id.paint_mode_rect) {
+        paintMode = PaintMode.RECTANGLE;
+      } else if (id == R.id.paint_mode_zoom) {
+        paintMode = PaintMode.FREE_MOVEMENT;
+      } else if (id == R.id.paint_mode_fill) {
+        int color = colorPickerView.getPreview().getBrushColor();
+        SimpleDrawing drawing = new SimpleDrawing(SimpleDrawing.TYPE_FILLING);
+        drawing.setBrushParameters(color, 0);
+        currentPaintState.addSimpleDrawing(drawing);
+        currentPaintState.trackSimpleDrawingAction(drawing);
+        return true;
         /*case R.id.paint_clear: {
           undoAllPaintActions();
           return true;
         }*/
-        default:
-          return true;
+      } else {
+        return true;
       }
       setPaintType(paintMode, true);
       return true;
@@ -7190,12 +7190,9 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private static final int MODE_CANCEL = 2;
 
   private void showYesNo () {
-    showOptions(Lang.getString(R.string.DiscardCurrentChanges), new int[]{R.id.btn_discard, R.id.btn_cancel}, new String[]{Lang.getString(R.string.Discard), Lang.getString(R.string.Cancel)}, new int[]{OPTION_COLOR_RED, OPTION_COLOR_NORMAL}, new int[]{R.drawable.baseline_delete_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
-      switch (id) {
-        case R.id.btn_discard: {
-          changeSection(SECTION_CAPTION, MODE_CANCEL);
-          break;
-        }
+    showOptions(Lang.getString(R.string.DiscardCurrentChanges), new int[]{R.id.btn_discard, R.id.btn_cancel}, new String[]{Lang.getString(R.string.Discard), Lang.getString(R.string.Cancel)}, new int[]{OptionColor.RED, OptionColor.NORMAL}, new int[]{R.drawable.baseline_delete_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
+      if (id == R.id.btn_discard) {
+        changeSection(SECTION_CAPTION, MODE_CANCEL);
       }
       return true;
     }, getForcedTheme());
@@ -7247,7 +7244,15 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         if (!currentCropState.isEmpty()) {
           selectMediaIfItsNot();
         }
-        stack.getCurrent().setCropState(currentCropState);
+        MediaItem item = stack.getCurrent();
+        item.setCropState(currentCropState);
+
+        MediaCellView cellView = mediaView != null ? mediaView.findCellForItem(item) : null;
+        if (cellView != null) {
+          cellView.checkCrop();
+          mediaView.requestLayout();
+        }
+
         break;
       }
       case SECTION_PAINT: {
@@ -7281,7 +7286,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       }
       case SECTION_CROP: {
         if (oldCropState != null && !oldCropState.isEmpty()) {
-          if (!oldCropState.compare(currentCropState)) {
+          if (!oldCropState.equalsTo(currentCropState)) {
             resetCrop(false);
           }
           stack.getCurrent().setCropState(oldCropState);
@@ -7324,6 +7329,10 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   }
 
   private void changeSection (int section, int mode) {
+    changeSection(section, mode, false);
+  }
+
+  private void changeSection (int section, int mode, boolean useFastAnimation) {
     if (currentSection == section || !allowDataChanges()) {
       return;
     }
@@ -7363,7 +7372,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       }
     }
 
-    changeSectionImpl(section);
+    changeSectionImpl(section, useFastAnimation);
   }
 
   private void applyFiltersAsync (final int futureSection) {
@@ -7381,6 +7390,14 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   }
 
   private void changeSectionImpl (int section) {
+    changeSectionImpl(section, false);
+  }
+
+  private void changeSectionImpl (int section, boolean useFastAnimation) {
+    changeSectionImpl(section, useFastAnimation ? 220L : 380L);
+  }
+
+  private void changeSectionImpl (int section, long duration) {
     if (scheduleSectionChange(currentSection, section)) {
       return;
     }
@@ -7408,16 +7425,26 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     updateIconStates(true);
 
     if (sectionChangeAnimator == null) {
-      sectionChangeAnimator = new FactorAnimator(ANIMATOR_SECTION, this, AnimatorUtils.LINEAR_INTERPOLATOR, 380l);
+      sectionChangeAnimator = new FactorAnimator(ANIMATOR_SECTION, this, AnimatorUtils.LINEAR_INTERPOLATOR, duration);
     } else {
       sectionChangeAnimator.forceFactor(0f);
+      sectionChangeAnimator.setDuration(duration);
     }
-    sectionChangeAnimator.animateTo(1f);
+
+    if (duration > 0) {
+      sectionChangeAnimator.animateTo(1f);
+    } else {
+      sectionChangeAnimator.forceFactor(1f);
+    }
   }
 
   private int prevActiveButtonId;
 
   private void fillIcons (int section) {
+    fillIcons(section, true);
+  }
+
+  private void fillIcons (int section, boolean animated) {
     int activeButtonId = 0;
     boolean isSticker = false;
     switch (section) {
@@ -7445,27 +7472,38 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       // cropOrStickerButton.setIcon(R.drawable.ic_addsticker, true, false);
     } else {
       if (stack.getCurrent().isVideo()) {
-        adjustOrTextButton.setIcon(R.drawable.baseline_settings_24, true, section == SECTION_QUALITY);
-        cropOrStickerButton.setIcon(R.drawable.baseline_rotate_90_degrees_ccw_24, true, false);
+        adjustOrTextButton.setIcon(R.drawable.baseline_settings_24, animated, section == SECTION_QUALITY);
+        if (!Config.MODERN_VIDEO_TRANSCODING_ENABLED) {
+          cropOrStickerButton.setIcon(R.drawable.baseline_rotate_90_degrees_ccw_24, animated, false);
+        }
       } else {
-        adjustOrTextButton.setIcon(R.drawable.baseline_tune_24, true, section == SECTION_FILTERS);
-        cropOrStickerButton.setIcon(R.drawable.baseline_crop_rotate_24, true, section == SECTION_CROP);
+        adjustOrTextButton.setIcon(R.drawable.baseline_tune_24, animated, section == SECTION_FILTERS);
+        if (!Config.MODERN_VIDEO_TRANSCODING_ENABLED) {
+          cropOrStickerButton.setIcon(R.drawable.baseline_crop_rotate_24, animated, section == SECTION_CROP);
+        }
       }
     }
 
     if (prevActiveButtonId != 0 && activeButtonId != prevActiveButtonId) {
-      setButtonActive(prevActiveButtonId, false);
+      setButtonActive(prevActiveButtonId, false, animated);
     }
 
     prevActiveButtonId = activeButtonId;
 
     if (activeButtonId != 0) {
-      backButton.setIcon(R.drawable.baseline_close_24, true, false);
-      sendButton.setIcon(R.drawable.baseline_check_24, true, false);
+      backButton.setIcon(R.drawable.baseline_close_24, animated, false);
+      sendButton.setIcon(R.drawable.baseline_check_24, animated, false);
+      sendButton.setSlowModeVisibility(false, animated);
     } else {
-      backButton.setIcon(R.drawable.baseline_arrow_back_24, true, false);
-      sendButton.setIcon(R.drawable.deproko_baseline_send_24, true, false);
+      backButton.setIcon(R.drawable.baseline_arrow_back_24, animated, false);
+      setDefaultSendButtonIcon(animated);
     }
+  }
+
+  private void setDefaultSendButtonIcon (boolean animated) {
+    final int forced = getArgumentsStrict().sendButtonIcon;
+    sendButton.setIcon(forced != 0 ? forced : R.drawable.deproko_baseline_send_24, animated, false);
+    sendButton.setSlowModeVisibility(true, animated);
   }
 
   private boolean hasAppliedFilters () {
@@ -7489,8 +7527,23 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     cropOrStickerButton.setEdited(allowEditState && hasAppliedCrop(), animated);
     paintOrMuteButton.setEdited(hasAppliedPaints(), animated);
     if (stopwatchButton != null) {
-      int ttl = stack.getCurrent().getTTL();
-      String value = ttl != 0 ? TdlibUi.getDuration(ttl, TimeUnit.SECONDS, false) : null;
+      TdApi.MessageSelfDestructType selfDestructType = stack.getCurrent().getSelfDestructType();
+      String value;
+      if (selfDestructType != null) {
+        switch (selfDestructType.getConstructor()) {
+          case TdApi.MessageSelfDestructTypeImmediately.CONSTRUCTOR:
+            value = TdlibUi.getDuration(0, TimeUnit.SECONDS, false); // FIXME
+            break;
+          case TdApi.MessageSelfDestructTypeTimer.CONSTRUCTOR:
+            value = TdlibUi.getDuration(((TdApi.MessageSelfDestructTypeTimer) selfDestructType).selfDestructTime, TimeUnit.SECONDS, false);
+            break;
+          default:
+            Td.assertMessageSelfDestructType_58882d8c();
+            throw Td.unsupported(selfDestructType);
+        }
+      } else {
+        value = null;
+      }
       if (animated) {
         stopwatchButton.setValue(value, false);
       } else {
@@ -7500,19 +7553,16 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   }
 
   private void setButtonActive (int id, boolean isActive) {
-    switch (id) {
-      case R.id.btn_crop: {
-        cropOrStickerButton.setActive(isActive, true);
-        break;
-      }
-      case R.id.btn_paint: {
-        paintOrMuteButton.setActive(isActive, true);
-        break;
-      }
-      case R.id.btn_adjust: {
-        adjustOrTextButton.setActive(isActive, true);
-        break;
-      }
+    setButtonActive(id, isActive, true);
+  }
+
+  private void setButtonActive (int id, boolean isActive, boolean animated) {
+    if (id == R.id.btn_crop) {
+      cropOrStickerButton.setActive(isActive, animated);
+    } else if (id == R.id.btn_paint) {
+      paintOrMuteButton.setActive(isActive, animated);
+    } else if (id == R.id.btn_adjust) {
+      adjustOrTextButton.setActive(isActive, animated);
     }
   }
 
@@ -7591,6 +7641,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
         if (videoSliderView != null) {
           videoSliderView.setAlpha(factor);
         }
+        updateBottomSpaceAlpha();
 
         // setTranslationY(captionView.getMeasuredHeight() * (1f - factor));
         break;
@@ -7769,9 +7820,13 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   }
 
   private void openCrop () {
+    openCrop(false);
+  }
+
+  private void openCrop (boolean useFastAnimation) {
     if (Config.CROP_ENABLED) {
       if (currentSection != SECTION_CROP) {
-        changeSection(SECTION_CROP, MODE_OK);
+        changeSection(SECTION_CROP, MODE_OK, useFastAnimation);
       }
     } else {
       // UI.showToast(R.string.FeatureDisabled, Toast.LENGTH_SHORT);
@@ -7858,237 +7913,238 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       return;
     }
 
-    switch (v.getId()) {
-      case R.id.menu_btn_stopwatch: {
-        showTTLOptions();
-        break;
+    final int viewId = v.getId();
+    if (viewId == R.id.menu_btn_stopwatch) {
+      showTTLOptions();
+    } else if (viewId == R.id.btn_inlineOpen) {
+      backFromPictureInPicture();
+    } else if (viewId == R.id.btn_caption_done) {
+      onCaptionDone();
+    } else if (viewId == R.id.btn_caption_emoji) {
+      processEmojiClick();
+    } else if (viewId == R.id.btn_inlineClose) {
+      closePictureInPicture();
+    } else if (viewId == R.id.btn_inlinePlayPause) {
+      stack.getCurrent().performClick(v);
+    } else if (viewId == R.id.btn_check) {
+      toggleCheck();
+    } else if (viewId == R.id.btn_counter) {
+      if (selectDelegate != null && (!selectDelegate.isMediaItemSelected(stack.getCurrentIndex(), stack.getCurrent()) || selectDelegate.getSelectedMediaCount() > 1)) {
+        setShowOtherMedias(true);
       }
-      case R.id.btn_inlineOpen: {
-        backFromPictureInPicture();
-        break;
+    } else if (viewId == R.id.btn_removePhoto) {
+      ImageFile imageFile = ((MediaOtherView) v.getParent()).getImage();
+      unselectImage(imageFile);
+    } else if (viewId == R.id.btn_back) {
+      if (currentSection != SECTION_CAPTION) {
+        goBackToCaption(false);
+      } else if (inForceEditMode()) {
+        closeForceEditMode();
+      } else {
+        close();
       }
-      case R.id.btn_caption_done: {
-        onCaptionDone();
-        break;
+    } else if (viewId == R.id.btn_send) {
+      if (currentSection != SECTION_CAPTION) {
+        changeSection(SECTION_CAPTION, MODE_OK);
+      } else if (inputView != null && !tdlib.isSelfChat(getOutputChatId()) && !tdlib.hasPremium() && inputView.hasOnlyPremiumFeatures()) {
+        context().tooltipManager().builder(sendButton).show(tdlib, Strings.buildMarkdown(this, Lang.getString(R.string.MessageContainsPremiumFeatures), null)).hideDelayed();
+      } else if (needShowCropSectionInsteadSend()) {
+        changeSection(SECTION_CROP, MODE_OK);
+      } else {
+        send(v, Td.newSendOptions(), false, false);
       }
-      case R.id.btn_caption_emoji: {
-        processEmojiClick();
-        break;
-      }
-      case R.id.btn_inlineClose: {
-        closePictureInPicture();
-        break;
-      }
-      case R.id.btn_inlinePlayPause: {
-        stack.getCurrent().performClick(v);
-        break;
-      }
-      case R.id.btn_check: {
-        toggleCheck();
-        break;
-      }
-      case R.id.btn_counter: {
-        if (selectDelegate != null && (!selectDelegate.isMediaItemSelected(stack.getCurrentIndex(), stack.getCurrent()) || selectDelegate.getSelectedMediaCount() > 1)) {
-          setShowOtherMedias(true);
-        }
-        break;
-      }
-      case R.id.btn_removePhoto: {
-        ImageFile imageFile = ((MediaOtherView) v.getParent()).getImage();
-        unselectImage(imageFile);
-        break;
-      }
-      case R.id.btn_back: {
-        if (currentSection != SECTION_CAPTION) {
-          goBackToCaption(false);
+    } else if (viewId == R.id.btn_crop) {
+      if (!Config.MASKS_TEXTS_AVAILABLE || currentSection != SECTION_PAINT) {
+        if (Config.MODERN_VIDEO_TRANSCODING_ENABLED || !stack.getCurrent().isVideoOrGif()) {
+          openCrop();
         } else {
-          close();
+          rotateBy90Degrees();
         }
-        break;
+      } else {
+        openMasks();
       }
-      case R.id.btn_send: {
-        if (currentSection != SECTION_CAPTION) {
-          changeSection(SECTION_CAPTION, MODE_OK);
-        } else {
-          send(v, Td.newSendOptions(), false, false);
+    } else if (viewId == R.id.btn_rotate) {
+      rotateBy90Degrees();
+    } else if (viewId == R.id.btn_mirrorHorizontal) {
+      setMirrorHorizontally(!currentCropState.hasFlag(getMirrorHorizontallyFlag()));
+    } else if (viewId == R.id.btn_proportion) {
+      if (allowDataChanges() && currentSection == SECTION_CROP && !inProfilePhotoEditMode()) {
+        IntList ids = new IntList(PROPORTION_MODES.length + 2);
+        StringList strings = new StringList(PROPORTION_MODES.length + 2);
+        IntList icons = new IntList(PROPORTION_MODES.length + 2);
+        IntList colors = new IntList(PROPORTION_MODES.length + 2);
+
+        MediaItem item = stack.getCurrent();
+
+        final int width = item.getWidth();
+        final int height = item.getHeight();
+        // final boolean flipSides = Utils.isVertical(width, height, currentCropState.getRotateBy());
+
+        float proportion = 0f;
+
+        if (proportionButton.isActive()) {
+          proportion = cropAreaView.getFixedProportion();
+
+          icons.append(R.drawable.baseline_crop_free_24);
+          ids.append(R.id.btn_proportion_free);
+          strings.append(R.string.CropFree);
+          colors.append(OptionColor.NORMAL);
         }
-        break;
-      }
-      case R.id.btn_crop: {
-        if (!Config.MASKS_TEXTS_AVAILABLE || currentSection != SECTION_PAINT) {
-          if (stack.getCurrent().isVideo()) {
-            rotateBy90Degrees();
+
+        float originalProportion = cropAreaView.getOriginalProportion();
+        int[] proportionExists = null;
+        for (int[] proportionMode : PROPORTION_MODES) {
+          if ((float) proportionMode[0] / (float) proportionMode[1] == originalProportion) {
+            proportionExists = proportionMode;
+            break;
+          }
+        }
+        if (originalProportion != 0f) {
+          icons.append(R.drawable.baseline_crop_original_24);
+          ids.append(R.id.btn_proportion_original);
+          if (proportionExists != null) {
+            if (proportionExists[2] == R.id.btn_proportion_square) {
+              strings.append(Lang.getString(R.string.CropOriginal) + " (" + Lang.getString(R.string.CropSquare) + ")");
+            } else {
+              strings.append(Lang.getString(R.string.CropOriginal) + " (" + proportionExists[0] + ":" + proportionExists[1] + ")");
+            }
           } else {
-            openCrop();
+            strings.append(R.string.CropOriginal);
           }
-        } else {
-          openMasks();
+          colors.append(originalProportion == proportion ? OptionColor.BLUE : OptionColor.NORMAL);
         }
-        break;
-      }
-      case R.id.btn_rotate: {
-        rotateBy90Degrees();
-        break;
-      }
-      case R.id.btn_proportion: {
-        if (allowDataChanges() && currentSection == SECTION_CROP) {
-          IntList ids = new IntList(PROPORTION_MODES.length + 2);
-          StringList strings = new StringList(PROPORTION_MODES.length + 2);
-          IntList icons = new IntList(PROPORTION_MODES.length + 2);
-          IntList colors = new IntList(PROPORTION_MODES.length + 2);
 
-          MediaItem item = stack.getCurrent();
+        if ((float) width / (float) height != 1f) {
+          // TODO ids.append(R.id.btn_proportion_flipSides);
+        }
 
-          final int width = item.getWidth();
-          final int height = item.getHeight();
-          // final boolean flipSides = Utils.isVertical(width, height, currentCropState.getRotateBy());
-
-          float proportion = 0f;
-
-          if (proportionButton.isActive()) {
-            proportion = cropAreaView.getFixedProportion();
-
-            icons.append(R.drawable.baseline_crop_free_24);
-            ids.append(R.id.btn_proportion_free);
-            strings.append(R.string.CropFree);
-            colors.append(OPTION_COLOR_NORMAL);
+        for (int[] proportionMode : PROPORTION_MODES) {
+          int id = proportionMode[2];
+          int verb1 = proportionMode[0];
+          int verb2 = proportionMode[1];
+          int verb3 = proportionMode[3];
+          if (proportionExists != null && (float) verb1 / (float) verb2 == originalProportion) {
+            continue;
           }
-
-          float originalProportion = cropAreaView.getOriginalProportion();
-          int[] proportionExists = null;
-          for (int[] proportionMode : PROPORTION_MODES) {
-            if ((float) proportionMode[0] / (float) proportionMode[1] == originalProportion) {
-              proportionExists = proportionMode;
-              break;
-            }
+          ids.append(id);
+          if (id == R.id.btn_proportion_square) {
+            strings.append(R.string.CropSquare);
+          } else {
+            strings.append(verb1 + ":" + verb2);
           }
-          if (originalProportion != 0f) {
-            icons.append(R.drawable.baseline_crop_original_24);
-            ids.append(R.id.btn_proportion_original);
-            if (proportionExists != null) {
-              if (proportionExists[2] == R.id.btn_proportion_square) {
-                strings.append(Lang.getString(R.string.CropOriginal) + " (" + Lang.getString(R.string.CropSquare) + ")");
-              } else {
-                strings.append(Lang.getString(R.string.CropOriginal) + " (" + proportionExists[0] + ":" + proportionExists[1] + ")");
-              }
-            } else {
-              strings.append(R.string.CropOriginal);
-            }
-            colors.append(originalProportion == proportion ? OPTION_COLOR_BLUE : OPTION_COLOR_NORMAL);
-          }
+          icons.append(verb3);
+          colors.append((float) verb1 / (float) verb2 == proportion ? OptionColor.BLUE : OptionColor.NORMAL);
+        }
 
-          if ((float) width / (float) height != 1f) {
-            // TODO ids.append(R.id.btn_proportion_flipSides);
-          }
+        if (!currentCropState.isEmpty()) {
+          colors.append(OptionColor.RED);
+          ids.append(R.id.btn_crop_reset);
+          strings.append(R.string.Reset);
+          icons.append(R.drawable.baseline_cancel_24);
+        }
 
-          for (int[] proportionMode : PROPORTION_MODES) {
-            int id = proportionMode[2];
-            int verb1 = proportionMode[0];
-            int verb2 = proportionMode[1];
-            int verb3 = proportionMode[3];
-            if (proportionExists != null && (float) verb1 / (float) verb2 == originalProportion) {
-              continue;
-            }
-            ids.append(id);
-            if (id == R.id.btn_proportion_square) {
-              strings.append(R.string.CropSquare);
-            } else {
-              strings.append(verb1 + ":" + verb2);
-            }
-            icons.append(verb3);
-            colors.append((float) verb1 / (float) verb2 == proportion ? OPTION_COLOR_BLUE : OPTION_COLOR_NORMAL);
-          }
-
-          if (!currentCropState.isEmpty()) {
-            colors.append(OPTION_COLOR_RED);
-            ids.append(R.id.btn_crop_reset);
-            strings.append(R.string.Reset);
-            icons.append(R.drawable.baseline_cancel_24);
-          }
-
-          showOptions(null, ids.get(), strings.get(), colors.get(), icons.get(), (itemView, id) -> {
-            if (id == R.id.btn_crop_reset) {
-              resetCrop(true);
-            } else if (id == R.id.btn_proportion_free) {
-              setCropProportion(0, 0);
-            } else if (id == R.id.btn_proportion_original) {
-              int targetWidth = cropAreaView.getTargetWidth();
-              int targetHeight = cropAreaView.getTargetHeight();
-              setCropProportion(Math.max(targetWidth, targetHeight), Math.min(targetWidth, targetHeight));
-            } else {
-              int[] mode = null;
-              for (int[] proportionMode : PROPORTION_MODES) {
-                if (proportionMode[2] == id) {
-                  mode = proportionMode;
-                  break;
-                }
-              }
-              if (mode != null) {
-                setCropProportion(mode[0], mode[1]);
+        showOptions(null, ids.get(), strings.get(), colors.get(), icons.get(), (itemView, id) -> {
+          if (id == R.id.btn_crop_reset) {
+            resetCrop(true);
+          } else if (id == R.id.btn_proportion_free) {
+            setCropProportion(0, 0, true);
+          } else if (id == R.id.btn_proportion_original) {
+            int targetWidth = cropAreaView.getTargetWidth();
+            int targetHeight = cropAreaView.getTargetHeight();
+            setCropProportion(Math.max(targetWidth, targetHeight), Math.min(targetWidth, targetHeight), true);
+          } else {
+            int[] mode = null;
+            for (int[] proportionMode : PROPORTION_MODES) {
+              if (proportionMode[2] == id) {
+                mode = proportionMode;
+                break;
               }
             }
-            return true;
-          }, getForcedTheme());
-        }
-        break;
-      }
-      case R.id.btn_adjust: {
-        if (!Config.MASKS_TEXTS_AVAILABLE || currentSection != SECTION_PAINT) {
-          MediaItem item = stack.getCurrent();
-          switch (item.getType()) {
-            case MediaItem.TYPE_GALLERY_PHOTO: {
-              openFilters();
-              break;
-            }
-            case MediaItem.TYPE_GALLERY_VIDEO: {
-              openQuality();
-              break;
-            }
-            case MediaItem.TYPE_GALLERY_GIF: {
-              // TODO ?
-              break;
+            if (mode != null) {
+              setCropProportion(mode[0], mode[1], true);
             }
           }
-        } else {
-          addText();
-        }
-        break;
+          return true;
+        }, getForcedTheme());
       }
-      case R.id.btn_paint: {
-        switch (stack.getCurrent().getType()) {
+    } else if (viewId == R.id.btn_adjust) {
+      if (!Config.MASKS_TEXTS_AVAILABLE || currentSection != SECTION_PAINT) {
+        MediaItem item = stack.getCurrent();
+        switch (item.getType()) {
           case MediaItem.TYPE_GALLERY_PHOTO: {
-            openPaintCanvas();
+            openFilters();
             break;
           }
           case MediaItem.TYPE_GALLERY_VIDEO: {
-            toggleMute();
+            openQuality();
+            break;
+          }
+          case MediaItem.TYPE_GALLERY_GIF: {
+            // TODO ?
             break;
           }
         }
-        break;
+      } else {
+        addText();
       }
-
-      case R.id.btn_paintType: {
-        showPaintTypes();
-        break;
+    } else if (viewId == R.id.btn_paint) {
+      switch (stack.getCurrent().getType()) {
+        case MediaItem.TYPE_GALLERY_PHOTO: {
+          openPaintCanvas();
+          break;
+        }
+        case MediaItem.TYPE_GALLERY_VIDEO: {
+          toggleMute();
+          break;
+        }
       }
-      case R.id.paint_undo: {
-        undoLastPaintAction();
-        break;
-      }
+    } else if (viewId == R.id.btn_paintType) {
+      showPaintTypes();
+    } else if (viewId == R.id.paint_undo) {
+      undoLastPaintAction();
     }
+  }
+
+  private boolean needShowCropSectionInsteadSend () {
+    if (!inProfilePhotoEditMode()) {
+      return false;
+    }
+
+    if (cropAreaView == null) {
+      return true;
+    }
+
+    final CropState cropState = obtainCropState(true);
+
+    double targetWidth = (cropAreaView.getTargetWidth() * (cropState.getRight() - cropState.getLeft()));
+    double targetHeight = (cropAreaView.getTargetHeight() * (cropState.getBottom() - cropState.getTop()));
+    double proportion = Math.max(targetWidth, targetHeight) / Math.min(targetWidth, targetHeight);
+
+    return Math.abs(proportion - 1d) > 0.02d;
   }
 
   // TTL
 
   private void showTTLOptions () {
     final MediaItem item = stack.getCurrent();
-    tdlib.ui().showTTLPicker(context(), item.getTTL(), true, true, item.isVideo() ? R.string.MessageLifetimeVideo : R.string.MessageLifetimePhoto, result -> {
+    tdlib.ui().showTTLPicker(context(), item.getSelfDestructType(), !ChatId.isSecret(item.getSourceChatId()), true, true, item.isVideo() ? R.string.MessageLifetimeVideo : R.string.MessageLifetimePhoto, result -> {
       if (stack.getCurrent() == item) {
-        int newTTL = result.getTtlTime();
-        item.setTTL(newTTL);
-        stopwatchButton.setValue(newTTL != 0 ? TdlibUi.getDuration(newTTL, TimeUnit.SECONDS, false) : null);
-        if (newTTL != 0) {
+        TdApi.MessageSelfDestructType selfDestructType;
+        String textRepresentation;
+        if (result.isOff()) {
+          selfDestructType = null;
+          textRepresentation = null;
+        } else if (result.isImmediate()) {
+          selfDestructType = new TdApi.MessageSelfDestructTypeImmediately();
+          textRepresentation = TdlibUi.getDuration(0, TimeUnit.SECONDS, false); // FIXME
+        } else {
+          int newTTL = result.getTtlTime();
+          textRepresentation = TdlibUi.getDuration(newTTL, TimeUnit.SECONDS, false);
+          selfDestructType = new TdApi.MessageSelfDestructTypeTimer(newTTL);
+        }
+        item.setSelfDestructType(selfDestructType);
+        stopwatchButton.setValue(textRepresentation);
+        if (selfDestructType != null) {
           selectMediaIfItsNot();
         }
       }
@@ -8117,7 +8173,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   public void close () {
     if (inPictureInPicture) {
       closePictureInPicture();
-    } else if (forceAnimationType != -1 || !onBackPressed(false)) {
+    } else if (forceAnimationType != -1 || !performOnBackPressed(false, true)) {
       popupView.hideWindow(true);
     }
   }
@@ -8199,6 +8255,10 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       return;
     }
 
+    if (initialSendOptions.schedulingState == null && showSlowModeRestriction(sendButton)) {
+      return;
+    }
+
     if (initialSendOptions.schedulingState == null && getArgumentsStrict().areOnlyScheduled) {
       tdlib.ui().showScheduleOptions(this, getOutputChatId(), false, (modifiedSendOptions, disableMarkdown1) -> {
         send(view, modifiedSendOptions, disableMarkdown, asFiles);
@@ -8215,7 +8275,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       imageFiles.add(stack.getCurrent().getSourceGalleryFile());
     }
 
-    if (sendDelegate.sendSelectedItems(view, imageFiles, initialSendOptions, disableMarkdown, asFiles, sendDelegate.isHideMediaEnabled())) {
+    if (sendDelegate.sendSelectedItems(view, imageFiles, initialSendOptions, disableMarkdown, asFiles, sendDelegate.showCaptionAboveMedia(), sendDelegate.isHideMediaEnabled())) {
       forceAnimationType = ANIMATION_TYPE_FADE;
       isMediaSent = true;
       setUIBlocked(true);
@@ -8239,7 +8299,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       filter = new TdApi.SearchMessagesFilterAnimation();
     }
     if (context instanceof MediaCollectorDelegate) {
-      stack = ((MediaCollectorDelegate) context).collectMedias(item.getSourceMessageId(), filter);
+      stack = ((MediaCollectorDelegate) context).collectMedias(item.getSourceMessageId(), false, filter);
     }
 
     if (stack == null) {
@@ -8250,7 +8310,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     Args args = new Args(context, MODE_MESSAGES, stack);
     args.reverseMode = stack.getReverseModeHint(true);
     args.forceThumbs = stack.getForceThumbsHint(true);
-    args.forceOpenIn = forceOpenIn || (filter != null && filter.getConstructor() == TdApi.SearchMessagesFilterDocument.CONSTRUCTOR);
+    args.forceOpenIn = forceOpenIn || (filter != null && Td.isDocumentFilter(filter));
     args.filter = filter;
     if (context instanceof MediaCollectorDelegate) {
       ((MediaCollectorDelegate) context).modifyMediaArguments(item, args);
@@ -8355,7 +8415,7 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     if (context instanceof MediaCollectorDelegate) {
       ((MediaCollectorDelegate) context).modifyMediaArguments(message, args);
     }
-    args.noLoadMore = message.isEventLog();
+    args.noLoadMore = message.isEventLog() || message.isSponsoredMessage();
     args.areOnlyScheduled = message.isScheduled();
 
     openWithArgs(context, args);
@@ -8367,17 +8427,22 @@ public class MediaViewController extends ViewController<MediaViewController.Args
       return;
     }
 
-    TGWebPage parsedWebPage = msg.getParsedWebPage();
+    TGWebPage parsedWebPage = msg.getParsedLinkPreview();
     if (parsedWebPage == null) {
       return;
     }
-    TdApi.WebPage webPage = parsedWebPage.getWebPage();
+    TdApi.LinkPreview linkPreview = parsedWebPage.getLinkPreview();
     MediaStack stack;
 
     stack = new MediaStack(context.context(), context.tdlib());
 
-    ArrayList<MediaItem> items = parsedWebPage.getInstantItems();
+    List<MediaItem> items = parsedWebPage.getInstantItems();
     if (items != null) {
+      List<TdApi.File> files = new ArrayList<>();
+      for (MediaItem item : items) {
+        files.add(item.getTargetFile());
+      }
+      msg.tdlib().files().syncFiles(files, 500L);
       stack.set(parsedWebPage.getInstantPosition(), items);
     } else {
       MediaItem item = MediaItem.valueOf(context.context(), context.tdlib(), msg.getMessage());
@@ -8389,13 +8454,13 @@ public class MediaViewController extends ViewController<MediaViewController.Args
 
     Args args = new Args(context, MODE_MESSAGES, stack);
     args.noLoadMore = true;
-    args.copyLink = webPage.url;
+    args.copyLink = linkPreview.url;
     args.forceThumbs = true;
     args.areOnlyScheduled = msg.isScheduled();
     if (context instanceof MediaCollectorDelegate) {
       ((MediaCollectorDelegate) context).modifyMediaArguments(msg, args);
     }
-    args.setMessageThreadId(msg.messagesController().getMessageThreadId());
+    args.setTopicId(msg.messagesController().getMessageTopicId());
 
     openWithArgs(context, args);
   }
@@ -8416,40 +8481,44 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   public static void openFromMessage (TGMessageMedia messageContainer, long messageId) {
     ViewController<?> context = messageContainer.controller();
     TdApi.Message msg = messageContainer.getMessage(messageId);
-    MediaItem item = MediaItem.valueOf(context.context(), context.tdlib(), msg);
+    MediaItem item = MediaItem.valueOf(messageContainer, messageId);
     if (item == null) {
       return;
     }
 
+    boolean allowLoadMore = !messageContainer.isSponsoredMessage() && !item.isSecret() && !item.isViewOnce();
     TdApi.SearchMessagesFilter filter = null;
-    switch (msg.content.getConstructor()) {
-      case TdApi.MessagePhoto.CONSTRUCTOR: {
-        filter = new TdApi.SearchMessagesFilterPhotoAndVideo();
-        break;
-      }
-      case TdApi.MessageChatChangePhoto.CONSTRUCTOR: {
-        filter = new TdApi.SearchMessagesFilterChatPhoto();
-        break;
-      }
-      case TdApi.MessageVideo.CONSTRUCTOR: {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
-          TdApi.Video video = ((TdApi.MessageVideo) msg.content).video;
-          UI.openFile(messageContainer.controller(), null, new File(video.video.local.path), "video/mp4", TD.getViewCount(msg.interactionInfo));
+    if (allowLoadMore) {
+      //noinspection SwitchIntDef
+      switch (msg.content.getConstructor()) {
+        case TdApi.MessagePhoto.CONSTRUCTOR: {
+          filter = new TdApi.SearchMessagesFilterPhotoAndVideo();
+          break;
         }
-        filter = new TdApi.SearchMessagesFilterPhotoAndVideo();
-        break;
-      }
-      case TdApi.MessageAnimation.CONSTRUCTOR: {
-        filter = new TdApi.SearchMessagesFilterAnimation();
-        break;
-      }
-      case TdApi.MessageText.CONSTRUCTOR: {
-        filter = new TdApi.SearchMessagesFilterUrl();
-        break;
-      }
-      case TdApi.MessageDocument.CONSTRUCTOR: {
-        filter = new TdApi.SearchMessagesFilterDocument();
-        break;
+        case TdApi.MessageChatChangePhoto.CONSTRUCTOR: {
+          filter = new TdApi.SearchMessagesFilterChatPhoto();
+          break;
+        }
+        case TdApi.MessageVideo.CONSTRUCTOR: {
+          if (Build.VERSION.SDK_INT < Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
+            TdApi.Video video = ((TdApi.MessageVideo) msg.content).video;
+            UI.openFile(messageContainer.controller(), null, new File(video.video.local.path), "video/mp4", TD.getViewCount(msg.interactionInfo));
+          }
+          filter = new TdApi.SearchMessagesFilterPhotoAndVideo();
+          break;
+        }
+        case TdApi.MessageAnimation.CONSTRUCTOR: {
+          filter = new TdApi.SearchMessagesFilterAnimation();
+          break;
+        }
+        case TdApi.MessageText.CONSTRUCTOR: {
+          filter = new TdApi.SearchMessagesFilterUrl();
+          break;
+        }
+        case TdApi.MessageDocument.CONSTRUCTOR: {
+          filter = new TdApi.SearchMessagesFilterDocument();
+          break;
+        }
       }
     }
 
@@ -8458,8 +8527,8 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     if (context.isStackLocked()) {
       return;
     }
-    if (context instanceof MediaCollectorDelegate) {
-      stack = ((MediaCollectorDelegate) context).collectMedias(msg.id, filter);
+    if (allowLoadMore && context instanceof MediaCollectorDelegate) {
+      stack = ((MediaCollectorDelegate) context).collectMedias(msg.id, messageContainer.isSponsoredMessage(), filter);
     }
 
     if (stack == null) {
@@ -8468,13 +8537,17 @@ public class MediaViewController extends ViewController<MediaViewController.Args
     }
 
     Args args = new Args(context, MODE_MESSAGES, stack);
-    args.noLoadMore = messageContainer.isEventLog();
+    args.noLoadMore = !allowLoadMore || messageContainer.isEventLog() || messageContainer.isSponsoredMessage();
     if (context instanceof MediaCollectorDelegate) {
       ((MediaCollectorDelegate) context).modifyMediaArguments(msg, args);
     }
     args.setFilter(filter);
-    args.setMessageThreadId(messageContainer.messagesController().getMessageThreadId());
+    args.setTopicId(messageContainer.messagesController().getMessageTopicId());
     args.areOnlyScheduled = TD.isScheduled(msg);
+
+    if (messageContainer.isSponsoredMessage()) {
+      args.setCustomSubtitle(messageContainer.getSponsoredMessage().title);
+    }
 
     openWithArgs(context, args);
   }
@@ -8497,11 +8570,11 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   private void openSetSenderPopup (TdApi.Chat chat) {
     if (chat == null) return;
 
-    tdlib().send(new TdApi.GetChatAvailableMessageSenders(chat.id), result -> {
+    tdlib().send(new TdApi.GetChatAvailableMessageSenders(chat.id), (result, error) -> {
       UI.post(() -> {
-        if (result.getConstructor() == TdApi.ChatMessageSenders.CONSTRUCTOR) {
+        if (result != null) {
           final SetSenderController c = new SetSenderController(context, tdlib());
-          c.setArguments(new SetSenderController.Args(chat, ((TdApi.ChatMessageSenders) result).senders, chat.messageSenderId));
+          c.setArguments(new SetSenderController.Args(chat, result.senders, chat.messageSenderId));
           c.setShowOverEverything(true);
           c.setDelegate((s) -> setNewMessageSender(chat, s));
           c.show();
@@ -8511,12 +8584,866 @@ public class MediaViewController extends ViewController<MediaViewController.Args
   }
 
   private void setNewMessageSender (TdApi.Chat chat, TdApi.ChatMessageSender sender) {
-    tdlib().send(new TdApi.SetChatMessageSender(chat.id, sender.sender), o -> {
-      UI.post(() -> {
-        if (senderSendIcon != null) {
-          senderSendIcon.update(chat.messageSenderId);
+    tdlib().send(new TdApi.SetChatMessageSender(chat.id, sender.sender), tdlib.typedOkHandler());
+  }
+
+  private void setEmojiShown (boolean emojiShown) {
+    if (this.emojiShown != emojiShown) {
+      this.emojiShown = emojiShown;
+      setTextFormattingLayoutVisible(textInputHasSelection);
+      if (inputView != null) {
+        inputView.setActionModeVisibility(!textInputHasSelection || !emojiShown);
+      }
+      if (inlineResultsView != null) {
+        inlineResultsView.updatePosition(false);
+      }
+      updateBottomWrapMargin();
+      if (bottomSpace != null) {
+        bottomSpace.setVisibility(bottomInnerMargin > 0 && !emojiShown ? View.VISIBLE : View.GONE);
+      }
+    }
+  }
+
+  /**/
+
+  private boolean textInputHasSelection;
+  private boolean textFormattingVisible;
+
+  @Override
+  public void onInputSelectionChanged (InputView v, int start, int end) {
+    if (textFormattingLayout != null) {
+      textFormattingLayout.onInputViewSelectionChanged(start, end);
+    }
+  }
+
+  @Override
+  public void onInputSelectionExistChanged (InputView v, boolean hasSelection) {
+    textInputHasSelection = hasSelection;
+    if (!emojiShown) {
+      captionEmojiButton.setImageResource(getTargetIcon());
+    }
+  }
+
+  private void setTextFormattingLayoutVisible (boolean visible) {
+    textFormattingVisible = keyboardFrameLayout != null && keyboardFrameLayout.contentView.setTextFormattingLayoutVisible(visible);
+  }
+
+  private void closeTextFormattingKeyboard () {
+    if (textFormattingVisible && emojiShown) {
+      closeEmojiKeyboard();
+    }
+  }
+
+  public @DrawableRes int getTargetIcon () {
+    return (textInputHasSelection || (textFormattingVisible && emojiShown)) ? R.drawable.baseline_format_text_24 : R.drawable.deproko_baseline_insert_emoticon_26;
+  }
+
+  public boolean showSlowModeRestriction (View v) {
+    if (selectDelegate == null) {
+      return false;
+    }
+
+    CharSequence restriction = tdlib().getSlowModeRestrictionText(selectDelegate.getOutputChatId());
+    if (restriction != null) {
+      context().tooltipManager().builder(v).show(tdlib, restriction).hideDelayed();
+      return true;
+    }
+
+    return false;
+  }
+
+  private Args forceEditModeOld_arguments;
+  private FrameLayoutFix forceEditModeOld_bottomWrap;
+  private View forceEditModeOld_captionView;
+  private ViewGroup forceEditModeOld_captionWrapView;
+  private List<View> forceEditMode_views;
+
+  private boolean inForceEditMode () {
+    return forceEditModeOld_arguments != null;
+  }
+
+  private void openForceEditMode () {
+    ImageFile imageFile = stack.getCurrent().getTargetImage();
+    U.toGalleryFile(new File(imageFile.getFilePath()), false, imageGalleryFile -> {
+      if (imageGalleryFile == null) {
+        return;
+      }
+
+      final MediaItem mediaItem = new MediaItem(context, tdlib, imageGalleryFile);
+      final MediaStack mediaStack = new MediaStack(context, tdlib);
+      mediaStack.set(mediaItem);
+
+      openForceEditModeImpl(mediaStack);
+    });
+  }
+
+  private void stopFullScreenTemporarily (boolean stop) {
+    if (useEdgeToEdge()) {
+      return;
+    }
+    if (stop) {
+      popupView.setIgnoreBottom(false);
+      popupView.setIgnoreAllInsets(false);
+      // setLowProfile(false);
+      setFullScreen(false);
+    } else {
+      boolean b = canRunFullscreen();
+      popupView.setIgnoreBottom(b);
+      popupView.setIgnoreAllInsets(b);
+      // setLowProfile(true);
+      setFullScreen(true);
+    }
+  }
+
+  private void openForceEditModeImpl (MediaStack mediaStack) {
+    forceEditModeOld_arguments = getArgumentsStrict();
+    forceEditModeOld_bottomWrap = bottomWrap;
+    forceEditModeOld_captionView = captionView;
+    forceEditModeOld_captionWrapView = captionWrapView;
+
+    stopFullScreenTemporarily(true);
+
+    final long chatId = context.navigation().getCurrentStackItem().getChatId();
+    final boolean hasRestriction = tdlib.hasRestriction(chatId, RightId.SEND_PHOTOS);
+
+    replaceArguments(MediaViewController.Args.fromGallery(this, null,
+      new MediaSelectDelegate() {
+        @Override
+        public boolean isMediaItemSelected (int index, MediaItem item) {
+          return false;
+        }
+
+        @Override
+        public void setMediaItemSelected (int index, MediaItem item, boolean isSelected) {
+
+        }
+
+        @Override
+        public int getSelectedMediaCount () {
+          return 0;
+        }
+
+        @Override
+        public long getOutputChatId () {
+          MessagesController m = findOutputController();
+          return m != null ? m.getOutputChatId() : 0;
+        }
+
+        @Override
+        public boolean canDisableMarkdown () {
+          return false;
+        }
+
+        @Override
+        public ArrayList<ImageFile> getSelectedMediaItems (boolean copy) {
+          return null;
+        }
+      },
+      new MediaSpoilerSendDelegate() {
+        @Override
+        public boolean sendSelectedItems (View view, ArrayList<ImageFile> images, TdApi.MessageSendOptions options, boolean disableMarkdown, boolean asFiles, boolean showCaptionAboveMedia, boolean hasSpoiler) {
+          ImageGalleryFile galleryFile = (ImageGalleryFile) images.get(0);
+          return onSendMedia(galleryFile, options, disableMarkdown, asFiles, showCaptionAboveMedia, hasSpoiler);
+        }
+
+        @Override
+        public void onHideMediaStateChanged (boolean hideMedia) {
+          super.onHideMediaStateChanged(hideMedia);
+          mediaStack.getCurrent().setHasSpoiler(hideMedia);
+        }
+
+        private boolean onSendMedia (ImageGalleryFile file, TdApi.MessageSendOptions options, boolean disableMarkdown, boolean asFiles, boolean showCaptionAboveMedia, boolean hasSpoiler) {
+          MessagesController m = findOutputController();
+          if (m != null) {
+            final MediaItem oldItem = forceEditModeOld_arguments != null && forceEditModeOld_arguments.stack != null ?
+              forceEditModeOld_arguments.stack.getCurrent() : null;
+            final boolean canShare = oldItem != null && oldItem.canBeSaved() && oldItem.canBeShared();
+
+            if (hasRestriction) {
+              if (canShare) {
+                openShareControllerForItem(new MediaItem(context, tdlib, file));
+              } else {
+                m.showRestriction(sendButton, Lang.getString(tdlib.isChannel(chatId) ?
+                  R.string.RestrictSavingChannelInfo: R.string.RestrictSavingGroupInfo));
+              }
+              return false;
+            }
+
+            final @RightId int rightId = file.isVideo() ? RightId.SEND_VIDEOS : RightId.SEND_PHOTOS;
+            if (m.showSlowModeRestriction(sendButton, options)) {
+              return false;
+            }
+
+            context.forceCloseCamera();
+            CharSequence restriction = tdlib.getDefaultRestrictionText(m.getChat(), rightId);
+            if (restriction != null) {
+              if (canShare) {
+                openShareControllerForItem(new MediaItem(context, tdlib, file));
+                UI.showToast(restriction, Toast.LENGTH_LONG);
+              } else {
+                m.showRestriction(sendButton, restriction);
+              }
+              return false;
+            }
+            return m.sendPhotosAndVideosCompressed(new ImageGalleryFile[] {file}, false, options, disableMarkdown, asFiles, showCaptionAboveMedia, hasSpoiler);
+          }
+          return false;
+        }
+      }, mediaStack, false
+    ).setReceiverChatId(chatId).setSendButtonIcon(hasRestriction ? R.drawable.baseline_forward_24 : 0));
+
+    if (thumbsRecyclerView != null) {
+      thumbsRecyclerView.setVisibility(View.GONE);
+    }
+    bottomWrap.setVisibility(View.GONE);
+
+    updateMediaView();
+    forceEditMode_views = createViewGalleryMode(context, true);
+
+    stack.notifyMediaChanged(true);
+    setForceEditModeVisibility(true);
+
+    final View captionWrapViewFinal = captionWrapView;
+
+    fillIcons(SECTION_PAINT, false);
+    captionWrapViewFinal.setVisibility(View.INVISIBLE);
+    UI.post(() -> captionWrapViewFinal.setVisibility(View.VISIBLE), 300);
+    changeSectionImpl(SECTION_PAINT, false);
+  }
+
+  private void closeForceEditMode () {
+    for (View v : forceEditMode_views) {
+      contentView.removeView(v);
+    }
+    if (captionView instanceof Destroyable) {
+      ((Destroyable) captionView).performDestroy();
+    }
+    if (sendButton != null) {
+      sendButton.destroySlowModeCounterController();
+    }
+
+    replaceArguments(forceEditModeOld_arguments);
+    captionView = forceEditModeOld_captionView;
+    captionWrapView = forceEditModeOld_captionWrapView;
+    bottomWrap = forceEditModeOld_bottomWrap;
+    bottomWrap.setVisibility(View.VISIBLE);
+
+    if (thumbsRecyclerView != null) {
+      thumbsRecyclerView.setVisibility(View.VISIBLE);
+    }
+
+    updateMediaView();
+
+    stack.notifyMediaChanged(true);
+    setForceEditModeVisibility(false);
+
+    forceEditModeOld_captionView = null;
+    forceEditModeOld_captionWrapView = null;
+    forceEditModeOld_bottomWrap = null;
+    forceEditModeOld_arguments = null;
+    forceEditMode_views = null;
+
+    stopFullScreenTemporarily(false);
+  }
+
+  private void replaceArguments (Args args) {
+    stack.setCallback(null);
+    setArguments(args);
+    mediaView.initWithStack(stack);
+    stack.setCallback(this);
+  }
+
+  /* * */
+
+  private static final int ANIMATOR_EDIT_MODE_VISIBILITY = 242;
+  private BoolAnimator animatorEditModeVisibility;
+
+  private void setForceEditModeVisibility (boolean visible) {
+    if (animatorEditModeVisibility == null) {
+      animatorEditModeVisibility = new BoolAnimator(ANIMATOR_EDIT_MODE_VISIBILITY, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 180L, !visible);
+    }
+    animatorEditModeVisibility.setValue(visible, true);
+  }
+
+  private float getForceEditModeVisibility () {
+    return animatorEditModeVisibility != null ? animatorEditModeVisibility.getFloatValue() : 0;
+  }
+
+  /* * */
+
+  private void updateMediaView () {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && !Config.DISABLE_VIEWER_ELEVATION) {
+      if (mode == MODE_MESSAGES || mode == MODE_SIMPLE) {
+        mediaView.setElevation(Screen.dp(2f));
+        mediaView.setOutlineProvider(new android.view.ViewOutlineProvider() {
+          private final int[] size = new int[2];
+
+          @Override
+          @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+          public void getOutline (View view, android.graphics.Outline outline) {
+            if (getPipSize(size)) {
+              // size[0] /= view.getScaleX();
+              // size[1] /= view.getScaleY();
+
+              int width = view.getMeasuredWidth();
+              int height = view.getMeasuredHeight();
+
+              int left = width / 2 - size[0] / 2;
+              int right = width / 2 + size[0] / 2;
+              int top = height / 2 - size[1] / 2;
+              int bottom = height / 2 + size[1] / 2;
+              outline.setRect(left, top, right, bottom);
+            } else {
+              outline.setEmpty();
+            }
+          }
+        });
+      } else {
+        mediaView.setElevation(0);
+        mediaView.setOutlineProvider(null);
+      }
+    }
+
+    mediaView.setDisableDoubleTapZoom(mode == MODE_GALLERY);
+  }
+
+  private List<View> createViewGalleryMode (Context context, boolean hideCheckViews) {
+    final boolean inProfilePhotoEditMode = inProfilePhotoEditMode();
+    final ArrayList<View> attachedViews = new ArrayList<>(7);
+    final Args args = getArgumentsStrict();
+
+    TdApi.Chat chat = args.receiverChatId != 0 ? tdlib.chat(args.receiverChatId) : null;
+
+    mediaView.setOffsets(0, 0, 0, 0, 0); // Screen.dp(56f)
+    editWrap = new FrameLayoutFix(context);
+    editWrap.setBackgroundColor(Theme.getColor(ColorId.transparentEditor));
+    editWrap.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(56f), Gravity.BOTTOM));
+    Views.setBottomMargin(editWrap, controlsMargin);
+
+    backButton = new EditButton(context);
+    backButton.setId(R.id.btn_back);
+    backButton.setIcon(R.drawable.baseline_arrow_back_24, false, false);
+    backButton.setOnClickListener(this);
+    backButton.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT));
+    editWrap.addView(backButton);
+
+    sendButton = new EditButton(context);
+    sendButton.setId(R.id.btn_send);
+    setDefaultSendButtonIcon(false);
+    sendButton.setOnClickListener(this);
+    sendButton.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.RIGHT));
+    sendButton.setBackgroundResource(R.drawable.bg_btn_header_light);
+    if (selectDelegate != null) {
+      sendButton.getSlowModeCounterController(tdlib).setCurrentChat(selectDelegate.getOutputChatId());
+    }
+    editWrap.addView(sendButton);
+
+    if (chat != null && !hasFlag(Args.FLAG_DISALLOW_SEND_BUTTON_HAPTIC_MENU)) {
+      tdlib.ui().createSimpleHapticMenu(this, chat.id, () -> currentActiveButton == 0, this::canDisableMarkdown, () -> true, hapticItems -> {
+        if (sendDelegate != null && sendDelegate.allowHideMedia()) {
+          hapticItems.add(0,
+            new HapticMenuHelper.MenuItem(R.id.btn_spoiler, Lang.getString(R.string.HideMedia), R.drawable.deproko_baseline_whatshot_24)
+              .setIsCheckbox(true, sendDelegate.isHideMediaEnabled())
+              .setOnClickListener(new HapticMenuHelper.OnItemClickListener() {
+                private TooltipOverlayView.TooltipInfo hotTooltipInfo;
+
+                @Override
+                public boolean onHapticMenuItemClick (View view, View parentView, HapticMenuHelper.MenuItem item) {
+                  if (view.getId() == R.id.btn_spoiler) {
+                    if (item.isCheckboxSelected) {
+                      hotTooltipInfo = context().tooltipManager().builder(view)
+                        .icon(R.drawable.baseline_whatshot_24)
+                        .color(context().tooltipManager().overrideColorProvider(getForcedTheme()))
+                        .locate((targetView, outRect) -> {
+                          int centerX = outRect.left + Screen.dp(29f);
+                          int centerY = outRect.centerY();
+                          int radius = Screen.dp(11f);
+                          outRect.left = centerX - radius;
+                          outRect.right = centerX + radius;
+                          outRect.top = centerY - radius;
+                          outRect.bottom = centerY + radius;
+                        })
+                        .show(tdlib, R.string.MediaSpoilerHint)
+                        .hideDelayed();
+                    } else {
+                      if (hotTooltipInfo != null) {
+                        hotTooltipInfo.hideNow();
+                        hotTooltipInfo = null;
+                      }
+                    }
+                    sendDelegate.onHideMediaStateChanged(item.isCheckboxSelected);
+                    return true;
+                  }
+                  return false;
+                }
+              })
+          );
+        }
+        if (inForceEditMode()) {
+          final MediaItem oldItem = forceEditModeOld_arguments != null && forceEditModeOld_arguments.stack != null ?
+            forceEditModeOld_arguments.stack.getCurrent() : null;
+          final boolean canShare = oldItem != null && oldItem.canBeSaved() && oldItem.canBeShared();
+          if (canShare) {
+            hapticItems.add(1, new HapticMenuHelper.MenuItem(R.id.btn_share, Lang.getString(R.string.MediaHapticForward), R.drawable.baseline_forward_24).setOnClickListener((view, parentView, item) -> {
+              if (view.getId() == R.id.btn_share) {
+                openShareControllerForCurrentItem();
+              }
+              return true;
+            }));
+          }
+        }
+        int sendAsFile = canSendAsFile();
+        if (sendAsFile != SEND_MODE_NONE) {
+          boolean onlyVideos = sendAsFile == SEND_MODE_VIDEOS;
+          int count = selectDelegate != null ? selectDelegate.getSelectedMediaCount() : 1;
+          hapticItems.add(new HapticMenuHelper.MenuItem(R.id.btn_sendAsFile, count <= 1 ? Lang.getString(onlyVideos ? R.string.SendOriginal : R.string.SendAsFile) : Lang.plural(onlyVideos ? R.string.SendXOriginals : R.string.SendAsXFiles, count), R.drawable.baseline_insert_drive_file_24).setOnClickListener((view, parentView, item) -> {
+            if (view.getId() == R.id.btn_sendAsFile) {
+              send(sendButton, Td.newSendOptions(), false, true);
+            }
+            return true;
+          }).bindTutorialFlag(Settings.TUTORIAL_SEND_AS_FILE));
+        }
+        if (chat != null && chat.messageSenderId != null) {
+          hapticItems.add(0, MediaLayout.createHapticSenderItem(tdlib, chat).setOnClickListener((view, parentView, item) -> {
+            openSetSenderPopup(chat);
+            return true;
+          }));
+        }
+      }, (sendOptions, disableMarkdown) -> {
+        send(sendButton, sendOptions, disableMarkdown, false);
+      }, getForcedTheme()).attachToView(sendButton);
+    }
+
+    editButtons = new LinearLayout(context);
+    editButtons.setOrientation(LinearLayout.HORIZONTAL);
+    editButtons.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER_HORIZONTAL));
+
+    cropOrStickerButton = new EditButton(context);
+    cropOrStickerButton.setOnClickListener(this);
+    cropOrStickerButton.setId(R.id.btn_crop);
+    // cropOrStickerButton.setSecondIcon(R.drawable.deproko_baseline_insert_sticker_24);
+    cropOrStickerButton.setIcon(R.drawable.baseline_crop_rotate_24, false, false);
+    cropOrStickerButton.setLayoutParams(new LinearLayout.LayoutParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT));
+    editButtons.addView(cropOrStickerButton);
+
+    LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT);
+    params.leftMargin = Screen.dp(8f);
+    params.rightMargin = Screen.dp(8f);
+
+    paintOrMuteButton = new EditButton(context);
+    paintOrMuteButton.setOnClickListener(this);
+    paintOrMuteButton.setId(R.id.btn_paint);
+    paintOrMuteButton.setIcon(R.drawable.baseline_brush_24, false, false);
+    paintOrMuteButton.setLayoutParams(params);
+    editButtons.addView(paintOrMuteButton);
+
+    adjustOrTextButton = new EditButton(context);
+    adjustOrTextButton.setId(R.id.btn_adjust);
+    adjustOrTextButton.setOnClickListener(this);
+    adjustOrTextButton.setSecondIcon(R.drawable.deproko_baseline_text_add_24);
+    adjustOrTextButton.setIcon(R.drawable.baseline_tune_24, false, false);
+    adjustOrTextButton.setLayoutParams(new LinearLayout.LayoutParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT));
+    editButtons.addView(adjustOrTextButton);
+
+    if (chat != null && chat.type.getConstructor() == TdApi.ChatTypePrivate.CONSTRUCTOR && !tdlib.isBotChat(chat) && !hasFlag(Args.FLAG_DISALLOW_SET_DESTRUCTION_TIMER)) {
+      stopwatchButton = new StopwatchHeaderButton(context);
+      stopwatchButton.setBackgroundResource(R.drawable.bg_btn_header_light);
+      stopwatchButton.forceValue(null, true);
+      stopwatchButton.setId(R.id.menu_btn_stopwatch);
+      stopwatchButton.setOnClickListener(this);
+      stopwatchButton.setLayoutParams(new LinearLayout.LayoutParams(Screen.dp(56f), ViewGroup.LayoutParams.MATCH_PARENT));
+      editButtons.addView(stopwatchButton);
+    }
+
+    /*if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+      editWrap.setOutlineProvider(new android.view.ViewOutlineProvider() {
+        @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+        @Override
+        public void getOutline (View view, android.graphics.Outline outline) {
+          int centerX = view.getMeasuredWidth() / 2;
+          int centerY = view.getMeasuredHeight() / 2;
+          int radius = Screen.dp(16f);
+          outline.setRoundRect(centerX - radius, centerY - radius, centerX + radius, centerY + radius, radius);
         }
       });
+    }*/
+
+    editWrap.addView(editButtons);
+
+    updateIconStates(false);
+
+    contentView.addView(editWrap);
+    attachedViews.add(editWrap);
+
+    // Bottom wrap
+
+    FrameLayoutFix.LayoutParams fp = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.BOTTOM);
+    fp.bottomMargin = getBottomWrapMargin();
+
+    bottomWrap = new FrameLayoutFix(context);
+    bottomWrap.setLayoutParams(fp);
+    checkBottomWrapY();
+
+    InputView captionView = new InputView(context, tdlib, this) {
+      @Override
+      protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        if (inlineResultsView != null) {
+          inlineResultsView.updatePosition(true);
+        }
+      }
+
+      private boolean isDown;
+
+      @Override
+      public boolean onTouchEvent (MotionEvent event) {
+        boolean res = Views.onTouchEvent(this, event) && super.onTouchEvent(event);
+        switch (event.getAction()) {
+          case MotionEvent.ACTION_DOWN:
+            isDown = true;
+            break;
+          case MotionEvent.ACTION_CANCEL:
+          case MotionEvent.ACTION_UP:
+            isDown = false;
+            break;
+        }
+        if (textFormattingLayout != null) {
+          textFormattingLayout.onInputViewTouchEvent(event);
+        }
+        return res;
+      }
+
+      @Override
+      protected void onScrollChanged (int horiz, int vert, int oldHoriz, int oldVert) {
+        super.onScrollChanged(horiz, vert, oldHoriz, oldVert);
+        contentView.requestDisallowInterceptTouchEvent(isDown);
+      }
+    };
+    if (chat != null) {
+      captionView.setNoPersonalizedLearning(Settings.instance().needsIncognitoMode(chat));
+    }
+    captionView.setHighlightColor(ColorUtils.alphaColor(0.2f, Theme.fillingTextSelectionColor()));
+    captionView.setHighlightColor(getForcedTheme().getColor(ColorId.textSelectionHighlight));
+    // addThemeHighlightColorListener(captionView, ColorId.textSelectionHighlight);
+    captionView.setMaxCodePointCount(tdlib.maxCaptionLength());
+    captionView.setIgnoreCustomStuff(false);
+    captionView.getInlineSearchContext().setIsCaption(true);
+    captionView.setInputListener(this);
+    captionView.setBackgroundColor(0);
+    captionView.addTextChangedListener(new TextWatcher() {
+      @Override
+      public void beforeTextChanged (CharSequence s, int start, int count, int after) {
+
+      }
+
+      @Override
+      public void onTextChanged (CharSequence s, int start, int before, int count) {
+        if (ignoreCaptionUpdate) {
+          ignoreCaptionUpdate = false;
+        } else {
+          stack.getCurrent().setCaption(captionView.getOutputText(false));
+        }
+      }
+
+      @Override
+      public void afterTextChanged (Editable s) {
+
+      }
     });
+    captionView.setSpanChangeListener(v -> {
+      if (!ignoreCaptionUpdate) {
+        stack.getCurrent().setCaption(v.getOutputText(false));
+      }
+      if (textFormattingLayout != null) {
+        textFormattingLayout.onInputViewSpansChanged();
+      }
+    });
+    captionView.setHint(Lang.getString(R.string.AddCaption));
+    captionView.setMaxLines(4);
+    captionView.setId(R.id.input);
+    captionView.setPadding(Screen.dp(55f), Screen.dp(15f), Screen.dp(55f), Screen.dp(14f));
+    captionView.setTranslationX(-(Screen.dp(55f) - Screen.dp(14f)));
+    captionView.setHintTextColor(0xbaffffff);
+    captionView.setTextColor(0xffffffff);
+    captionView.setTypeface(Fonts.getRobotoRegular());
+    captionView.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+    captionView.setInputType(captionView.getInputType() | EditorInfo.TYPE_TEXT_FLAG_CAP_SENTENCES | EditorInfo.TYPE_TEXT_FLAG_MULTI_LINE);
+    captionView.setSelectionChangeListener(this);
+    this.captionView = captionView;
+    this.inputView = captionView;
+
+    captionDoneButton = new ImageView(context);
+    captionDoneButton.setId(R.id.btn_caption_done);
+    captionDoneButton.setOnClickListener(this);
+    captionDoneButton.setScaleType(ImageView.ScaleType.CENTER);
+    captionDoneButton.setImageResource(R.drawable.baseline_check_24);
+    captionDoneButton.setColorFilter(0xffffffff);
+    captionDoneButton.setAlpha(0f);
+    captionDoneButton.setEnabled(false);
+    captionDoneButton.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(55f), Screen.dp(52f), Gravity.RIGHT | Gravity.BOTTOM));
+
+    captionEmojiButton = new ImageView(context());
+    captionEmojiButton.setId(R.id.btn_caption_emoji);
+    captionEmojiButton.setOnClickListener(this);
+    captionEmojiButton.setScaleType(ImageView.ScaleType.CENTER);
+    captionEmojiButton.setImageResource(R.drawable.deproko_baseline_insert_emoticon_26);
+    captionEmojiButton.setColorFilter(0xffffffff);
+    captionEmojiButton.setAlpha(0f);
+    captionEmojiButton.setEnabled(false);
+    captionEmojiButton.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(55f), Screen.dp(52f), Gravity.LEFT | Gravity.BOTTOM));
+
+    LinearLayout captionWrapView = new LinearLayout(context) {
+      @Override
+      public boolean onInterceptTouchEvent (MotionEvent ev) {
+        return getVisibility() != View.VISIBLE || getAlpha() != 1f;
+      }
+
+      @Override
+      protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        checkCaptionButtonsY();
+      }
+
+      @Override
+      protected void onLayout (boolean changed, int l, int t, int r, int b) {
+        super.onLayout(changed, l, t, r, b);
+        checkCaptionButtonsY();
+      }
+
+      @Override
+      public boolean onTouchEvent (MotionEvent event) {
+        return getVisibility() == View.VISIBLE && getAlpha() == 1f && super.onTouchEvent(event);
+      }
+    };
+    captionWrapView.setOrientation(LinearLayout.VERTICAL);
+    captionWrapView.setBackgroundColor(Theme.getColor(ColorId.transparentEditor));
+    captionWrapView.addView(captionView);
+    captionWrapView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
+    this.captionWrapView = captionWrapView;
+
+    if (!inProfilePhotoEditMode) {
+      bottomWrap.addView(captionWrapView);
+      bottomWrap.addView(captionDoneButton);
+      bottomWrap.addView(captionEmojiButton);
+    }
+
+    videoSliderView = new VideoControlView(context);
+    videoSliderView.setSliderListener(this);
+    videoSliderView.setOnPlayPauseClick(v -> {
+      FileProgressComponent c = stack.getCurrent().getFileProgress();
+      if (c != null) {
+        c.performClick(v);
+      }
+    });
+    videoSliderView.setInnerAlpha(0f);
+    videoSliderView.setTranslationY(Screen.dp(56f));
+    videoSliderView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    videoSliderView.setSlideEnabled(stack.getCurrent().canSeekVideo());
+    bottomWrap.addView(videoSliderView);
+    if (needTrim()) {
+      videoSliderView.addTrim(new VideoTimelineView.TimelineDelegate() {
+        @Override
+        public boolean canTrimTimeline (VideoTimelineView v) {
+          return true; // TODO check if video is rendered
+        }
+
+        @Override
+        public void onVideoLoaded (VideoTimelineView v, double totalDuration, double width, double height, int frameRate, long bitrate) {
+          stack.getCurrent().getSourceGalleryFile().setVideoInformation((long) (totalDuration * 1_000_000.0), width, height, frameRate, bitrate);
+        }
+
+        private boolean needResume;
+
+        @Override
+        public void onTrimStartEnd (VideoTimelineView v, boolean isStarted) {
+          if (isStarted) {
+            if (needResume = isPlayingVideo) {
+              pauseVideoIfPlaying();
+            }
+          } else if (needResume) {
+            stack.getCurrent().performClick(pipPlayPauseButton);
+          }
+        }
+
+        @Override
+        public void onSeekTo (VideoTimelineView v, float progress) {
+          mediaView.setSeekProgress(progress);
+        }
+
+        @Override
+        public void onTimelineTrimChanged (VideoTimelineView v, double totalDuration, double startTimeSeconds, double endTimeSeconds) {
+          MediaItem item = stack.getCurrent();
+          boolean changed;
+          if (startTimeSeconds == 0 && endTimeSeconds == totalDuration) {
+            changed = item.getSourceGalleryFile().setTrim(-1, -1, (long) (totalDuration * 1_000_000.0));
+          } else {
+            changed = item.getSourceGalleryFile().setTrim((long) (startTimeSeconds * 1_000_000.0), endTimeSeconds >= totalDuration ? -1 : (long) (endTimeSeconds * 1_000_000.0), (long) (totalDuration * 1_000_000.0));
+          }
+          if (changed) {
+            boolean needFrameUpdate = item.checkTrim();
+            MediaCellView cellView = mediaView != null ? mediaView.findCellForItem(stack.getCurrent()) : null;
+            if (cellView != null) {
+              cellView.checkTrim(needFrameUpdate);
+              long timeNow = cellView.getTimeNow();
+              long timeTotal = cellView.getTimeTotal();
+              if (timeNow == -1 || timeTotal == -1) {
+                timeNow = 0;
+                timeTotal = (long) ((endTimeSeconds - startTimeSeconds) * 1000.0);
+              }
+              videoSliderView.resetDuration(timeTotal, timeNow, true, true);
+            } else {
+              item.invalidateContent(item);
+            }
+          }
+        }
+      }, getForcedTheme());
+    }
+
+    contentView.addView(bottomWrap);
+    attachedViews.add(bottomWrap);
+
+    // Image overlay
+
+    overlayView = new View(context) {
+      @Override
+      public boolean onTouchEvent (MotionEvent event) {
+        if (event.getAction() == MotionEvent.ACTION_DOWN && showOtherMedias) {
+          setShowOtherMedias(false);
+          return true;
+        }
+        return false;
+      }
+    };
+    overlayView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+    overlayView.setBackgroundColor(0xa0000000);
+    overlayView.setAlpha(0f);
+    contentView.addView(overlayView);
+    attachedViews.add(overlayView);
+
+    // Checks
+
+    int innerPadding = Screen.dp(9f);
+    int size = Screen.dp(20f) * 2 + Screen.dp(1f) * 2 + innerPadding * 2;
+    fp = FrameLayoutFix.newParams(size, size, Gravity.TOP | Gravity.RIGHT);
+    fp.rightMargin = Screen.dp(20f) - innerPadding;
+    fp.topMargin = Screen.dp(20f) - innerPadding + topOffset / 2;
+
+    checkView = new CheckView(context);
+    checkView.setId(R.id.btn_check);
+    checkView.initWithMode(CheckView.MODE_GALLERY);
+    checkView.setPadding(innerPadding, innerPadding, 0, 0);
+    checkView.setLayoutParams(fp);
+    checkView.setOnClickListener(this);
+    checkView.forceSetChecked(isCurrentItemSelected());
+
+    fp = FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, Screen.dp(30f), Gravity.RIGHT);
+    fp.rightMargin = Screen.dp(78f);
+    fp.topMargin = Screen.dp(26f) + topOffset / 2;
+
+    counterView = new CounterView(context);
+    counterView.setId(R.id.btn_counter);
+    counterView.setOnClickListener(this);
+    counterView.setLayoutParams(fp);
+
+    int count = getSelectedMediaCount();
+    counterView.initCounter(Math.max(count, 1), false);
+    forceCounterFactor(count == 0 ? 0f : 1f);
+
+    if (!inProfilePhotoEditMode && !hideCheckViews && !inSingleMediaMode()) {
+      contentView.addView(checkView);
+      contentView.addView(counterView);
+      attachedViews.add(checkView);
+      attachedViews.add(counterView);
+    }
+
+    receiverView = buildReceiverRowView(chat);
+    if (receiverView != null) {
+      contentView.addView(receiverView);
+      attachedViews.add(receiverView);
+    }
+    return attachedViews;
+  }
+
+  private void openShareControllerForCurrentItem () {
+    openShareControllerForItem(stack.getCurrent());
+  }
+
+  private void openShareControllerForItem (MediaItem item2) {
+    ShareController c = new ShareController(context, tdlib);
+    CharSequence caption = Td.isEmpty(item2.getCaption()) ? null : TD.toCharSequence(item2.getCaption());
+    c.setArguments(new ShareController.Args(item2, caption, caption).setAfter(this::forceClose));
+    c.show(true);
+  }
+
+  @Nullable
+  private LinearLayout buildReceiverRowView (TdApi.Chat chat) {
+    final Args args = getArgumentsStrict();
+
+    final boolean needReceiverRow = (chat != null || args.receiverRowIcon != 0 || !StringUtils.isEmpty(args.receiverRowText));
+    if (!needReceiverRow) {
+      return null;
+    }
+
+    final @DrawableRes int icon = args.receiverRowIcon != 0 ? args.receiverRowIcon : R.drawable.baseline_arrow_upward_18;
+    final CharSequence text = StringUtils.isEmpty(args.receiverRowText) ? (chat != null ? tdlib.chatTitle(chat) : null) : args.receiverRowText;
+
+    FrameLayoutFix.LayoutParams fp = FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, Screen.getStatusBarHeight());
+    if (topOffset > 0) {
+      fp.leftMargin = Screen.dp(8f);
+      fp.topMargin = topOffset + Screen.dp(4f);
+    } else {
+      fp.leftMargin = Screen.dp(12f);
+      fp.topMargin = Screen.dp(4f);
+    }
+
+    LinearLayout receiverView = new LinearLayout(context);
+    receiverView.setOrientation(LinearLayout.HORIZONTAL);
+    receiverView.setAlpha(0f);
+    receiverView.setLayoutParams(fp);
+
+    LinearLayout.LayoutParams lp;
+
+    lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Screen.dp(17f));
+
+    ImageView imageView = new ImageView(context);
+    imageView.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+    imageView.setImageResource(icon);
+    imageView.setColorFilter(0xffffffff);
+    imageView.setAlpha((float) 0xaa / (float) 0xff);
+    imageView.setLayoutParams(lp);
+    receiverView.addView(imageView);
+
+    lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+    lp.leftMargin = Screen.dp(6f);
+
+    if (!StringUtils.isEmpty(text)) {
+      TextView textView = new NoScrollTextView(context);
+      textView.setTextColor(0xaaffffff);
+      textView.setSingleLine(true);
+      textView.setEllipsize(TextUtils.TruncateAt.END);
+      textView.setTypeface(Fonts.getRobotoMedium());
+      textView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 13f);
+      textView.setText(text);
+      textView.setLayoutParams(lp);
+      receiverView.addView(textView);
+    }
+
+    return receiverView;
+  }
+
+  /* * */
+
+  private MessagesController findOutputController () {
+    final NavigationStack nstack = context.navigation().getStack();
+    final int s = nstack.size();
+
+    for (int a = s - 1; a >= 0; a--) {
+      ViewController<?> c = nstack.get(a);
+      if (c instanceof MessagesController) {
+        return (MessagesController) c;
+      }
+    }
+
+    return null;
   }
 }

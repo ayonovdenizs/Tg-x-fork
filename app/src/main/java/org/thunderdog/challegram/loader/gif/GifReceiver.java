@@ -33,19 +33,24 @@ import androidx.annotation.UiThread;
 
 import org.thunderdog.challegram.N;
 import org.thunderdog.challegram.U;
+import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.loader.ImageFile;
 import org.thunderdog.challegram.loader.Receiver;
 import org.thunderdog.challegram.loader.ReceiverUpdateListener;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Paints;
+import org.thunderdog.challegram.tool.PorterDuffPaint;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Views;
 
 import java.lang.ref.WeakReference;
 
 import me.vkryl.core.BitwiseUtils;
+import me.vkryl.core.ColorUtils;
 import me.vkryl.core.MathUtils;
 
+@SuppressWarnings("unchecked")
 public class GifReceiver implements GifWatcher, Runnable, Receiver {
   private static final int STATE_LOADED = 0x01;
 
@@ -97,8 +102,9 @@ public class GifReceiver implements GifWatcher, Runnable, Receiver {
   }
 
   @Override
-  public void setUpdateListener (ReceiverUpdateListener listener) {
+  public final GifReceiver setUpdateListener (ReceiverUpdateListener listener) {
     this.updateListener = listener;
+    return this;
   }
 
   private float radius;
@@ -192,8 +198,8 @@ public class GifReceiver implements GifWatcher, Runnable, Receiver {
       } else {
         ratio = Math.min(widthRatio, heightRatio);
       }
-      sourceWidth *= ratio;
-      sourceHeight *= ratio;
+      sourceWidth = (int) ((float) sourceWidth * ratio);
+      sourceHeight = (int) ((float) sourceHeight * ratio);
       return sourceWidth;
     }
     return getWidth();
@@ -223,8 +229,8 @@ public class GifReceiver implements GifWatcher, Runnable, Receiver {
       } else {
         ratio = Math.min(widthRatio, heightRatio);
       }
-      sourceWidth *= ratio;
-      sourceHeight *= ratio;
+      sourceWidth = (int) ((float) sourceWidth * ratio);
+      sourceHeight = (int) ((float) sourceHeight * ratio);
       return sourceHeight;
     }
     return 0;
@@ -286,8 +292,8 @@ public class GifReceiver implements GifWatcher, Runnable, Receiver {
           }
 
           float ratio = Math.min((float) availWidth / (float) sourceWidth, (float) availHeight / (float) sourceHeight);
-          sourceWidth *= ratio;
-          sourceHeight *= ratio;
+          sourceWidth = (int) ((float) sourceWidth * ratio);
+          sourceHeight = (int) ((float) sourceHeight * ratio);
 
           int centerX = (int) drawRegion.centerX();
           int centerY = (int) drawRegion.centerY();
@@ -517,6 +523,7 @@ public class GifReceiver implements GifWatcher, Runnable, Receiver {
     sweep = sweepStart + sweepDiff * sweepFactor;
   }
 
+  @SuppressWarnings("deprecation")
   private void invalidateProgress () {
     if (view != null) {
       view.invalidate((int) progressRect.left - progressOffset, (int) progressRect.top - progressOffset, (int) progressRect.right + progressOffset, (int) progressRect.bottom + progressOffset);
@@ -526,6 +533,7 @@ public class GifReceiver implements GifWatcher, Runnable, Receiver {
     }
   }
 
+  @SuppressWarnings("deprecation")
   @Override
   public void invalidate () {
     if (view != null) {
@@ -717,28 +725,69 @@ public class GifReceiver implements GifWatcher, Runnable, Receiver {
     }
   }
 
-  private static final int DRAW_BATCH_STARTED = 1;
-  private static final int DRAW_BATCH_DRAWN = 1 << 1;
+  private static final int DRAW_BATCH_DRAWN = 1;
 
   private int drawBatchFlags;
 
-  public void beginDrawBatch () {
-    // Use when drawing the same GifReceiver multiple times on one canvas
-    drawBatchFlags = DRAW_BATCH_STARTED;
+  public boolean isInDrawBatch () {
+    return BitwiseUtils.setFlag(drawBatchFlags, DRAW_BATCH_DRAWN, false) != 0;
   }
 
-  public void finishDrawBatch () {
-    int flags = drawBatchFlags;
-    if (gif != null && BitwiseUtils.hasFlag(flags, DRAW_BATCH_STARTED) && BitwiseUtils.hasFlag(flags, DRAW_BATCH_DRAWN)) {
+  public void beginDrawBatch (int batchId) {
+    if (batchId <= 0) {
+      throw new IllegalArgumentException(Integer.toString(batchId));
+    }
+    // Use when drawing the same GifReceiver multiple times on one canvas
+    drawBatchFlags = BitwiseUtils.setFlag(drawBatchFlags, (1 << batchId), true);
+  }
+
+  public void finishAllDrawBatches () {
+    finishDrawBatch(0);
+  }
+
+  public void finishDrawBatch (int batchId) {
+    if (batchId < 0)
+      throw new IllegalArgumentException(Integer.toString(batchId));
+    int flags;
+    if (batchId == 0) {
+      // Drop all batches
+      flags = (drawBatchFlags & DRAW_BATCH_DRAWN);
+    } else {
+      flags = BitwiseUtils.setFlag(drawBatchFlags, (1 << batchId), false);
+    }
+    int remainingFlags = BitwiseUtils.setFlag(flags, DRAW_BATCH_DRAWN, false);
+    if (gif != null && BitwiseUtils.hasFlag(flags, DRAW_BATCH_DRAWN) && isInDrawBatch() && remainingFlags == 0) {
       synchronized (gif.getBusyList()) {
         if (gif.hasBitmap()) {
           gif.getDrawFrame(true);
         }
       }
     }
-    this.drawBatchFlags = 0;
+    this.drawBatchFlags = remainingFlags;
   }
 
+  private int porterDuffColor = ColorId.NONE;
+  private float porterDuffAlpha;
+  private boolean porterDuffColorIsId = true;
+
+  @Override
+  public void setPorterDuffColorFilter (int colorOrColorId, float alpha, boolean colorIsId) {
+    this.porterDuffColor = colorOrColorId;
+    this.porterDuffAlpha = alpha;
+    this.porterDuffColorIsId = colorIsId;
+  }
+
+  private static final int[] debugOptimizationColors;
+  static {
+    debugOptimizationColors = Config.DEBUG_GIF_OPTIMIZATION_MODE ? new int[]{
+      0x80FFFFFF, // GifFile.OptimizationMode.NONE
+      0x80FF0000, // GifFile.OptimizationMode.STICKER_PREVIEW
+      0x8000FF00, // GifFile.OptimizationMode.EMOJI
+      0x800000FF  // GifFile.OptimizationMode.EMOJI_PREVIEW
+    } : null;
+  }
+
+  @SuppressWarnings("deprecation")
   public void draw (Canvas c) {
     if (file == null) {
       return;
@@ -748,18 +797,24 @@ public class GifReceiver implements GifWatcher, Runnable, Receiver {
       boolean isFirstFrame = false;
       synchronized (gif.getBusyList()) {
         if (gif.hasBitmap()) {
-          final boolean inBatch = BitwiseUtils.hasFlag(drawBatchFlags, DRAW_BATCH_STARTED);
+          if (Config.DEBUG_GIF_OPTIMIZATION_MODE) {
+            c.drawRect(drawRegion, Paints.fillingPaint(debugOptimizationColors[file.getOptimizationMode()]));
+          }
+          final boolean inBatch = isInDrawBatch();
           if (!inBatch || !BitwiseUtils.hasFlag(drawBatchFlags, DRAW_BATCH_DRAWN)) {
             gif.applyNext();
             if (inBatch) {
               drawBatchFlags |= DRAW_BATCH_DRAWN;
             }
           }
-          final int alpha = (int) (255f * MathUtils.clamp(this.alpha));
-          Paint bitmapPaint = Paints.getBitmapPaint();
-          int restoreAlpha = bitmapPaint.getAlpha();
-          if (alpha != restoreAlpha) {
-            bitmapPaint.setAlpha(alpha);
+          float alpha = MathUtils.clamp(this.alpha);
+          Paint paint;
+          if (porterDuffColorIsId && porterDuffColor == ColorId.NONE) {
+            paint = Paints.bitmapPaint(alpha);
+          } else if (porterDuffColorIsId) {
+            paint = PorterDuffPaint.get(porterDuffColor, porterDuffAlpha * alpha);
+          } else {
+            paint = Paints.getPorterDuffPaint(ColorUtils.alphaColor(porterDuffAlpha * alpha, porterDuffColor));
           }
           int scaleType = file.getScaleType();
           GifState.Frame frame = gif.getDrawFrame(!inBatch);
@@ -772,12 +827,12 @@ public class GifReceiver implements GifWatcher, Runnable, Receiver {
             } else {
               restoreToCount = -1;
             }
-            c.drawRoundRect(croppedClipRegion, radius, radius, shaderPaint(frame.bitmap, bitmapPaint.getAlpha()));
+            c.drawRoundRect(croppedClipRegion, radius, radius, shaderPaint(frame.bitmap, paint.getAlpha()));
             if (clip) {
               Views.restore(c, restoreToCount);
             }
           } else if (scaleType != 0) {
-            c.save();
+            final int restoreToCount = Views.save(c);
             c.clipRect(drawRegion);
 
             if (drawRegion.left != 0 || drawRegion.top != 0) {
@@ -796,18 +851,18 @@ public class GifReceiver implements GifWatcher, Runnable, Receiver {
             }
 
             c.concat(bitmapMatrix);
-            c.drawBitmap(frame.bitmap, 0f, 0f, bitmapPaint);
+            c.drawBitmap(frame.bitmap, 0f, 0f, paint);
 
-            c.restore();
+            Views.restore(c, restoreToCount);
           } else {
             Rect rect = Paints.getRect();
             rect.set((int) bitmapRect.left, (int) bitmapRect.top, (int) bitmapRect.right, (int) bitmapRect.bottom);
-            c.drawBitmap(frame.bitmap, rect, drawRegion, bitmapPaint);
-          }
-          if (alpha != restoreAlpha) {
-            bitmapPaint.setAlpha(restoreAlpha);
+            c.drawBitmap(frame.bitmap, rect, drawRegion, paint);
           }
           isFirstFrame = frame.no == 0;
+          if (Config.DEBUG_GIF_OPTIMIZATION_MODE) {
+            c.drawText("" + file.getRequestedSize(), (int) drawRegion.left, (int) drawRegion.top + Screen.dp(16), Paints.robotoStyleProvider(12f).getFakeBoldPaint());
+          }
         }
       }
       if (isFirstFrame) {

@@ -29,9 +29,10 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.UiThread;
 
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.drinkmore.Tracer;
+import org.jetbrains.annotations.NotNull;
 import org.thunderdog.challegram.BuildConfig;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
@@ -40,17 +41,18 @@ import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Background;
 import org.thunderdog.challegram.core.BaseThread;
+import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.core.WatchDog;
 import org.thunderdog.challegram.core.WatchDogContext;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.player.AudioController;
 import org.thunderdog.challegram.player.TGPlayerController;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.util.AppBuildInfo;
 import org.thunderdog.challegram.util.Crash;
 import org.thunderdog.challegram.util.DeviceStorageError;
-import org.thunderdog.challegram.util.TokenRetriever;
 
 import java.io.File;
 import java.io.IOException;
@@ -85,8 +87,9 @@ import me.vkryl.core.lambda.Filter;
 import me.vkryl.core.lambda.RunnableBool;
 import me.vkryl.core.lambda.RunnableData;
 import me.vkryl.core.util.FilteredIterator;
-import me.vkryl.td.JSON;
-import me.vkryl.td.Td;
+import tgx.bridge.TokenRetrieverListener;
+import tgx.td.JSON;
+import tgx.td.Td;
 
 public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
   // Util
@@ -98,7 +101,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
 
   public static boolean makeSync (Context context, int accountId, int cause, long causePushId, boolean sync, long timeout) {
     final long ms = SystemClock.uptimeMillis();
-    UI.initApp(context);
+    AppContext.init(context);
     final long taskId = causePushId == 0 ? Settings.instance().newPushId() : causePushId;
     final AtomicBoolean success = sync ? new AtomicBoolean(false) : null;
     final CountDownLatch latch = sync ? new CountDownLatch(1) : null;
@@ -134,10 +137,21 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
     }
   }
 
-  public static final int EXTERNAL_ACTION_MARK_AS_HIDDEN = 0;
-  public static final int EXTERNAL_ACTION_MARK_ALL_AS_HIDDEN = 1;
-  public static final int EXTERNAL_ACTION_MARK_AS_READ = 2;
-  public static final int EXTERNAL_ACTION_MUTE = 3;
+  @Retention(RetentionPolicy.SOURCE)
+  @IntDef({
+    ExternalAction.MARK_AS_HIDDEN,
+    ExternalAction.MARK_ALL_AS_HIDDEN,
+    ExternalAction.MARK_AS_READ,
+    ExternalAction.MUTE,
+    ExternalAction.UNMUTE
+  })
+  public @interface ExternalAction {
+    int MARK_AS_HIDDEN = 0,
+      MARK_ALL_AS_HIDDEN = 1,
+      MARK_AS_READ = 2,
+      MUTE = 3,
+      UNMUTE = 4;
+  }
 
   private interface NotificationTask {
     void onPerformTask (Tdlib tdlib, Runnable onDone);
@@ -145,7 +159,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
 
   private static void performSyncTask (Context context, int accountId, String tag, @NonNull NotificationTask task, @Nullable Filter<TdlibAccount> filter) {
     long startTimeMs = SystemClock.uptimeMillis();
-    UI.initApp(context);
+    AppContext.init(context);
     TdlibManager manager = TdlibManager.instanceForAccountId(accountId);
     manager.runWithLatch(latch -> {
       Runnable after = () -> {
@@ -174,17 +188,20 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
     performSyncTask(context, extras.accountId, "external:" + action, (tdlib, onDone) -> {
       tdlib.incrementNotificationReferenceCount();
       switch (action) {
-        case EXTERNAL_ACTION_MARK_AS_HIDDEN:
+        case ExternalAction.MARK_AS_HIDDEN:
           tdlib.notifications().onHide(extras);
           break;
-        case EXTERNAL_ACTION_MARK_ALL_AS_HIDDEN:
+        case ExternalAction.MARK_ALL_AS_HIDDEN:
           tdlib.notifications().onHideAll(extras.category);
           break;
-        case EXTERNAL_ACTION_MARK_AS_READ:
+        case ExternalAction.MARK_AS_READ:
           extras.read(tdlib);
           break;
-        case EXTERNAL_ACTION_MUTE:
+        case ExternalAction.MUTE:
           extras.mute(tdlib);
+          break;
+        case ExternalAction.UNMUTE:
+          extras.unmute(tdlib);
           break;
       }
       tdlib.notifications().releaseTdlibReference(onDone);
@@ -197,7 +214,18 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
     if (StringUtils.isEmpty(text))
       return;
     performSyncTask(context, extras.accountId, "reply", (tdlib, onDone) -> {
-      tdlib.sendMessage(extras.chatId, extras.messageThreadId, extras.needReply ? extras.messageIds[extras.messageIds.length - 1] : 0, Td.newSendOptions(), new TdApi.InputMessageText(new TdApi.FormattedText(text.toString(), null), false, false), sendingMessage -> {
+      TdApi.InputMessageReplyTo replyTo;
+      if (extras.needReply) {
+        long messageId = extras.messageIds[extras.messageIds.length - 1];
+        if (extras.forceExternalReply) {
+          replyTo = new TdApi.InputMessageReplyToExternalMessage(extras.chatId, messageId, null, 0, "");
+        } else {
+          replyTo = new TdApi.InputMessageReplyToMessage(messageId, null, 0, "");
+        }
+      } else {
+        replyTo = null;
+      }
+      tdlib.sendMessage(extras.chatId, extras.topicId, replyTo, Td.newSendOptions(), new TdApi.InputMessageText(new TdApi.FormattedText(text.toString(), null), null, false), sendingMessage -> {
         if (sendingMessage == null) {
           UI.showToast(R.string.NotificationReplyFailed, Toast.LENGTH_SHORT);
           if (onDone != null) {
@@ -286,7 +314,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
   private final CallManager calls = new CallManager(this);
   private final Settings.ProxyChangeListener proxyChangeListener = new Settings.ProxyChangeListener() {
     @Override
-    public void onProxyConfigurationChanged (int proxyId, @Nullable TdApi.InternalLinkTypeProxy proxy, String description, boolean isCurrent, boolean isNewAdd) {
+    public void onProxyConfigurationChanged (int proxyId, @Nullable TdApi.Proxy proxy, String description, boolean isCurrent, boolean isNewAdd) {
       if (isCurrent) {
         for (TdlibAccount account : TdlibManager.this) {
           if (account.tdlib != null) {
@@ -315,21 +343,20 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
 
   private @Nullable String tdlibCommitHash, tdlibVersion;
 
+  private final DateManager dateManager = new DateManager(this);
+
   private TdlibManager (int firstInstanceId, boolean forceService) {
-    Client.setFatalErrorHandler((client, errorMessage, isLayerError) -> {
-      final int accountId = findAccountIdByClient(client);
-      Crash.Builder b = new Crash.Builder()
-        .accountId(accountId)
-        .message(StringUtils.isEmpty(errorMessage) ? "empty" : errorMessage)
-        .flags(Crash.Flags.SOURCE_TDLIB | Crash.Flags.SAVE_APPLICATION_LOG_EVENT);
-      Settings.instance().storeCrash(b);
-      if (isLayerError) {
-        Tracer.onTdlibLostPromiseError(errorMessage);
+    Client.setLogMessageHandler(0, (verbosityLevel, errorMessage) -> {
+      if (verbosityLevel == 0) {
+        Crash.Builder b = new Crash.Builder()
+          .message(StringUtils.isEmpty(errorMessage) ? "empty" : errorMessage)
+          .flags(Crash.Flags.SOURCE_TDLIB | Crash.Flags.SAVE_APPLICATION_LOG_EVENT);
+        Settings.instance().storeCrash(b);
       }
     });
 
     this.languageDatabasePath = getLanguageDatabasePath();
-    this.watchDog = new WatchDogContext(UI.getAppContext(), this);
+    this.watchDog = new WatchDogContext(AppContext.get(), this);
 
     this.player = new TGPlayerController(this);
     this.audio = new AudioController(this, player);
@@ -347,6 +374,10 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
 
     checkDeviceToken();
     saveCrashes();
+  }
+
+  public DateManager dateManager () {
+    return dateManager;
   }
 
   void setTdlibCommitHash (@NonNull String commitHash) {
@@ -393,7 +424,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
   @Override
   @UiThread
   public void onUiStateChanged (int newState) {
-    boolean hasUi = newState != UI.STATE_DESTROYED && newState != UI.STATE_UNKNOWN;
+    boolean hasUi = newState != UI.State.DESTROYED && newState != UI.State.UNKNOWN;
     if (this.hasUi != hasUi) {
       this.hasUi = hasUi;
       for (TdlibAccount account : accounts) {
@@ -425,8 +456,10 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
   }
 
   public static void setTestLabConfig () {
-    Client.execute(new TdApi.SetLogVerbosityLevel(5));
-    Client.execute(new TdApi.SetLogStream(new TdApi.LogStreamDefault()));
+    try {
+      Client.execute(new TdApi.SetLogVerbosityLevel(5));
+      Client.execute(new TdApi.SetLogStream(new TdApi.LogStreamDefault()));
+    } catch (Client.ExecutionException ignored) { }
     Log.setLogLevel(Log.LEVEL_VERBOSE);
   }
 
@@ -582,10 +615,13 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
     return getTotalUnreadBadgeCounter(TdlibAccount.NO_ID);
   }
 
-  public void resetBadge () {
+  public void resetBadge (boolean settingsChanged) {
     synchronized (counterLock) {
       updateBadgeInternal(true, false);
       dispatchUnreadCount(true);
+    }
+    if (settingsChanged) {
+      global.notifyBadgeSettingsChanged();
     }
   }
 
@@ -599,7 +635,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
         protected void process (Message msg) {
           int count = msg.arg1;
           try {
-            ShortcutBadger.applyCountOrThrow(UI.getAppContext(), count);
+            ShortcutBadger.applyCountOrThrow(AppContext.get(), count);
             logged = false;
           } catch (Throwable t) {
             if (!logged) {
@@ -641,6 +677,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
   private static final int ACTION_DISPATCH_TOTAL_UNREAD_COUNT = 6;
   private static final int ACTION_RESET_UNREAD_COUNTERS = 7;
   private static final int ACTION_DISPATCH_NETWORK_DISPLAY_STATUS_CHANGED = 8;
+  private static final int ACTION_DISPATCH_ACCOUNT_EMOJI_STATUS = 9;
 
   private void handleUiMessage (Message msg) {
     switch (msg.what) {
@@ -664,6 +701,10 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
         onAccountProfilePhotoChanged(account(msg.arg1), msg.arg2 == 1,msg.arg1 == currentAccount.id);
         break;
       }
+      case ACTION_DISPATCH_ACCOUNT_EMOJI_STATUS: {
+        onAccountProfileEmojiStatusChanged(account(msg.arg1), msg.arg1 == currentAccount.id);
+        break;
+      }
       case ACTION_DISPATCH_TOTAL_UNREAD_COUNT:
       case ACTION_RESET_UNREAD_COUNTERS: {
         global().notifyTotalCounterChanged((TdApi.ChatList) msg.obj, msg.what == ACTION_RESET_UNREAD_COUNTERS);
@@ -676,7 +717,14 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
   @Override
   public Iterator<TdlibAccount> iterator () {
     List<TdlibAccount> accounts = new ArrayList<>(this.accounts);
-    Collections.sort(accounts, (a, b) -> (a == currentAccount) != (b == currentAccount) ? Boolean.compare(b == currentAccount, a == currentAccount) : a.compareTo(b));
+    Collections.sort(accounts, (a, b) -> {
+      boolean aCurrent = a == currentAccount;
+      boolean bCurrent = b == currentAccount;
+      if (aCurrent != bCurrent) {
+        return Boolean.compare(bCurrent, aCurrent);
+      }
+      return a.compareTo(b);
+    });
     return new FilteredIterator<>(accounts.iterator(), account -> !account.isUnauthorized() && account.tdlibInstanceMode() != Tdlib.Mode.SERVICE);
   }
 
@@ -1033,10 +1081,6 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
     return new AccountConfig(currentAccount, accounts, preferredAccountId);
   }
 
-  private int binlogSize () {
-    return binlogSize(accounts.size());
-  }
-
   public static int binlogSize (int accountsNum) {
     return BINLOG_PREFIX_SIZE + accountsNum * TdlibAccount.SIZE_PER_ENTRY;
   }
@@ -1045,7 +1089,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
     int saveCount = 0;
     final int accountNum = accounts.size();
 
-    final int binlogSize = binlogSize();
+    final int binlogSize = binlogSize(accountNum);
     final long currentLen = r.length();
 
     final boolean canOptimize;
@@ -1138,6 +1182,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
   public static final String MODE_RW = "rw";
   public static final String MODE_R = "r";
 
+  @SuppressWarnings("try")
   private synchronized void saveAccountConfig (int mode, int accountId) {
     long ms = SystemClock.uptimeMillis();
     File file = getAccountConfigFile();
@@ -1292,6 +1337,10 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
     handler.sendMessage(Message.obtain(handler, ACTION_DISPATCH_ACCOUNT_PROFILE_PHOTO, accountId, big ? 1 : 0));
   }
 
+  void onUpdateEmojiStatus (int accountId, boolean isThumbnail) {
+    handler.sendMessage(Message.obtain(handler, ACTION_DISPATCH_ACCOUNT_EMOJI_STATUS, accountId, isThumbnail ? 1 : 0));
+  }
+
   public TdlibAccount currentAccount () {
     return currentAccount;
   }
@@ -1322,7 +1371,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
     return accounts.get(accountId);
   }
 
-  public int accountIdForUserId (int userId, int startIndex) {
+  public int accountIdForUserId (long userId, int startIndex) {
     for (int i = startIndex; i < accounts.size(); i++) {
       if (accounts.get(i).getKnownUserId() == userId) {
         return i;
@@ -1359,7 +1408,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
         continue;
       long knownUserId = account.getKnownUserId();
       if (knownUserId == 0 || Arrays.binarySearch(excludeUserIds, knownUserId) < 0) {
-        Log.i(Log.TAG_FCM, "Unregistered accountId:%d userId:%d", account.id, knownUserId);
+        TDLib.Tag.notifications("Unregistered accountId:%d userId:%d", account.id, knownUserId);
         setDeviceRegistered(account.id, false);
         // TODO? account.tdlib().checkDeviceToken();
       }
@@ -1541,7 +1590,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
     return failureCount == 0;
   }
 
-  public void processPushOrSync (long pushId, int accountId, String payload, @Nullable Runnable after) {
+  public void processPushOrSync (long pushId, int accountId, String payload,  @Nullable Runnable after) {
     performTdlibTask(pushId, accountId, (account, onDone) -> account.tdlib().processPushOrSync(pushId, payload, onDone), Config.MAX_RUNNING_TDLIBS, null, after);
   }
 
@@ -1669,9 +1718,10 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
       return;
     }
     setTokenState(TokenState.INITIALIZING);
-    TdlibNotificationUtils.getDeviceToken(retryCount, new TokenRetriever.RegisterCallback() {
+    TdlibNotificationUtils.getDeviceToken(AppContext.get(), retryCount, new TokenRetrieverListener() {
+
       @Override
-      public void onSuccess (@NonNull TdApi.DeviceToken token) {
+      public void onTokenRetrievalSuccess (TdApi.@NotNull DeviceToken token) {
         setDeviceToken(token);
         if (after != null) {
           after.runWithBool(true);
@@ -1679,8 +1729,8 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
       }
 
       @Override
-      public void onError (@NonNull String errorKey, @Nullable Throwable e) {
-        Log.e(Log.TAG_FCM, "Failed to retrieve push token", e);
+      public void onTokenRetrievalError (@NotNull String errorKey, @org.jetbrains.annotations.Nullable Throwable e) {
+        TDLib.Tag.notifications("Failed to retrieve push token", e);
         setTokenState(TokenState.ERROR, errorKey, e);
         if (after != null) {
           after.runWithBool(false);
@@ -1763,21 +1813,24 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
     return device;
   }
 
+  private static final String JOB_TYPE_EVENT_REPORT = "event";
+  private static final String JOB_TYPE_CRASH_REPORT = "crash";
+
   private void reportEvent (String type, Map<String, Object> event) {
     AppBuildInfo appBuildInfo = Settings.instance().getCurrentBuildInformation();
 
     event.put("sdk", Build.VERSION.SDK_INT);
     event.put("app", appBuildInfo.toMap());
     event.put("cpu", U.getCpuArchitecture());
-    event.put("package_id", UI.getAppContext().getPackageName());
+    event.put("package_id", AppContext.get().getPackageName());
     event.put("device", deviceInformation());
     event.put("fingerprint", U.getApkFingerprint("SHA1"));
     event.put("device_id", Settings.instance().crashDeviceId());
 
     Tdlib tdlib = serviceTdlib();
-    tdlib.incrementJobReferenceCount();
-    tdlib.client().send(new TdApi.SaveApplicationLogEvent(type, appBuildInfo.maxCommitDate(), JSON.toObject(event)), result -> {
-      tdlib.decrementJobReferenceCount();
+    tdlib.incrementJobReferenceCount(JOB_TYPE_EVENT_REPORT);
+    tdlib.send(new TdApi.SaveApplicationLogEvent(type, appBuildInfo.maxCommitDate(), JSON.toObject(event)), (ok, error) -> {
+      tdlib.decrementJobReferenceCount(JOB_TYPE_EVENT_REPORT);
     });
   }
 
@@ -1795,7 +1848,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
             if (pendingRequests.get() != 0)
               return;
           }
-          tdlib.decrementJobReferenceCount();
+          tdlib.decrementJobReferenceCount(JOB_TYPE_CRASH_REPORT);
         };
         boolean isEmpty = true;
         for (Crash crash : savingCrashes) {
@@ -1803,22 +1856,17 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
           if (saveFunction != null) {
             if (isEmpty) {
               isEmpty = false;
-              tdlib.incrementJobReferenceCount();
+              tdlib.incrementJobReferenceCount(JOB_TYPE_CRASH_REPORT);
             }
             synchronized (pendingRequests) {
               pendingRequests.incrementAndGet();
             }
             TDLib.Tag.td_init("Reporting crash %d: %s", crash.id, saveFunction);
-            tdlib.send(saveFunction, result -> {
-              switch (result.getConstructor()) {
-                case TdApi.Ok.CONSTRUCTOR: {
-                  Settings.instance().markCrashAsSaved(crash);
-                  break;
-                }
-                case TdApi.Error.CONSTRUCTOR: {
-                  TDLib.Tag.td_init("Can't report crash %d: %s", crash.id, TD.toErrorString(result));
-                  break;
-                }
+            tdlib.send(saveFunction, (ok, error) -> {
+              if (error != null) {
+                TDLib.Tag.td_init("Can't report crash %d: %s", crash.id, TD.toErrorString(error));
+              } else {
+                Settings.instance().markCrashAsSaved(crash);
               }
               synchronized (pendingRequests) {
                 pendingRequests.decrementAndGet();
@@ -1859,7 +1907,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
       activeAccounts.remove(position);
     }
     global().notifyAccountAddedOrRemoved(account, position, needAdd);
-    resetBadge();
+    resetBadge(false);
     increaseModCount(account);
     return true;
   }
@@ -2014,6 +2062,12 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
     global().notifyAccountProfilePhotoChanged(account, big, isCurrent);
   }
 
+  private void onAccountProfileEmojiStatusChanged (TdlibAccount account, boolean isCurrent) {
+    if (account.isUnauthorized())
+      return;
+    global().notifyAccountProfileEmojiStatusChanged(account, isCurrent);
+  }
+
   // Event managements
 
   @NonNull
@@ -2022,7 +2076,12 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
   }
 
   @NonNull
-  long[] availableUserIds (@Tdlib.Mode int instanceMode) {
+  Set<Long> availableUserIdsSet (boolean isDebug) {
+    return availableUserIdsSet(isDebug ? Tdlib.Mode.DEBUG : Tdlib.Mode.NORMAL);
+  }
+
+  @NonNull
+  Set<Long> availableUserIdsSet (@Tdlib.Mode int instanceMode) {
     SortedSet<Long> userIds = new TreeSet<>();
     for (TdlibAccount account : accounts) {
       if (!account.isUnauthorized() && account.tdlibInstanceMode() == instanceMode) {
@@ -2031,6 +2090,12 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
           userIds.add(knownUserId);
       }
     }
+    return userIds;
+  }
+
+  @NonNull
+  long[] availableUserIds (@Tdlib.Mode int instanceMode) {
+    Set<Long> userIds = availableUserIdsSet(instanceMode);
     if (userIds.isEmpty())
       return new long[0];
     long[] array = new long[userIds.size()];
@@ -2087,7 +2152,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
   }
 
   public static File getAccountConfigFile () {
-    File parent = UI.getAppContext().getFilesDir();
+    File parent = AppContext.get().getFilesDir();
     return new File(parent, "tdlib_accounts.bin");
   }
 
@@ -2132,7 +2197,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
   public static String getSystemLanguageCode () {
     String languageCode = "en-US";
     try {
-      languageCode = LocaleUtils.toBcp47Language(UI.getConfigurationLocale());
+      languageCode = LocaleUtils.toBcp47Language(Lang.getConfigurationLocale());
     } catch (Throwable ignored) { }
     return languageCode;
   }
@@ -2231,8 +2296,10 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
 
   private static long deleteLogFiles (int mode) {
     if (UI.TEST_MODE != UI.TEST_MODE_AUTO) {
-      Client.execute(new TdApi.SetLogVerbosityLevel(0));
-      Client.execute(new TdApi.SetLogStream(new TdApi.LogStreamEmpty()));
+      try {
+        Client.execute(new TdApi.SetLogVerbosityLevel(0));
+        Client.execute(new TdApi.SetLogStream(new TdApi.LogStreamEmpty()));
+      } catch (Client.ExecutionException ignored) { }
     }
 
     long removedSize;
@@ -2285,7 +2352,12 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
   }
 
   public static String getTdlibDirectory (int accountId, boolean allowExternal, boolean createIfNotFound) {
-    File file = allowExternal ? UI.getAppContext().getExternalFilesDir(null) : null;
+    File file;
+    if (allowExternal) {
+      file = AppContext.get().getExternalFilesDir(null);
+    } else {
+      file = null;
+    }
     if (file != null) {
       try {
         File externalStorageDirectory = Environment.getExternalStorageDirectory();
@@ -2348,8 +2420,12 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
 
   // Lang pack
 
+  public static File getLanguageDatabaseDir () {
+    return new File(UI.getContext().getFilesDir(), "langpack");
+  }
+
   public static String getLanguageDatabasePath () {
-    File languageDatabaseDir = new File(UI.getContext().getFilesDir(), "langpack");
+    File languageDatabaseDir = getLanguageDatabaseDir();
     if (!FileUtils.createDirectory(languageDatabaseDir)) {
       throw new IllegalStateException("Cannot create working directory: " + languageDatabaseDir.getPath());
     }
@@ -2367,7 +2443,7 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
     synchronized (wakeLockSync) {
       if (wakeLock == null) {
         try {
-          PowerManager powerManager = (PowerManager) UI.getAppContext().getSystemService(Context.POWER_SERVICE);
+          PowerManager powerManager = (PowerManager) AppContext.get().getSystemService(Context.POWER_SERVICE);
           if (powerManager == null)
             return false;
           wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "tgx:main");
@@ -2441,21 +2517,25 @@ public class TdlibManager implements Iterable<TdlibAccount>, UI.StateListener {
   public static TdApi.LanguagePackStringValue getString (String languageDatabasePath, String key, @NonNull String languagePackId) {
     if (StringUtils.isEmpty(key))
       return null;
-    final TdApi.Object result = Client.execute(new TdApi.GetLanguagePackString(languageDatabasePath, BuildConfig.LANGUAGE_PACK, languagePackId, key));
-    if (result == null)
+    final TdApi.LanguagePackStringValue value;
+    try {
+      value = Client.execute(new TdApi.GetLanguagePackString(languageDatabasePath, BuildConfig.LANGUAGE_PACK, languagePackId, key));
+    } catch (Client.ExecutionException error) {
+      if (error.error.code != 404) {
+        Log.e("getString %s error:%s, languagePackId:%s", key, TD.toErrorString(error.error), languagePackId);
+      }
       return null;
-    switch (result.getConstructor()) {
+    }
+    switch (value.getConstructor()) {
       case TdApi.LanguagePackStringValueOrdinary.CONSTRUCTOR:
       case TdApi.LanguagePackStringValuePluralized.CONSTRUCTOR:
-        return (TdApi.LanguagePackStringValue) result;
+        return value;
       case TdApi.LanguagePackStringValueDeleted.CONSTRUCTOR:
         return null;
-      case TdApi.Error.CONSTRUCTOR:
-        if (((TdApi.Error) result).code != 404)
-          Log.e("getString %s error:%s, languagePackId:%s", key, TD.toErrorString(result), languagePackId);
-        return null;
+      default:
+        Td.assertLanguagePackStringValue_11536986();
+        throw Td.unsupported(value);
     }
-    return null;
   }
 
   private TdApi.LanguagePackStringValue getString (String key, @NonNull String languagePackId) {

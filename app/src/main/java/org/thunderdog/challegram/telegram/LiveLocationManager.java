@@ -26,7 +26,7 @@ import android.text.TextUtils;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
@@ -35,13 +35,14 @@ import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.helper.LocationHelper;
 import org.thunderdog.challegram.service.LiveLocationService;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import me.vkryl.core.reference.ReferenceList;
-import me.vkryl.td.ChatId;
+import tgx.td.ChatId;
 
 public class LiveLocationManager implements LocationHelper.LocationChangeListener, UI.StateListener, ReferenceList.FullnessListener {
   private static class UiHandler extends Handler {
@@ -97,8 +98,8 @@ public class LiveLocationManager implements LocationHelper.LocationChangeListene
   public LiveLocationManager (TdlibManager context) {
     // this.context = context;
     this.handler = new UiHandler(this);
-    this.helper = new LocationHelper(UI.getAppContext(), this, false, true);
-    this.isResumed = UI.getUiState() == UI.STATE_RESUMED;
+    this.helper = new LocationHelper(AppContext.get(), this, false, true);
+    this.isResumed = UI.getUiState() == UI.State.RESUMED;
     UI.addStateListener(this);
   }
 
@@ -139,8 +140,8 @@ public class LiveLocationManager implements LocationHelper.LocationChangeListene
         if (msg.isOutgoing) {
           msg = messages.get(1);
         }
-        TdApi.Location l1 = myLocation != null ? myLocation : ((TdApi.MessageLocation) outputMessage.content).location;
-        TdApi.Location l2 = ((TdApi.MessageLocation) msg.content).location;
+        TdApi.Location l1 = myLocation != null ? myLocation : ((TdApi.MessageLiveLocation) outputMessage.content).location.location;
+        TdApi.Location l2 = ((TdApi.MessageLiveLocation) msg.content).location.location;
         float distance = U.distanceBetween(l1.latitude, l1.longitude, l2.latitude, l2.longitude);
         return Lang.lowercase(Lang.shortDistanceToPerson(distance));
       }
@@ -272,7 +273,7 @@ public class LiveLocationManager implements LocationHelper.LocationChangeListene
           serviceLaunchCancellationSignal.cancel();
           serviceLaunchCancellationSignal = null;
         }
-        Intent serviceIntent = new Intent(UI.getAppContext(), LiveLocationService.class);
+        Intent serviceIntent = new Intent(AppContext.get(), LiveLocationService.class);
         if (isFull) {
           serviceLaunchCancellationSignal = new CancellationSignal();
           UI.startService(serviceIntent, true, true, serviceLaunchCancellationSignal);
@@ -283,7 +284,7 @@ public class LiveLocationManager implements LocationHelper.LocationChangeListene
           }
           dispatchLocation(location, heading);
         } else {
-          UI.getAppContext().stopService(serviceIntent);
+          AppContext.get().stopService(serviceIntent);
           cancelLocationWorker();
           dispatchLocation(null, 0);
         }
@@ -364,7 +365,7 @@ public class LiveLocationManager implements LocationHelper.LocationChangeListene
   @Override
   public void onUiStateChanged (int newState) {
     synchronized (this) {
-      boolean isResumed = newState == UI.STATE_RESUMED;
+      boolean isResumed = newState == UI.State.RESUMED;
       if (this.isResumed != isResumed) {
         this.isResumed = isResumed;
         rescheduleLocationWorker(); // changes timeout
@@ -383,6 +384,7 @@ public class LiveLocationManager implements LocationHelper.LocationChangeListene
   private static final int ACTION_DISPATCH_ERROR_STATE = 6;
   private static final int ACTION_REQUEST_LOCATION_UPDATE = 7;
 
+  @SuppressWarnings("unchecked")
   private void handleUiMessage (Message msg) {
     switch (msg.what) {
       case ACTION_PERFORM_WORKER: {
@@ -412,7 +414,6 @@ public class LiveLocationManager implements LocationHelper.LocationChangeListene
       case ACTION_DISPATCH_LIST_CHANGED: {
         Object[] data = (Object[]) msg.obj;
         for (Listener listener : listeners) {
-          //noinspection unchecked
           listener.onLiveLocationsListChanged((Tdlib) data[0], (ArrayList<TdApi.Message>) data[1]);
         }
         data[0] = null;

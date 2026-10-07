@@ -14,13 +14,15 @@
  */
 package org.thunderdog.challegram.component.chat;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.os.Build;
 import android.view.View;
 
+import androidx.annotation.RequiresApi;
+
 import org.thunderdog.challegram.data.TGMessage;
+import org.thunderdog.challegram.data.TGMessageVideo;
 
 public class MessageOverlayView extends View {
   private MessageView boundView;
@@ -30,7 +32,7 @@ public class MessageOverlayView extends View {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       setOutlineProvider(new android.view.ViewOutlineProvider() {
         @Override
-        @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+        @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
         public void getOutline (View view, android.graphics.Outline outline) {
           outline.setEmpty();
         }
@@ -51,7 +53,13 @@ public class MessageOverlayView extends View {
       if (msg != null) {
         msg.buildLayout(getMeasuredWidth());
       }
-      heightMeasureSpec = MeasureSpec.makeMeasureSpec(msg != null ? msg.getHeight() : 0, MeasureSpec.EXACTLY);
+
+      int height = msg != null ? msg.getHeight() : 0;
+      if (msg instanceof TGMessageVideo) {
+        height = ((TGMessageVideo) msg).getVideoMessageTargetHeight(true);
+      }
+
+      heightMeasureSpec = MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY);
       setMeasuredDimension(widthMeasureSpec, heightMeasureSpec);
     }
   }

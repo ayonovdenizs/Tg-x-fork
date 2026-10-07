@@ -29,8 +29,7 @@ import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.TdApi;
-import org.thunderdog.challegram.BaseActivity;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.sticker.StickerSmallView;
 import org.thunderdog.challegram.component.sticker.TGStickerObj;
@@ -53,6 +52,7 @@ import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.telegram.TGLegacyManager;
 import org.thunderdog.challegram.telegram.TdlibDelegate;
 import org.thunderdog.challegram.telegram.TdlibUi;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeId;
 import org.thunderdog.challegram.theme.ThemeListenerList;
@@ -65,6 +65,7 @@ import org.thunderdog.challegram.ui.SimpleMediaViewController;
 import org.thunderdog.challegram.util.CancellableResultHandler;
 import org.thunderdog.challegram.v.NewFlowLayoutManager;
 import org.thunderdog.challegram.widget.BaseView;
+import org.thunderdog.challegram.widget.RootFrameLayout;
 import org.thunderdog.challegram.widget.ShadowView;
 
 import java.util.ArrayList;
@@ -76,9 +77,9 @@ import me.vkryl.android.widget.FrameLayoutFix;
 import me.vkryl.core.ColorUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
-import me.vkryl.td.ChatId;
+import tgx.td.ChatId;
 
-public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickListener, StickerSmallView.StickerMovementCallback, InlineResultsAdapter.HeightProvider, FactorAnimator.Target, View.OnLongClickListener, TGLegacyManager.EmojiLoadListener, BaseView.CustomControllerProvider {
+public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickListener, StickerSmallView.StickerMovementCallback, InlineResultsAdapter.HeightProvider, FactorAnimator.Target, View.OnLongClickListener, TGLegacyManager.EmojiLoadListener, BaseView.CustomControllerProvider, RootFrameLayout.MarginModifier {
   private RecyclerView recyclerView;
   private ShadowView shadowView;
   private GridLayoutManager gridManager;
@@ -93,7 +94,6 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
 
   public interface OffsetProvider {
     int provideOffset (InlineResultsWrap v);
-    int provideParentHeight (InlineResultsWrap v);
   }
 
   private OffsetProvider offsetProvider;
@@ -120,6 +120,10 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
 
   public InlineResultsWrap (Context context) {
     super(context);
+
+    setClipChildren(true);
+    setClipToPadding(true);
+    setLayoutParams(new LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
     gridManager = new GridLayoutManager(context, spanCount = calculateSpanCount(Screen.currentWidth(), Screen.currentHeight()));
     gridManager.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
@@ -180,6 +184,7 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
                 break;
               }
             }
+            break;
           }
           case MotionEvent.ACTION_UP:
           case MotionEvent.ACTION_CANCEL: {
@@ -201,7 +206,7 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
       public void draw (Canvas c) {
         int top = detectRecyclerTopEdge();
         int width = getMeasuredWidth();
-        c.drawRect(0, top, width, getMeasuredHeight(), Paints.fillingPaint(adapter.useDarkMode() ? Theme.getColor(R.id.theme_color_filling, ThemeId.NIGHT_BLACK) : Theme.fillingColor()));
+        c.drawRect(0, top, width, getMeasuredHeight(), Paints.fillingPaint(adapter.useDarkMode() ? Theme.getColor(ColorId.filling, ThemeId.NIGHT_BLACK) : Theme.fillingColor()));
 
         super.draw(c);
       }
@@ -220,7 +225,26 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
     });
     recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
       @Override
+      public void onScrollStateChanged(@NonNull RecyclerView recyclerView, int newState) {
+        if (scrollCallback != null) {
+          scrollCallback.onScrollStateChanged(recyclerView, newState);
+        }
+      }
+
+      @Override
       public void onScrolled (RecyclerView recyclerView, int dx, int dy) {
+        /*View topView = recyclerView.getLayoutManager().findViewByPosition(0);
+        if (topView != null) {
+          Log.v("scroll: %d inset: %d %d " +
+            "margin: %d, shadow: %d %d " +
+              "items: %d root: %d top: %d expected: %d",
+            recyclerView.getLayoutManager().getDecoratedTop(topView), topOffset, bottomInset,
+            lastBottomMargin, shadowView.getLayoutParams().height, ShadowView.simpleBottomShadowHeight(),
+            measureItemsHeight(), rootView != null ? rootView.getMeasuredHeight() : 0, topView.getMeasuredHeight(), provideHeight());
+        }*/
+        if (scrollCallback != null) {
+          scrollCallback.onScrolled(recyclerView, dx, dy);
+        }
         checkLoadMore();
         if (lickView != null) {
           lickView.invalidate();
@@ -248,6 +272,10 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
 
   public boolean areItemsVisible () {
     return itemsVisible;
+  }
+
+  public RecyclerView getRecyclerView () {
+    return recyclerView;
   }
 
   public void setUseDarkMode (boolean useDarkMode) {
@@ -280,22 +308,22 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
       if (result instanceof InlineResultCommand) {
         return c instanceof MessagesController && ((MessagesController) c).canWriteMessages() && ((MessagesController) c).onCommandLongPressed((InlineResultCommand) result);
       } else if (result instanceof InlineResultHashtag) {
-        c.showOptions(Lang.getString(R.string.HashtagDeleteHint), new int[]{R.id.btn_delete, R.id.btn_cancel}, new String[]{Lang.getOK(), Lang.getString(R.string.Cancel)}, new int[]{ViewController.OPTION_COLOR_RED, ViewController.OPTION_COLOR_NORMAL}, new int[]{R.drawable.baseline_delete_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
+        c.showOptions(Lang.getString(R.string.HashtagDeleteHint), new int[]{R.id.btn_delete, R.id.btn_cancel}, new String[]{Lang.getOK(), Lang.getString(R.string.Cancel)}, new int[]{ViewController.OptionColor.RED, ViewController.OptionColor.NORMAL}, new int[]{R.drawable.baseline_delete_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
           if (id == R.id.btn_delete) {
             removeItem(result);
-            delegate.tdlib().client().send(new TdApi.RemoveRecentHashtag(((InlineResultHashtag) result).data().substring(1)), delegate.tdlib().okHandler());
+            delegate.tdlib().send(new TdApi.RemoveRecentHashtag(((InlineResultHashtag) result).data().substring(1)), delegate.tdlib().typedOkHandler());
           }
           return true;
         });
         return true;
       } else if (result instanceof InlineResultMention && ((InlineResultMention) result).isInlineBot()) {
-        c.showOptions(Lang.getString(R.string.BotDeleteHint), new int[] {R.id.btn_delete, R.id.btn_cancel}, new String[] {Lang.getOK(), Lang.getString(R.string.Cancel)}, new int[] {ViewController.OPTION_COLOR_RED, ViewController.OPTION_COLOR_NORMAL}, new int[] {R.drawable.baseline_delete_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
+        c.showOptions(Lang.getString(R.string.BotDeleteHint), new int[] {R.id.btn_delete, R.id.btn_cancel}, new String[] {Lang.getOK(), Lang.getString(R.string.Cancel)}, new int[] {ViewController.OptionColor.RED, ViewController.OptionColor.NORMAL}, new int[] {R.drawable.baseline_delete_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
           if (id == R.id.btn_delete) {
             removeItem(result);
             if (c instanceof MessagesController) {
               ((MessagesController) c).removeInlineBot(((InlineResultMention) result).getUserId());
             }
-            delegate.tdlib().client().send(new TdApi.RemoveTopChat(new TdApi.TopChatCategoryInlineBots(), ChatId.fromUserId(((InlineResultMention) result).getUserId())), delegate.tdlib().okHandler());
+            delegate.tdlib().send(new TdApi.RemoveTopChat(new TdApi.TopChatCategoryInlineBots(), ChatId.fromUserId(((InlineResultMention) result).getUserId())), delegate.tdlib().typedOkHandler());
           }
           return true;
         });
@@ -380,7 +408,7 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
     return getVisibility() != View.VISIBLE || getAlpha() == 0f || super.onInterceptTouchEvent(ev);
   }
 
-  private int detectRecyclerTopEdge () {
+  public int detectRecyclerTopEdge () {
     int top;
     LinearLayoutManager manager = (LinearLayoutManager) recyclerView.getLayoutManager();
     int i = manager.findFirstVisibleItemPosition();
@@ -428,6 +456,7 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
   }
 
   private LoadMoreCallback callback;
+  private RecyclerView.OnScrollListener scrollCallback;
   private TdlibDelegate delegate;
 
   public TdlibDelegate getTdlibDelegate () {
@@ -435,8 +464,14 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
   }
 
   public void showItems (@NonNull TdlibDelegate delegate, @Nullable ArrayList<InlineResult<?>> items, boolean needBackground, @Nullable LoadMoreCallback callback, boolean areHidden) {
+    showItems(delegate, items, needBackground, callback, null, this, areHidden);
+  }
+
+  public void showItems (@NonNull TdlibDelegate delegate, @Nullable ArrayList<InlineResult<?>> items, boolean needBackground, @Nullable LoadMoreCallback callback, @Nullable RecyclerView.OnScrollListener scrollCallback, @Nullable StickerSmallView.StickerMovementCallback stickerMovementCallback, boolean areHidden) {
     this.delegate = delegate;
     this.adapter.setTdlib(delegate.tdlib());
+    this.adapter.setStickerMovementCallback(stickerMovementCallback != null ? stickerMovementCallback : this);
+    this.scrollCallback = scrollCallback;
     if (items != null && !items.isEmpty()) {
       setBackgroundFactor(needBackground ? 1f : 0f, this.visibleFactor != 0f);
       setItems(items);
@@ -449,6 +484,12 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
   }
 
   public void addItems (TdlibDelegate delegate, @Nullable ArrayList<InlineResult<?>> items, @Nullable LoadMoreCallback callback) {
+    addItems(delegate, items, callback, null, this);
+  }
+
+  public void addItems (TdlibDelegate delegate, @Nullable ArrayList<InlineResult<?>> items, @Nullable LoadMoreCallback callback, @Nullable RecyclerView.OnScrollListener scrollCallback, @Nullable StickerSmallView.StickerMovementCallback stickerMovementCallback) {
+    this.adapter.setStickerMovementCallback(stickerMovementCallback != null ? stickerMovementCallback : this);
+    this.scrollCallback = scrollCallback;
     if (items != null && !items.isEmpty()) {
       addItems(delegate, items);
     }
@@ -459,7 +500,7 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
   private boolean animationNeeded;
   private float showFactor;
 
-  private float getVisibleFactor () {
+  public float getVisibleFactor () {
     return showFactor * (1f - hideFactor);
   }
 
@@ -515,6 +556,10 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
   private BoolAnimator hideAnimator;
 
   public void setHidden (boolean isHidden) {
+    setHidden(isHidden, true);
+  }
+
+  public void setHidden (boolean isHidden, boolean animated) {
     if (hideAnimator == null) {
       if (!isHidden) {
         return;
@@ -522,7 +567,7 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
       hideAnimator = new BoolAnimator(ANIMATOR_HIDE, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 180l);
     }
     calculateTranslateY();
-    hideAnimator.setValue(isHidden, showFactor > 0f);
+    hideAnimator.setValue(isHidden, animated && showFactor > 0f);
   }
 
   @Override
@@ -638,7 +683,7 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
 
   private ArrayList<InlineResult<?>> currentItems;
 
-  private void removeItem (InlineResult<?> result) {
+  public void removeItem (InlineResult<?> result) {
     if (currentItems == null) {
       return;
     }
@@ -767,6 +812,7 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
     if (adapter.getItemCount() > 0) {
       adapter.notifyItemChanged(0);
     }
+    Views.setBottomMargin(this, bottomInset + lastBottomMargin);
   }
 
   @Override
@@ -785,10 +831,7 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
   private void setBottomMargin (int bottomMargin) {
     if (this.lastBottomMargin != bottomMargin) {
       this.lastBottomMargin = bottomMargin;
-      /*FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) recyclerView.getLayoutParams();
-      params.topMargin = bottomMargin;
-      recyclerView.setLayoutParams(params);*/
-      setTranslationY(-bottomMargin);
+      updateOffset();
     }
     if (lickView != null) {
       lickView.invalidate();
@@ -820,9 +863,62 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
 
   @Override
   public int provideHeight () {
-    int height = offsetProvider != null ? offsetProvider.provideParentHeight(this) : ((BaseActivity) getContext()).getContentView().getMeasuredHeight(); //  - measureItemsHeight();
-    height -= Math.min(measureItemsHeight(), Screen.smallestActualSide() / 2);
-    return Math.max(0, height);
+    // height of the offset
+    final int totalHeight = rootView != null ? rootView.getMeasuredHeight() - bottomInset - lastBottomMargin : 0;
+    int itemsHeight = measureItemsHeight();
+    return Math.max(topOffset, totalHeight - Math.min(totalHeight / 2, itemsHeight));
+  }
+
+  private int topOffset, bottomInset;
+
+  private boolean setInsets (int topOffset, int bottomInset) {
+    if (this.topOffset != topOffset || this.bottomInset != bottomInset) {
+      this.topOffset = topOffset;
+      this.bottomInset = bottomInset;
+      return true;
+    }
+    return false;
+  }
+
+  @Override
+  public void onApplyMarginInsets (View child, LayoutParams params, Rect legacyInsets, Rect insets, Rect insetsWithoutIme) {
+    boolean changed;
+    changed = Views.setMargins(params,
+      legacyInsets.left,
+      legacyInsets.top,
+      legacyInsets.right,
+      insets.bottom + lastBottomMargin
+    );
+    changed = setInsets(insets.top, insets.bottom) || changed;
+    if (changed) {
+      UI.post(this::updateOffset);
+    }
+  }
+
+  private RootFrameLayout rootView;
+
+  @Override
+  protected void onAttachedToWindow () {
+    super.onAttachedToWindow();
+    rootView = Views.findAncestor(this, RootFrameLayout.class, true);
+  }
+
+  @Override
+  protected void onDetachedFromWindow () {
+    super.onDetachedFromWindow();
+    rootView = null;
+  }
+
+  public int getMinItemsHeight () {
+    return Math.min(measureItemsHeight(), getHeightLimit());
+  }
+
+  public static int getHeightLimit () {
+    return Screen.smallestActualSide() / 2;
+  }
+
+  public ArrayList<InlineResult<?>> getCurrentItems () {
+    return currentItems;
   }
 
   // Switch pm utils
@@ -835,7 +931,7 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
       switchPmHandler = null;
     }
 
-    final ViewController<?> c = UI.getCurrentStackItem();
+    final ViewController<?> c = UI.getCurrentStackItem(getContext());
     long sourceChatId = 0;
     if (c instanceof MessagesController) {
       if (((MessagesController) c).comparePrivateUserId(button.getUserId())) {
@@ -855,7 +951,7 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
           UI.post(() -> {
             if (!isCancelled()) {
               setItems(null);
-              delegate.tdlib().ui().openChat(c, chatId, new TdlibUi.ChatOpenParameters().keepStack().shareItem(new TGBotStart(delegate.tdlib().chatUserId(chatId), button.botStartParameter(), false)));
+              delegate.tdlib().ui().openChat(c, chatId, new TdlibUi.ChatOpenParameters().keepStack().shareItem(new TGBotStart(delegate.tdlib().chatUserId(chatId), button.botStartParameter(), false, true)));
             }
           });
         } else {
@@ -874,11 +970,11 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
   // Interfaces
 
   public interface PickListener {
-    void onHashtagPick (InlineResultHashtag result);
-    void onMentionPick (InlineResultMention result, @Nullable String usernamelessText);
-    void onCommandPick (InlineResultCommand result, boolean isLongPress);
-    void onEmojiSuggestionPick (InlineResultEmojiSuggestion result);
-    void onInlineQueryResultPick (InlineResult<?> result);
+    default void onHashtagPick (InlineResultHashtag result) {}
+    default void onMentionPick (InlineResultMention result, @Nullable String usernamelessText) {}
+    default void onCommandPick (InlineResultCommand result, boolean isLongPress) {}
+    default void onEmojiSuggestionPick (InlineResultEmojiSuggestion result) {}
+    default void onInlineQueryResultPick (InlineResult<?> result) {}
   }
 
   private PickListener listener;
@@ -889,46 +985,42 @@ public class InlineResultsWrap extends FrameLayoutFix implements View.OnClickLis
 
   @Override
   public void onClick (View v) {
-    switch (v.getId()) {
-      case R.id.btn_switchPmButton: {
-        switchPm((InlineResultButton) v.getTag());
-        break;
-      }
-      case R.id.result: {
-        Object tag = v.getTag();
-        if (tag != null && tag instanceof InlineResult) {
-          InlineResult<?> result = (InlineResult<?>) tag;
-          PickListener listener = findListener();
-          if (listener == null) {
-            return;
+    int viewId = v.getId();
+    if (viewId == R.id.btn_switchPmButton) {
+      switchPm((InlineResultButton) v.getTag());
+    } else if (viewId == R.id.result) {
+      Object tag = v.getTag();
+      if (tag != null && tag instanceof InlineResult) {
+        InlineResult<?> result = (InlineResult<?>) tag;
+        PickListener listener = findListener();
+        if (listener == null) {
+          return;
+        }
+        switch (result.getType()) {
+          case InlineResult.TYPE_HASHTAG: {
+            InlineResultHashtag hashtag = (InlineResultHashtag) result;
+            listener.onHashtagPick(hashtag);
+            break;
           }
-          switch (result.getType()) {
-            case InlineResult.TYPE_HASHTAG: {
-              InlineResultHashtag hashtag = (InlineResultHashtag) result;
-              listener.onHashtagPick(hashtag);
-              break;
-            }
-            case InlineResult.TYPE_EMOJI_SUGGESTION: {
-              InlineResultEmojiSuggestion suggestion = (InlineResultEmojiSuggestion) result;
-              listener.onEmojiSuggestionPick(suggestion);
-              break;
-            }
-            case InlineResult.TYPE_MENTION: {
-              InlineResultMention mention = (InlineResultMention) result;
-              listener.onMentionPick(mention, mention.isUsernameless() ? mention.getMention(true) : null);
-              break;
-            }
-            case InlineResult.TYPE_COMMAND: {
-              listener.onCommandPick((InlineResultCommand) result, false);
-              break;
-            }
-            default: {
-              listener.onInlineQueryResultPick(result);
-              break;
-            }
+          case InlineResult.TYPE_EMOJI_SUGGESTION: {
+            InlineResultEmojiSuggestion suggestion = (InlineResultEmojiSuggestion) result;
+            listener.onEmojiSuggestionPick(suggestion);
+            break;
+          }
+          case InlineResult.TYPE_MENTION: {
+            InlineResultMention mention = (InlineResultMention) result;
+            listener.onMentionPick(mention, mention.isUsernameless() ? mention.getMention(true) : null);
+            break;
+          }
+          case InlineResult.TYPE_COMMAND: {
+            listener.onCommandPick((InlineResultCommand) result, false);
+            break;
+          }
+          default: {
+            listener.onInlineQueryResultPick(result);
+            break;
           }
         }
-        break;
       }
     }
   }

@@ -21,6 +21,7 @@ import org.thunderdog.challegram.charts.CombinedDrawable;
 import org.thunderdog.challegram.charts.LayoutHelper;
 import org.thunderdog.challegram.charts.RadialProgressView;
 import org.thunderdog.challegram.charts.data.ChartData;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Fonts;
 import org.thunderdog.challegram.tool.Screen;
@@ -31,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.Locale;
 
+@SuppressWarnings("SimpleDateFormat")
 public class LegendSignatureView extends FrameLayout {
 
     public boolean isTopHourChart;
@@ -106,7 +108,7 @@ public class LegendSignatureView extends FrameLayout {
         progressView.setProgressColor(Theme.iconColor()); // key_statisticChartChevronColor
 
         shadowDrawable = getContext().getResources().getDrawable(R.drawable.stats_tooltip).mutate();
-        backgroundDrawable = Theme.createSimpleSelectorRoundRectDrawable(Screen.dp(4), Theme.getColor(R.id.theme_color_filling /*key_dialogBackground*/), Theme.getColor(R.id.theme_color_fillingPressed /*key_listSelector*/), 0xff000000);
+        backgroundDrawable = Theme.createSimpleSelectorRoundRectDrawable(Screen.dp(4), Theme.getColor(ColorId.filling /*key_dialogBackground*/), Theme.getColor(ColorId.fillingPressed /*key_listSelector*/), 0xff000000);
         CombinedDrawable drawable = new CombinedDrawable(shadowDrawable, backgroundDrawable, Screen.dp(3), Screen.dp(3));
         drawable.setFullsize(true);
         setBackground(drawable);
@@ -207,13 +209,13 @@ public class LegendSignatureView extends FrameLayout {
         float num_ = v;
         int count = 0;
         if (v < 10_000) {
-            return String.format("%d", v);
+            return String.format(Locale.ROOT, "%d", v);
         }
         while (num_ >= 10_000 && count < ChartHorizontalLinesData.s.length - 1) {
             num_ /= 1000;
             count++;
         }
-        return String.format("%.2f", num_) + ChartHorizontalLinesData.s[count];
+        return String.format(Locale.ROOT, "%.2f", num_) + ChartHorizontalLinesData.s[count];
     }
 
 

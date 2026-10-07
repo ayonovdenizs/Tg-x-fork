@@ -1,10 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
   xmlns:tools="http://schemas.android.com/tools"
-  package="org.thunderdog.challegram"
   android:installLocation="auto">
-
-  <uses-sdk tools:overrideLibrary="androidx.camera.camera2, androidx.camera.core, androidx.camera.view, androidx.camera.lifecycle, androidx.camera.extensions, com.otaliastudios.transcoder, com.otaliastudios.opengl, com.linkedin.android.litr, com.linkedin.android.litr.filter" />
 
   <uses-feature
     android:glEsVersion="0x00020000"
@@ -54,7 +51,8 @@
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
   <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
   <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-  <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+  <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"
+    tools:ignore="BackgroundLocationPolicy" />
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
   <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -63,26 +61,30 @@
   <uses-permission android:name="android.permission.VIBRATE" />
   <uses-permission android:name="android.permission.READ_CONTACTS" />
   <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+  <uses-permission android:name="android.permission.USE_BIOMETRIC" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-  <uses-permission android:name="android.permission.CHANGE_CONFIGURATION" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+  <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+  <uses-permission android:name="android.permission.CHANGE_CONFIGURATION"
+    tools:ignore="ProtectedPermissions" />
   <uses-permission android:name="android.permission.READ_PHONE_STATE" />
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
   <uses-permission android:name="android.permission.WRITE_SETTINGS" />
   <uses-permission android:name="android.permission.BLUETOOTH" />
   <!--<uses-permission android:name="android.permission.PROCESS_OUTGOING_CALLS" />-->
-  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"
+    tools:ignore="RequestInstallPackagesPolicy" />
   <!--<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />-->
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
   <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
   <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-
-  <uses-permission android:name="com.google.android.providers.gsf.permission.READ_GSERVICES" />
-  <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE" />
-
-  <uses-permission android:name="${applicationId}.permission.MAPS_RECEIVE" />
-  <uses-permission android:name="${applicationId}.permission.C2D_MESSAGE" />
 
   <uses-permission android:name="com.sec.android.provider.badge.permission.READ" />
   <uses-permission android:name="com.sec.android.provider.badge.permission.WRITE" />
@@ -104,6 +106,11 @@
   <uses-permission android:name="android.permission.AUTHENTICATE_ACCOUNTS" />
 
   <queries>
+    <package android:name="com.google.android.apps.maps" />
+    <package android:name="com.google.android.launcher.layouts.genymotion" />
+    <package android:name="com.bluestacks" />
+    <package android:name="com.bignox.app" />
+    <package android:name="com.vphone.launcher" />
     <intent>
       <action android:name="com.google.android.youtube.api.service.START" />
     </intent>
@@ -117,6 +124,7 @@
     android:name="org.thunderdog.challegram.BaseApplication"
     android:allowBackup="false"
     android:fullBackupContent="false"
+    android:dataExtractionRules="@xml/data_extraction_rules"
     android:hardwareAccelerated="true"
     android:icon="@mipmap/app_launcher"
     android:label="@string/AppName"
@@ -126,7 +134,9 @@
     android:theme="@style/AppTheme"
     android:requestLegacyExternalStorage="true"
     android:preserveLegacyExternalStorage="true"
-    tools:targetApi="r">
+    android:enableOnBackInvokedCallback="true"
+    tools:targetApi="37"
+    tools:ignore="RtlEnabled">
 
     <meta-data
       android:name="firebase_analytics_collection_deactivated"
@@ -154,7 +164,18 @@
       android:stopWithTask="false" />
 
     <service
-      android:name=".service.ForegroundService"
+      android:name=".service.FetchNotificationService"
+      android:enabled="true"
+      android:exported="false"
+      android:foregroundServiceType="specialUse"
+      android:stopWithTask="false">
+      <property
+        android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="Telegram X is a messaging app. Users expect to receive instant new message notifications, and the app to be auto-started. A foreground service is required for push messages that require one-time end-to-end encryption key exchange (such as when users receive the first message from a new Secret Chat), for which there is no Firebase Cloud Messaging integration. Other foreground service types do not fit this use case, or can't be used on Android 15 because there are time limits or auto-starting on boot is not allowed. Using the Android work manager isn't an option either." />
+    </service>
+
+    <service
+      android:name=".service.SyncContactsService"
       android:enabled="true"
       android:exported="false"
       android:foregroundServiceType="dataSync"
@@ -162,7 +183,7 @@
 
     <service
       android:name=".service.BootListenerService"
-      android:enabled="true"
+      android:enabled="@bool/bootServiceEnabled"
       android:exported="false"
       android:stopWithTask="false">
       <intent-filter>
@@ -201,7 +222,8 @@
 
     <service
       android:name="org.thunderdog.challegram.sync.SyncService"
-      android:exported="true">
+      android:exported="true"
+      tools:ignore="ExportedService">
       <intent-filter>
         <action android:name="android.content.SyncAdapter" />
       </intent-filter>
@@ -232,15 +254,8 @@
       android:exported="false" />
 
     <activity
-      android:name=".voip.gui.VoIPPermissionActivity"
-      android:configChanges="keyboard|keyboardHidden|orientation|screenSize"
-      android:excludeFromRecents="true"
-      android:taskAffinity="${applicationId}.voip"
-      android:theme="@style/TransparentTheme"
-      android:exported="false" />
-    <activity
       android:name=".voip.gui.VoIPFeedbackActivity"
-      android:configChanges="keyboard|keyboardHidden|orientation|screenSize"
+      android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout"
       android:excludeFromRecents="true"
       android:taskAffinity="${applicationId}.voip"
       android:theme="@style/TransparentTheme"
@@ -250,7 +265,7 @@
     <service
       android:name=".service.TGCallService"
       android:exported="false"
-      android:foregroundServiceType="phoneCall" />
+      android:foregroundServiceType="phoneCall|microphone|mediaPlayback" />
     <receiver android:name=".receiver.VoIPMediaButtonReceiver"
       android:exported="false">
       <intent-filter>
@@ -332,14 +347,14 @@
 
     <activity
       android:name=".ManageSpaceActivity"
-      android:configChanges="keyboard|keyboardHidden|orientation|screenSize|locale|layoutDirection|uiMode"
+      android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|locale|layoutDirection|uiMode"
       android:launchMode="singleTask"
       android:windowSoftInputMode="adjustPan"
       android:exported="true" />
 
     <activity
       android:name=".MainActivity"
-      android:configChanges="keyboard|keyboardHidden|orientation|screenSize|locale|layoutDirection|uiMode"
+      android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|locale|layoutDirection|uiMode"
       android:launchMode="singleTask"
       android:windowSoftInputMode="stateHidden|adjustPan"
       android:exported="true">
@@ -381,36 +396,19 @@
       </intent-filter>
 
       <!-- Telegram URLs -->
-      <intent-filter>
+      <intent-filter android:autoVerify="true">
         <action android:name="android.intent.action.VIEW" />
 
         <category android:name="android.intent.category.DEFAULT" />
         <category android:name="android.intent.category.BROWSABLE" />
 
-        <data
-          android:host="t.me"
-          android:scheme="http" />
-        <data
-          android:host="t.me"
-          android:scheme="https" />
-        <data
-          android:host="tx.me"
-          android:scheme="http" />
-        <data
-          android:host="tx.me"
-          android:scheme="https" />
-        <data
-          android:host="telegram.me"
-          android:scheme="http" />
-        <data
-          android:host="telegram.me"
-          android:scheme="https" />
-        <data
-          android:host="telegram.dog"
-          android:scheme="http" />
-        <data
-          android:host="telegram.dog"
-          android:scheme="https" />
+        <data android:scheme="http"/>
+        <data android:scheme="https"/>
+
+        <data android:host="t.me"/>
+        <data android:host="tx.me"/>
+        <data android:host="telegram.me"/>
+        <data android:host="telegram.dog"/>
       </intent-filter>
       <intent-filter
         android:icon="@mipmap/app_launcher_round"
@@ -457,6 +455,10 @@
 
     <meta-data
       android:name="com.samsung.android.icon_container.has_icon_container"
-      android:value="@bool/com_samsung_android_icon_container_has_icon_container"/>
+      android:value="@bool/com_samsung_android_icon_container_has_icon_container" />
+
+    <meta-data
+      android:name="com.google.android.gms.car.application"
+      android:resource="@xml/automotive_app_desc"/>
   </application>
 </manifest>

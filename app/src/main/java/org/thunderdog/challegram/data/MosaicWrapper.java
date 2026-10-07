@@ -22,7 +22,7 @@ import android.view.View;
 import androidx.annotation.Dimension;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.loader.ComplexReceiver;
 import org.thunderdog.challegram.loader.DoubleImageReceiver;
 import org.thunderdog.challegram.loader.ImageReceiver;
@@ -43,6 +43,7 @@ import me.vkryl.android.animator.FactorAnimator;
 import me.vkryl.android.util.MultipleViewProvider;
 import me.vkryl.core.ArrayUtils;
 import me.vkryl.core.ColorUtils;
+import me.vkryl.core.lambda.RunnableData;
 import me.vkryl.core.reference.ReferenceUtils;
 
 public class MosaicWrapper implements FactorAnimator.Target, ComplexReceiver.KeyFilter {
@@ -1193,15 +1194,23 @@ public class MosaicWrapper implements FactorAnimator.Target, ComplexReceiver.Key
   private TdApi.ChatType autoDownloadChatType;
 
   public void autoDownloadContent (TdApi.ChatType chatType) {
+    boolean force = parent != null && parent.isSponsoredMessage();
     this.autoDownloadChatType = chatType;
+    RunnableData<MosaicItemInfo> act = item -> {
+      if (force && item.target.isPhoto()) {
+        item.target.getFileProgress().downloadIfNeeded();
+      } else {
+        item.target.getFileProgress().downloadAutomatically(chatType);
+      }
+    };
     if (mosaicItems != null) {
       for (MosaicItemInfo item : mosaicItems) {
-        item.target.getFileProgress().downloadAutomatically(chatType);
+        act.runWithData(item);
       }
     }
     if (addedMosaicItems != null) {
       for (MosaicItemInfo item : addedMosaicItems) {
-        item.target.getFileProgress().downloadAutomatically(chatType);
+        act.runWithData(item);
       }
     }
   }

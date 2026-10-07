@@ -20,11 +20,10 @@ import android.os.Message;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.media3.common.PlaybackParameters;
 
-import com.google.android.exoplayer2.PlaybackParameters;
-
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.data.InlineResult;
@@ -41,12 +40,12 @@ import java.util.Iterator;
 import java.util.List;
 
 import me.vkryl.core.ArrayUtils;
+import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.reference.ReferenceList;
 import me.vkryl.core.reference.ReferenceMap;
-import me.vkryl.core.BitwiseUtils;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.Td;
+import tgx.td.ChatId;
+import tgx.td.Td;
 
 public class TGPlayerController implements GlobalMessageListener, ProximityManager.Delegate {
   private static final int STATE_SEEK = -1; // This is used when dispatching seek progress
@@ -60,10 +59,10 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
   public static final int PLAY_FLAG_REPEAT_ONE = 1 << 2; // repeat current entry, until battery or user dies
   public static final int PLAY_FLAGS_DEFAULT = PLAY_FLAG_REPEAT;
 
-  public static final int PLAY_SPEED_NORMAL = 0;
-  public static final int PLAY_SPEED_2X = 1;
-  public static final int PLAY_SPEED_3X = 2;
-  public static final int PLAY_SPEED_4X = 2;
+  public static final int PLAY_SPEED_NORMAL = 100;
+  public static final int PLAY_SPEED_2X = 200;
+  public static final int PLAY_SPEED_3X = 300;
+  public static final int PLAY_SPEED_4X = 400;
 
   private int speed;
 
@@ -154,7 +153,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
 
 
   private long playlistChatId;
-  private long playlistMessageThreadId;
+  private TdApi.MessageTopic playlistTopicId;
   private long playlistMaxMessageId, playlistMinMessageId;
   private String playlistSearchQuery;
   private TdApi.GetInlineQueryResults playlistInlineQuery;
@@ -169,6 +168,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
     context.global().addMessageListener(this);
     this.playbackFlags = Settings.instance().getPlayerFlags();
     this.proximityManager = new ProximityManager(this, this);
+    this.speed = Settings.instance().getPlaybackSpeed();
   }
 
   public void onUpdateFile (Tdlib tdlib, TdApi.UpdateFile updateFile) {
@@ -342,12 +342,12 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
 
   public boolean isPlayingMusic () {
     synchronized (this) {
-      return message != null && message.content.getConstructor() == TdApi.MessageAudio.CONSTRUCTOR;
+      return message != null && Td.isAudio(message.content);
     }
   }
 
   public int canAddToPlayList (Tdlib tdlib, TdApi.Message track) {
-    if (track.content.getConstructor() != TdApi.MessageAudio.CONSTRUCTOR) {
+    if (!Td.isAudio(track.content)) {
       return ADD_MODE_NONE;
     }
     synchronized (this) {
@@ -391,7 +391,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
 
   public void moveTrack (int fromPosition, int toPosition) {
     synchronized (this) {
-      if (this.message != null && playState != STATE_NONE && this.message.content.getConstructor() == TdApi.MessageAudio.CONSTRUCTOR) {
+      if (this.message != null && playState != STATE_NONE && Td.isAudio(this.message.content)) {
         TdApi.Message track = messageList.remove(fromPosition);
         messageList.add(toPosition, track);
         notifyTrackListItemMoved(trackListChangeListeners, tdlib, track, fromPosition, toPosition);
@@ -402,7 +402,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
 
   public void removeTrack (TdApi.Message track, boolean byUserRequest) {
     synchronized (this) {
-      if (this.message != null && playState != STATE_NONE && this.message.content.getConstructor() == TdApi.MessageAudio.CONSTRUCTOR && messageList.size() > 1) {
+      if (this.message != null && playState != STATE_NONE && Td.isAudio(this.message.content) && messageList.size() > 1) {
         int position = indexOfMessage(track);
         removeTrackImpl(track, position, byUserRequest);
       }
@@ -452,33 +452,24 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
     }
     if (this.speed != speed) {
       this.speed = speed;
+      Settings.instance().setPlaybackSpeed(speed);
       synchronized (this) {
         notifyTrackListSpeedChanged(globalListeners, speed);
       }
     }
   }
 
+  public int getSpeed () {
+    return speed;
+  }
+
   public static @NonNull PlaybackParameters newPlaybackParameters (boolean isVoice, int speedValue) {
     PlaybackParameters parameters = PlaybackParameters.DEFAULT;
     if (speedValue != TGPlayerController.PLAY_SPEED_NORMAL) {
-      float speed;
-      float pitch = 1f;
-      switch (speedValue) {
-        case TGPlayerController.PLAY_SPEED_2X:
-          if (isVoice) {
-            speed = 1.72f;
-            pitch = .98f;
-          } else {
-            speed = 2f;
-          }
-          break;
-        default:
-          speed = 1f;
-          break;
-      }
-      if (speed != 1f) {
-        parameters = new PlaybackParameters(speed, pitch);
-      }
+      final float speed = speedValue / 100f;
+      final float pitch = speedValue > 100 ? 0.98f : 1f;
+
+      parameters = new PlaybackParameters(speed, pitch);
     }
     return parameters;
   }
@@ -510,7 +501,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
   }
 
   private static boolean supportsPlaybackFlags (TdApi.Message message) {
-    return message != null && message.content.getConstructor() == TdApi.MessageAudio.CONSTRUCTOR;
+    return message != null && Td.isAudio(message.content);
   }
 
   private static int getPlaybackFlags (TdApi.Message message, int flags) {
@@ -565,7 +556,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
     }
   }
 
-  public int getContentType () {
+  public @TdApi.MessageContent.Constructors int getContentType () {
     synchronized (this) {
       return message != null ? message.content.getConstructor() : 0;
     }
@@ -579,13 +570,13 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
 
   public boolean isPlayingRoundVideo () {
     synchronized (this) {
-      return message != null && message.content.getConstructor() == TdApi.MessageVideoNote.CONSTRUCTOR;
+      return message != null && Td.isVideoNote(message.content);
     }
   }
 
   public boolean isPlayingVoice () {
     synchronized (this) {
-      return message != null && message.content.getConstructor() == TdApi.MessageVoiceNote.CONSTRUCTOR;
+      return message != null && Td.isVoiceNote(message.content);
     }
   }
 
@@ -735,7 +726,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
   }
 
   private void updateProximityMessageImpl () {
-    if (message != null && (message.content.getConstructor() == TdApi.MessageVoiceNote.CONSTRUCTOR || message.content.getConstructor() == TdApi.MessageVideoNote.CONSTRUCTOR)) {
+    if (message != null && (Td.isVoiceNote(message.content) || Td.isVideoNote(message.content))) {
       proximityManager.setPlaybackObject(message);
     } else {
       proximityManager.setPlaybackObject(null);
@@ -893,7 +884,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
   }
 
   public void stopRoundPlayback (boolean byUserRequest) {
-    if (message != null && message.content.getConstructor() == TdApi.MessageVideoNote.CONSTRUCTOR) {
+    if (message != null && Td.isVideoNote(message.content)) {
       playPauseMessageImpl(null, byUserRequest, false, tdlib, null);
     }
   }
@@ -923,6 +914,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
         TdApi.Message track = messageList.get(i);
         if (track.chatId != 0 && track.chatId == chatId && ArrayUtils.indexOf(messageIds, track.id) != -1) {
           if (i == currentIndex) {
+            //noinspection SwitchIntDef
             switch (track.content.getConstructor()) {
               case TdApi.MessageAudio.CONSTRUCTOR:
                 // Do nothing. Let user finish playback
@@ -950,7 +942,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
       handler.sendMessage(Message.obtain(handler, ACTION_SKIP, next ? 1 : 0, 0));
     } else {
       synchronized (this) {
-        if (message != null && message.content.getConstructor() == TdApi.MessageAudio.CONSTRUCTOR) {
+        if (message != null && Td.isAudio(message.content)) {
           context.audio().skip(next);
         }
       }
@@ -1216,7 +1208,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
         this.playlistMinMessageId = this.playlistMaxMessageId = 0;
       }
       this.playlistSearchQuery = null;
-      this.playlistMessageThreadId = 0;
+      this.playlistTopicId = null;
       this.playlistInlineQuery = null;
       this.playlistInlineNextOffset = this.playlistSearchNextOffset = null; this.playlistSearchNextFromMessageId = 0;
       this.removedMessageList.clear();
@@ -1224,7 +1216,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
         playlistSearchQuery = playList.searchQuery;
         playlistSearchNextOffset = playList.searchNextOffset;
         playlistSearchNextFromMessageId = playList.searchNextFromMessageId;
-        playlistMessageThreadId = playList.messageThreadId;
+        playlistTopicId = playList.topicId;
         if (playList.playListInformationSet) {
           playlistChatId = playList.chatId;
           playlistMaxMessageId = playList.maxMessageId;
@@ -1278,11 +1270,11 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
   }
 
   private static boolean canControlQueue (TdApi.Message message) {
-    return message.content.getConstructor() == TdApi.MessageAudio.CONSTRUCTOR;
+    return Td.isAudio(message.content);
   }
 
-  private static boolean matchesFilter (TdApi.MessageContent content, int contentType) {
-    int ctr = content.getConstructor();
+  private static boolean matchesFilter (TdApi.MessageContent content, @TdApi.MessageContent.Constructors int contentType) {
+    final @TdApi.MessageContent.Constructors int ctr = content.getConstructor();
     return ctr == contentType || ((ctr == TdApi.MessageVoiceNote.CONSTRUCTOR || ctr == TdApi.MessageVideoNote.CONSTRUCTOR) && (contentType == TdApi.MessageVoiceNote.CONSTRUCTOR || contentType == TdApi.MessageVideoNote.CONSTRUCTOR));
   }
 
@@ -1390,8 +1382,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
           break;
         }
         default: {
-          Log.unexpectedTdlibResponse(object, TdApi.SearchSecretMessages.class, TdApi.SearchChatMessages.class, TdApi.Messages.class, TdApi.Error.class);
-          return;
+          throw new UnsupportedOperationException(object.toString());
         }
       }
       addMessages(contextId, moreMessages, areNew);
@@ -1481,7 +1472,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
     final long minMessageId = playlistMinMessageId;
     final long maxMessageId = playlistMaxMessageId;
 
-    final int contentType = message.content.getConstructor();
+    final @TdApi.MessageContent.Constructors int contentType = message.content.getConstructor();
 
     final int contextId = messageListContextId;
     final boolean reverse = (playListFlags & PLAYLIST_FLAG_REVERSE) != 0;
@@ -1519,18 +1510,16 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
       messageListStateFlags |= LIST_STATE_LOADED_NEW;
     } else {
       requestOld = allowOlder ? new TdApi.SearchChatMessages(
-        chatId, playlistSearchQuery, null,
+        chatId, playlistTopicId, playlistSearchQuery, null,
         playlistSearchNextFromMessageId != 0 ? Math.min(minMessageId, playlistSearchNextFromMessageId) : minMessageId,
-        0, 100, filter,
-        playlistMessageThreadId
+        0, 100, filter
       ) : null;
       requestNew = allowNewer ? playlistInlineQuery != null ? makeNextInlineQuery() : new TdApi.SearchChatMessages(
-        chatId,
+        chatId, playlistTopicId,
         playlistSearchQuery, null,
         maxMessageId,
         -99, 100,
-        filter,
-        playlistMessageThreadId
+        filter
       ) : null;
     }
 
@@ -1632,7 +1621,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
   @Override
   public void onNewMessage (Tdlib tdlib, TdApi.Message message) {
     final long chatId = getChatId();
-    final int contentType = getContentType();
+    final @TdApi.MessageContent.Constructors int contentType = getContentType();
     if (chatId != 0 && contentType != 0 && message.chatId == chatId && message.content.getConstructor() == contentType && message.sendingState == null) {
       addNewMessage(tdlib, message);
     }
@@ -1641,7 +1630,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
   @Override
   public void onNewMessages (Tdlib tdlib, TdApi.Message[] messages) {
     final long chatId = getChatId();
-    final int contentType = getContentType();
+    final @TdApi.MessageContent.Constructors int contentType = getContentType();
     if (chatId != 0 && contentType != 0) {
       for (TdApi.Message message : messages) {
         if (message.chatId == chatId && message.content.getConstructor() == contentType && message.sendingState == null) {
@@ -1661,7 +1650,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
   }
 
   @Override
-  public void onMessageSendFailed (Tdlib tdlib, final TdApi.Message message, final long oldMessageId, int errorCode, String errorMessage) {
+  public void onMessageSendFailed (Tdlib tdlib, final TdApi.Message message, final long oldMessageId, TdApi.Error error) {
     moveListeners(tdlib, message, oldMessageId);
   }
 
@@ -1684,6 +1673,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
   private static final int ACTION_REDUCE_VOLUME = 9;
   private static final int ACTION_SET_SPEED = 10;
 
+  @SuppressWarnings("unchecked")
   private void processMessage (Message msg) {
     switch (msg.what) {
       case ACTION_DELETE_MESSAGES: {
@@ -1724,7 +1714,6 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
         break;
       }
       case ACTION_ADD_MESSAGES: {
-        //noinspection unchecked
         addMessages(msg.arg1, (List<TdApi.Message>) msg.obj, msg.arg2 == 1);
         break;
       }
@@ -1775,6 +1764,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
   public static final int PAUSE_REASON_RECORD_VIDEO = 1 << 8;
   public static final int PAUSE_REASON_PROXIMITY = 1 << 9;
   public static final int PAUSE_REASON_OPEN_WEB_VIDEO = 1 << 10;
+  public static final int PAUSE_REASON_OPEN_ONCE_MEDIA = 1 << 11;
 
   private boolean needResume;
   private int pauseReasons;
@@ -1818,7 +1808,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
     private int playListFlags;
     private String searchQuery, searchNextOffset;
     private long searchNextFromMessageId;
-    private long messageThreadId;
+    private @Nullable TdApi.MessageTopic topicId;
 
     private List<TdApi.Message> removedMessages;
 
@@ -1835,8 +1825,22 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
      * @param originIndex index of message requested in {@link PlayListBuilder#buildPlayList(TdApi.Message)}
      */
     public PlayList (List<TdApi.Message> messages, int originIndex) {
-      this.messages = messages;
-      this.originIndex = originIndex;
+      this.messages = new ArrayList<>();
+
+      int newOriginIndex = -1;
+      for (int a = 0; a < messages.size(); a++) {
+        final TdApi.Message msg = messages.get(a);
+        final boolean isOrigin = a == originIndex;
+        // FIXME: this should be filtered on the PlayListBuilder implementation level
+        if (TD.isSelfDestructTypeImmediately(msg) && !isOrigin) {
+          continue;
+        }
+        if (isOrigin) {
+          newOriginIndex = this.messages.size();
+        }
+        this.messages.add(msg);
+      }
+      this.originIndex = newOriginIndex;
     }
 
     /**
@@ -1886,7 +1890,7 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
     }
 
     /**
-     * Search query to be passed in {@link org.drinkless.td.libcore.telegram.TdApi.SearchChatMessages} query
+     * Search query to be passed in {@link org.drinkless.tdlib.TdApi.SearchChatMessages} query
      * */
     public PlayList setSearchQuery (String query) {
       this.searchQuery = query;
@@ -1894,10 +1898,10 @@ public class TGPlayerController implements GlobalMessageListener, ProximityManag
     }
 
     /**
-     * Message thread identifier to be passed in {@link org.drinkless.td.libcore.telegram.TdApi.SearchChatMessages} query
+     * Topic identifier to be passed in {@link org.drinkless.tdlib.TdApi.SearchChatMessages} query
      */
-    public PlayList setMessageThreadId (long messageThreadId) {
-      this.messageThreadId = messageThreadId;
+    public PlayList setTopicId (@Nullable TdApi.MessageTopic topicId) {
+      this.topicId = topicId;
       return this;
     }
   }

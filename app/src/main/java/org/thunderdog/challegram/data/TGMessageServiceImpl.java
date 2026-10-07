@@ -17,8 +17,6 @@ package org.thunderdog.challegram.data;
 
 import android.graphics.Canvas;
 import android.graphics.RectF;
-import android.text.Spanned;
-import android.text.style.CharacterStyle;
 import android.text.style.ClickableSpan;
 import android.view.MotionEvent;
 import android.view.View;
@@ -28,7 +26,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.chat.MediaPreview;
 import org.thunderdog.challegram.component.chat.MessageView;
@@ -40,7 +38,11 @@ import org.thunderdog.challegram.mediaview.MediaViewController;
 import org.thunderdog.challegram.mediaview.MediaViewThumbLocation;
 import org.thunderdog.challegram.mediaview.data.MediaItem;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
+import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.telegram.TdlibAccentColor;
+import org.thunderdog.challegram.telegram.TdlibEmojiManager;
 import org.thunderdog.challegram.telegram.TdlibSender;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
@@ -51,16 +53,14 @@ import org.thunderdog.challegram.util.text.TextColorSet;
 import org.thunderdog.challegram.util.text.TextColorSetOverride;
 import org.thunderdog.challegram.util.text.TextEntity;
 import org.thunderdog.challegram.util.text.TextEntityCustom;
+import org.thunderdog.challegram.util.text.TextEntityMessage;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import me.vkryl.android.util.ClickHelper;
 import me.vkryl.core.ColorUtils;
 import me.vkryl.core.lambda.Filter;
-import me.vkryl.td.MessageId;
+import tgx.td.MessageId;
 
 abstract class TGMessageServiceImpl extends TGMessage {
   protected TGMessageServiceImpl (MessagesManager manager, TdApi.Message msg) {
@@ -104,22 +104,55 @@ abstract class TGMessageServiceImpl extends TGMessage {
     }
   }
 
+  private ServiceMessageCreator originalMessageCreator;
+  private Filter<TdApi.Message> previewCallback;
+  private TdApi.Message previewMessage;
+
+  @Override
+  protected boolean handleMessagePreviewChange (long chatId, long messageId, TdApi.MessageContent newContent) {
+    if (previewMessage != null && previewMessage.chatId == chatId && previewMessage.id == messageId) {
+      previewMessage.content = newContent;
+      if (previewCallback.accept(previewMessage)) {
+        updateServiceMessage();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  @Override
+  protected boolean handleMessagePreviewDelete (long chatId, long messageId) {
+    if (originalMessageCreator != null && previewMessage != null && previewMessage.chatId == chatId && previewMessage.id == messageId) {
+      previewMessage = null;
+      previewCallback = null;
+      setTextCreator(originalMessageCreator);
+      updateServiceMessage();
+      return true;
+    }
+    return false;
+  }
+
   public void setDisplayMessage (long chatId, long messageId, Filter<TdApi.Message> callback) {
-    tdlib.client().send(new TdApi.GetMessage(chatId, messageId), result -> {
-      if (result.getConstructor() == TdApi.Message.CONSTRUCTOR) {
-        TdApi.Message message = (TdApi.Message) result;
+    originalMessageCreator = textCreator;
+    tdlib.send(new TdApi.GetMessage(chatId, messageId), (message, error) -> {
+      if (message != null) {
         runOnUiThreadOptional(() -> {
           if (callback.accept(message)) {
-            // TODO subscribe to further updates
-            boolean hadTextMedia = hasTextMedia();
-            rebuildAndUpdateContent();
-            if (hadTextMedia || hasTextMedia()) {
-              invalidateTextMediaReceiver();
-            }
+            this.previewMessage = message;
+            this.previewCallback = callback;
+            updateServiceMessage();
           }
         });
       }
     });
+  }
+
+  protected final void updateServiceMessage () {
+    boolean hadTextMedia = hasTextMedia();
+    rebuildAndUpdateContent();
+    if (hadTextMedia || hasTextMedia()) {
+      invalidateTextMediaReceiver();
+    }
   }
 
   private boolean hasTextMedia () {
@@ -150,11 +183,6 @@ abstract class TGMessageServiceImpl extends TGMessage {
 
   @Override
   public boolean canBePinned () {
-    return false;
-  }
-
-  @Override
-  public boolean canBeReacted () {
     return false;
   }
 
@@ -197,7 +225,10 @@ abstract class TGMessageServiceImpl extends TGMessage {
   protected void buildContent (int maxWidth) {
     int availWidth = Math.max(0, this.width - Screen.dp(12f) * 2);
 
-    FormattedText formattedText = textCreator.createText();
+    FormattedText formattedText =
+      textCreator != null ?
+        textCreator.createText() :
+        FormattedText.valueOfEmpty();
     if (this.lastAvailWidth == availWidth && this.currentText != null && this.currentText.equals(formattedText)) {
       return;
     }
@@ -280,6 +311,9 @@ abstract class TGMessageServiceImpl extends TGMessage {
 
   @Override
   public boolean onTouchEvent (MessageView view, MotionEvent e) {
+    if (super.onTouchEvent(view, e)) {
+      return true;
+    }
     boolean res = displayText != null && displayText.onTouchEvent(view, e);
     return helper.onTouchEvent(view, e) || res;
   }
@@ -354,7 +388,7 @@ abstract class TGMessageServiceImpl extends TGMessage {
     location.setRoundings(avatarRadius);
 
     location.set(avatarLeft, top + avatarTop, avatarLeft + avatarRadius * 2, top + avatarTop + avatarRadius * 2);
-    location.setColorId(manager().useBubbles() ? R.id.theme_color_placeholder : R.id.theme_color_chatBackground);
+    location.setColorId(manager().useBubbles() ? ColorId.placeholder : ColorId.chatBackground);
     return location;
   }
 
@@ -370,6 +404,77 @@ abstract class TGMessageServiceImpl extends TGMessage {
 
   protected interface FormattedArgument {
     FormattedText buildArgument ();
+  }
+
+  protected final class AccentColorArgument implements FormattedArgument {
+    private final @Nullable TdlibAccentColor accentColor;
+    private final long customEmojiId;
+
+    public AccentColorArgument (@NonNull TdlibAccentColor accentColor) {
+      this(accentColor, 0);
+    }
+
+    public AccentColorArgument (@Nullable TdlibAccentColor accentColor, long customEmojiId) {
+      this.accentColor = accentColor;
+      this.customEmojiId = customEmojiId;
+    }
+
+    @Override
+    public FormattedText buildArgument () {
+      final String text = accentColor != null ? accentColor.getTextRepresentation() : " ";
+      TextEntity entity;
+      if (customEmojiId != 0) {
+        entity = new TextEntityMessage(
+          tdlib,
+          text, new TdApi.TextEntity(0, text.length(), new TdApi.TextEntityTypeCustomEmoji(customEmojiId)),
+          openParameters()
+        );
+      } else {
+        entity = new TextEntityCustom(
+          controller(),
+          tdlib,
+          text,
+          0, text.length(),
+          0,
+          openParameters()
+        );
+      }
+      if (accentColor != null) {
+        customizeColor(entity, accentColor);
+      }
+      return new FormattedText(text, new TextEntity[] {entity});
+    }
+  }
+
+  protected final class CustomEmojiArgument implements FormattedArgument {
+    private final Tdlib tdlib;
+    private final long customEmojiId;
+    private final String text;
+
+    public CustomEmojiArgument (Tdlib tdlib, long customEmojiId, @Nullable TdlibAccentColor repaintAccentColor) {
+      this.tdlib = tdlib;
+      this.customEmojiId = customEmojiId;
+      TdlibEmojiManager.Entry emoji = tdlib.emoji().find(customEmojiId);
+      if (emoji != null && !emoji.isNotFound()) {
+        this.text = emoji.value.emoji;
+      } else {
+        this.text = ContentPreview.EMOJI_INFO.textRepresentation;
+      }
+    }
+
+    @Override
+    public FormattedText buildArgument () {
+      String text = this.text;
+      TextEntityMessage custom = new TextEntityMessage(
+        tdlib,
+        text,
+        0, text.length(),
+        new TdApi.TextEntity(0, text.length(), new TdApi.TextEntityTypeCustomEmoji(customEmojiId)),
+        null,
+        openParameters()
+      );
+      return new FormattedText(text, new TextEntity[] {custom});
+    }
   }
 
   protected final class SenderArgument implements FormattedArgument {
@@ -421,68 +526,64 @@ abstract class TGMessageServiceImpl extends TGMessage {
           }
         }
       });
-      int nameColorId = needColoredNames() ?
-        sender.getNameColorId() :
-        R.id.theme_color_messageAuthor;
-      if (useBubbles()) {
-        custom.setCustomColorSet(new TextColorSetOverride(defaultTextColorSet()) {
-          @Override
-          public int defaultTextColor () {
-            return ColorUtils.fromToArgb(
-              getBubbleDateTextColor(),
-              Theme.getColor(nameColorId),
-              messagesController().wallpaper().getBackgroundTransparency()
-            );
-          }
-
-          @Override
-          public int clickableTextColor (boolean isPressed) {
-            return defaultTextColor();
-          }
-
-          @Override
-          public int backgroundColorId (boolean isPressed) {
-            float transparency = messagesController().wallpaper().getBackgroundTransparency();
-            return isPressed && transparency == 1f ?
-              nameColorId :
-              0;
-          }
-
-          @Override
-          public int backgroundColor (boolean isPressed) {
-            int colorId = backgroundColorId(isPressed);
-            return colorId != 0 ?
-              ColorUtils.alphaColor(.2f, Theme.getColor(colorId)) :
-              0;
-          }
-        });
-      } else {
-        custom.setCustomColorSet(new TextColorSetOverride(defaultTextColorSet()) {
-          @Override
-          public int defaultTextColor () {
-            return Theme.getColor(nameColorId);
-          }
-
-          @Override
-          public int clickableTextColor (boolean isPressed) {
-            return defaultTextColor();
-          }
-
-          @Override
-          public int backgroundColorId (boolean isPressed) {
-            return isPressed ? nameColorId : 0;
-          }
-
-          @Override
-          public int backgroundColor (boolean isPressed) {
-            int colorId = backgroundColorId(isPressed);
-            return colorId != 0 ?
-              ColorUtils.alphaColor(.2f, Theme.getColor(colorId)) :
-              0;
-          }
-        });
-      }
+      TdlibAccentColor accentColor = needColoredNames() ? sender.getAccentColor() : tdlib.accentColor(TdlibAccentColor.InternalId.REGULAR);
+      customizeColor(custom, accentColor);
       return new FormattedText(text, new TextEntity[] {custom});
+    }
+  }
+
+  protected void customizeColor (TextEntity entity, TdlibAccentColor accentColor) {
+    if (useBubbles()) {
+      entity.setCustomColorSet(new TextColorSetOverride(defaultTextColorSet()) {
+        @Override
+        public int defaultTextColor () {
+          return ColorUtils.fromToArgb(
+            getBubbleDateTextColor(),
+            accentColor.getNameColor(),
+            messagesController().wallpaper().getBackgroundTransparency()
+          );
+        }
+
+        @Override
+        public int clickableTextColor (boolean isPressed) {
+          return defaultTextColor();
+        }
+
+        @Override
+        public int backgroundColorId (boolean isPressed) {
+          float transparency = messagesController().wallpaper().getBackgroundTransparency();
+          long complexColor = accentColor.getNameComplexColor();
+          return isPressed && transparency == 1f ? Theme.extractColorValue(complexColor) : 0;
+        }
+
+        @Override
+        public int backgroundColor (boolean isPressed) {
+          float transparency = messagesController().wallpaper().getBackgroundTransparency();
+          return isPressed && transparency == 1f ? ColorUtils.alphaColor(.2f, accentColor.getNameColor()) : 0;
+        }
+      });
+    } else {
+      entity.setCustomColorSet(new TextColorSetOverride(defaultTextColorSet()) {
+        @Override
+        public int defaultTextColor () {
+          return accentColor.getNameColor();
+        }
+
+        @Override
+        public int clickableTextColor (boolean isPressed) {
+          return defaultTextColor();
+        }
+
+        @Override
+        public int backgroundColorId (boolean isPressed) {
+          return isPressed ? Theme.extractColorValue(accentColor.getNameComplexColor()) : 0;
+        }
+
+        @Override
+        public int backgroundColor (boolean isPressed) {
+          return isPressed ? ColorUtils.alphaColor(.2f, accentColor.getNameColor()) : 0;
+        }
+      });
     }
   }
 
@@ -519,8 +620,16 @@ abstract class TGMessageServiceImpl extends TGMessage {
     }
   }
 
-  protected abstract class FormattedTextArgument implements FormattedArgument {
-    protected abstract TdApi.FormattedText getFormattedText ();
+  protected class FormattedTextArgument implements FormattedArgument {
+    private final TdApi.FormattedText formattedText;
+
+    public FormattedTextArgument (TdApi.FormattedText formattedText) {
+      this.formattedText = formattedText;
+    }
+
+    protected TdApi.FormattedText getFormattedText () {
+      return formattedText;
+    }
 
     @Override
     public final FormattedText buildArgument () {
@@ -533,7 +642,7 @@ abstract class TGMessageServiceImpl extends TGMessage {
     private final String text;
     private final TdApi.TextEntityType entityType;
 
-    public TextEntityArgument (String text, TdApi.TextEntityType entityType) {
+    public TextEntityArgument (String text, @Nullable TdApi.TextEntityType entityType) {
       this.text = text;
       this.entityType = entityType;
     }
@@ -542,9 +651,11 @@ abstract class TGMessageServiceImpl extends TGMessage {
     public FormattedText buildArgument () {
       final TdApi.FormattedText formattedText;
       if (text.length() > 0) {
-        formattedText = new TdApi.FormattedText(text, new TdApi.TextEntity[] {
-          new TdApi.TextEntity(0, text.length(), entityType)
-        });
+        formattedText = new TdApi.FormattedText(text, entityType != null ?
+          new TdApi.TextEntity[] {
+            new TdApi.TextEntity(0, text.length(), entityType)
+          } :
+          new TdApi.TextEntity[0]);
       } else {
         formattedText = new TdApi.FormattedText("", new TdApi.TextEntity[0]);
       }
@@ -555,6 +666,12 @@ abstract class TGMessageServiceImpl extends TGMessage {
   protected final class BoldArgument extends TextEntityArgument {
     public BoldArgument (String text) {
       super(text, new TdApi.TextEntityTypeBold());
+    }
+  }
+
+  protected final class PlainArgument extends TextEntityArgument {
+    public PlainArgument (String text) {
+      super(text, null);
     }
   }
 
@@ -582,7 +699,7 @@ abstract class TGMessageServiceImpl extends TGMessage {
   protected final class InvoiceArgument extends MessageArgument {
     public InvoiceArgument (TdApi.Message message) {
       super(message, new TdApi.FormattedText(
-        ((TdApi.MessageInvoice) message.content).title,
+        ((TdApi.MessageInvoice) message.content).productInfo.title,
         null
       ));
     }
@@ -637,6 +754,10 @@ abstract class TGMessageServiceImpl extends TGMessage {
   }
 
   private static FormattedText[] parseFormatArgs (FormattedArgument... args) {
+    if (args == null) {
+      return new FormattedText[0];
+    }
+
     FormattedText[] formatArgs = new FormattedText[args.length];
     for (int i = 0; i < args.length; i++) {
       formatArgs[i] = args[i].buildArgument();
@@ -645,15 +766,7 @@ abstract class TGMessageServiceImpl extends TGMessage {
   }
 
   protected final FormattedText getText (@StringRes int resId, FormattedArgument... args) {
-    if (args == null || args.length == 0) {
-      return new FormattedText(Lang.getString(resId));
-    }
-    FormattedText[] formatArgs = parseFormatArgs(args);
-    CharSequence text = Lang.getString(resId,
-      (target, argStart, argEnd, argIndex, needFakeBold) -> formatArgs[argIndex],
-      (Object[]) formatArgs
-    );
-    return toFormattedText(text);
+    return FormattedText.valueOf(tdlib, openParameters(), resId, parseFormatArgs(args));
   }
 
   protected final FormattedText formatText (@NonNull String format, FormattedArgument... args) {
@@ -665,18 +778,11 @@ abstract class TGMessageServiceImpl extends TGMessage {
       (target, argStart, argEnd, argIndex, needFakeBold) -> formatArgs[argIndex],
       (Object[]) formatArgs
     );
-    return toFormattedText(text);
+    return FormattedText.valueOf(text, tdlib, openParameters());
   }
 
   protected final FormattedText getPlural (@StringRes int resId, long num, FormattedArgument... args) {
-    FormattedText[] formatArgs = parseFormatArgs(args);
-    CharSequence text = Lang.plural(resId, num,
-      (target, argStart, argEnd, argIndex, needFakeBold) -> argIndex == 0 ?
-        Lang.boldCreator().onCreateSpan(target, argStart, argEnd, argIndex, needFakeBold) :
-        formatArgs[argIndex - 1],
-      (Object[]) formatArgs
-    );
-    return toFormattedText(text);
+    return FormattedText.getPlural(tdlib, openParameters(), resId, num, parseFormatArgs(args));
   }
 
   protected final FormattedText getDuration (
@@ -714,61 +820,5 @@ abstract class TGMessageServiceImpl extends TGMessage {
       return getPlural(secondsRes, seconds, args);
     }
     throw new IllegalArgumentException("duration == " + durationUnit.toMillis(duration));
-  }
-
-  private FormattedText toFormattedText (CharSequence text) {
-    final String string = text.toString();
-    if (!(text instanceof Spanned)) {
-      return new FormattedText(string);
-    }
-    List<TextEntity> mixedEntities = null;
-    Spanned spanned = (Spanned) text;
-    Object[] spans = spanned.getSpans(
-      0,
-      spanned.length(),
-      Object.class
-    );
-    for (Object span : spans) {
-      final int spanStart = spanned.getSpanStart(span);
-      final int spanEnd = spanned.getSpanEnd(span);
-      if (spanStart == -1 || spanEnd == -1) {
-        continue;
-      }
-      if (span instanceof FormattedText) {
-        FormattedText formattedText = (FormattedText) span;
-        if (formattedText.entities != null) {
-          for (TextEntity entity : formattedText.entities) {
-            entity.offset(spanStart);
-            if (mixedEntities == null) {
-              mixedEntities = new ArrayList<>();
-            }
-            mixedEntities.add(entity);
-          }
-        }
-      } else if (span instanceof CharacterStyle) {
-        TdApi.TextEntityType[] entityType = TD.toEntityType((CharacterStyle) span);
-        if (entityType != null && entityType.length > 0) {
-          TdApi.TextEntity[] telegramEntities = new TdApi.TextEntity[entityType.length];
-          for (int i = 0; i < entityType.length; i++) {
-            telegramEntities[i] = new TdApi.TextEntity(
-              spanStart,
-              spanEnd - spanStart,
-              entityType[i]
-            );
-          }
-          TextEntity[] entities = TextEntity.valueOf(tdlib, string, telegramEntities, openParameters());
-          if (entities != null && entities.length > 0) {
-            if (mixedEntities == null) {
-              mixedEntities = new ArrayList<>();
-            }
-            Collections.addAll(mixedEntities, entities);
-          }
-        }
-      }
-    }
-    return new FormattedText(
-      string,
-      mixedEntities != null && !mixedEntities.isEmpty() ? mixedEntities.toArray(new TextEntity[0]) : null
-    );
   }
 }

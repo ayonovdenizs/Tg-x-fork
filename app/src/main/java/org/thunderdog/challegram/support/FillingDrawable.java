@@ -24,8 +24,8 @@ import android.view.View;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
-import org.thunderdog.challegram.theme.ThemeColorId;
 import org.thunderdog.challegram.theme.ThemeDelegate;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
@@ -33,7 +33,7 @@ import org.thunderdog.challegram.tool.Screen;
 import me.vkryl.core.ColorUtils;
 
 public class FillingDrawable extends Drawable {
-  @ThemeColorId
+  @ColorId
   private int colorId;
 
   @Nullable
@@ -59,7 +59,7 @@ public class FillingDrawable extends Drawable {
     }
   }
 
-  @ThemeColorId
+  @ColorId
   public final int getColorId () {
     return colorId;
   }
@@ -105,11 +105,12 @@ public class FillingDrawable extends Drawable {
   public final void setColorFilter (ColorFilter colorFilter) { }
 
   @Override
+  @SuppressWarnings("deprecation")
   public final int getOpacity () {
     return PixelFormat.UNKNOWN;
   }
 
-  public static void changeColor (View view, @ThemeColorId int newColorId) {
+  public static void changeColor (View view, @ColorId int newColorId) {
     if (view != null) {
       Drawable drawable = view.getBackground();
       if (drawable instanceof FillingDrawable) {

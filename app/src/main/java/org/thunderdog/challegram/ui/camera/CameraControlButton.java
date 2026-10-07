@@ -200,10 +200,12 @@ public class CameraControlButton extends View implements FactorAnimator.Target {
   public void onFactorChangeFinished (int id, float finalFactor, FactorAnimator callee) {
     switch (id) {
       case ANIMATOR_CHANGE: {
-        icon = toIcon;
-        toIcon = null;
-        changeAnimator.forceFactor(0f);
-        changeFactor = 0f;
+        if (finalFactor == 1f) {
+          icon = toIcon;
+          toIcon = null;
+          changeAnimator.forceFactor(0f);
+          changeFactor = 0f;
+        }
         break;
       }
     }
@@ -281,7 +283,7 @@ public class CameraControlButton extends View implements FactorAnimator.Target {
       }
     }
 
-    Paint paint = isSmall ? Paints.getIconGrayPorterDuffPaint() : Paints.getPorterDuffPaint(0xffffffff);
+    Paint paint = isSmall ? Paints.getIconGrayPorterDuffPaint() : Paints.whitePorterDuffPaint();
     if (changeFactor == 0f) {
       Drawables.draw(c, icon, cx - icon.getMinimumWidth() / 2, cy - icon.getMinimumHeight() / 2, paint);
     } else {

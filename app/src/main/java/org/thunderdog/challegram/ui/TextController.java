@@ -32,6 +32,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
+import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Background;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.TGMessage;
@@ -44,6 +45,7 @@ import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.support.RippleSupport;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Intents;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.TGMimeType;
@@ -125,21 +127,15 @@ public class TextController extends ViewController<TextController.Arguments> imp
 
   @Override
   public void fillMenuItems (int id, HeaderView header, LinearLayout menu) {
-    switch (id) {
-      case R.id.menu_text: {
-        header.addMoreButton(menu, this);
-        break;
-      }
+    if (id == R.id.menu_text) {
+      header.addMoreButton(menu, this);
     }
   }
 
   @Override
   public void onMenuItemPressed (int id, View view) {
-    switch (id) {
-      case R.id.menu_btn_more: {
-        showMore();
-        break;
-      }
+    if (id == R.id.menu_btn_more) {
+      showMore();
     }
   }
 
@@ -171,24 +167,15 @@ public class TextController extends ViewController<TextController.Arguments> imp
 
   @Override
   public void onMoreItemPressed (int id) {
-    switch (id) {
-      case R.id.btn_openLink: {
-        File file = new File(filePath);
-        Intents.openFile(context, file, mimeType);
-        break;
-      }
-      case R.id.btn_share: {
-        Intents.shareText(rawText);
-        break;
-      }
-      case R.id.btn_copyText: {
-        copyText();
-        break;
-      }
-      case R.id.btn_search: {
-        openSearchMode();
-        break;
-      }
+    if (id == R.id.btn_openLink) {
+      File file = new File(filePath);
+      Intents.openFile(context, file, mimeType);
+    } else if (id == R.id.btn_share) {
+      Intents.shareText(rawText);
+    } else if (id == R.id.btn_copyText) {
+      copyText();
+    } else if (id == R.id.btn_search) {
+      openSearchMode();
     }
   }
 
@@ -215,7 +202,7 @@ public class TextController extends ViewController<TextController.Arguments> imp
     loadText();
 
     FrameLayoutFix wrapperView = new FrameLayoutFix(context);
-    ViewSupport.setThemedBackground(wrapperView, R.id.theme_color_filling, this);
+    ViewSupport.setThemedBackground(wrapperView, ColorId.filling, this);
     wrapperView.addView(contentView);
 
     return wrapperView;
@@ -260,7 +247,7 @@ public class TextController extends ViewController<TextController.Arguments> imp
       return;
     }
     copyLine = line;
-    showOptions(trimmed, new int[] {R.id.btn_copyLine}, new String[] {Lang.getString(R.string.CopyLine) + " " + (index + 1)}, null, new int[] {R.drawable.baseline_content_copy_24});
+    showOptions(trimmed, new int[] {R.id.btn_copyLine}, new String[] {Lang.getString(R.string.CopyLine) + " " + (index + 1)}, null, new int[] {R.drawable.baseline_content_copy_24}, Config.MAX_COPY_TEXT_LINE_COUNT, null, null);
   }
 
   private void copyText () {
@@ -273,15 +260,10 @@ public class TextController extends ViewController<TextController.Arguments> imp
 
   @Override
   public boolean onOptionItemPressed (View optionItemView, int id) {
-    switch (id) {
-      case R.id.btn_copyLine: {
-        UI.copyText(copyLine, R.string.CopiedText);
-        break;
-      }
-      case R.id.btn_copyText: {
-        copyText();
-        break;
-      }
+    if (id == R.id.btn_copyLine) {
+      UI.copyText(copyLine, R.string.CopiedText);
+    } else if (id == R.id.btn_copyText) {
+      copyText();
     }
     return true;
   }
@@ -341,6 +323,7 @@ public class TextController extends ViewController<TextController.Arguments> imp
   }
 
   @Override
+  @SuppressWarnings("unchecked")
   public boolean handleMessage (Message msg) {
     switch (msg.what) {
       case READ_PROGRESS: {
@@ -348,13 +331,11 @@ public class TextController extends ViewController<TextController.Arguments> imp
         return true;
       }
       case DISPLAY_LINES: {
-        //noinspection unchecked
         displayLines((ArrayList<LineCell>) msg.obj, msg.arg1);
         return true;
       }
       case READ_COMPLETE: {
         displayProgress(msg.arg1, false);
-        //noinspection unchecked
         displayLines((ArrayList<LineCell>) msg.obj, msg.arg1);
         return true;
       }
@@ -635,6 +616,7 @@ public class TextController extends ViewController<TextController.Arguments> imp
     }
 
     @Override
+    @NonNull
     public String getSectionName (int section) {
       return lines.get(section).getIdStr();
     }
@@ -680,7 +662,7 @@ public class TextController extends ViewController<TextController.Arguments> imp
     }
 
     @Override
-    public void updateView (SectionedRecyclerView.SectionViewHolder holder, int position) {
+    public void updateView (SectionedRecyclerView.SectionViewHolder holder, int position, boolean isUpdate) {
       ((LineView) holder.itemView).setCell(lines.get(position));
     }
   }

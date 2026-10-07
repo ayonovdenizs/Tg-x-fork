@@ -30,14 +30,14 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.telegram.TdlibDelegate;
-import org.thunderdog.challegram.theme.ThemeColorId;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.ThemeId;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.util.CustomTypefaceSpan;
@@ -46,11 +46,12 @@ import org.thunderdog.challegram.util.text.Text;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.unit.ByteUnit;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
 @SuppressWarnings(value = "SpellCheckingInspection")
 public class Strings {
@@ -147,6 +148,14 @@ public class Strings {
     return true;
   }
 
+  public static int codePointCount (String cs) {
+    if (StringUtils.isEmpty(cs)) {
+      return 0;
+    } else {
+      return cs.codePointCount(0, cs.length());
+    }
+  }
+
   public static boolean isTrimmed (CharSequence full, CharSequence trimmed) {
     return full != null && trimmed != null && (full.length() > trimmed.length());
   }
@@ -213,7 +222,7 @@ public class Strings {
   }*/
 
   public interface Modifier<T> {
-    T modify (T item);
+    String modify (T item);
   }
 
   public static <T> String join (CharSequence delimiter, T[] tokens, Modifier<T> itemModifier) {
@@ -347,16 +356,39 @@ public class Strings {
     return b.toString();
   }
 
-  public static Uri wrapHttps (String url) {
+  public static Uri forceProtocol (String url, String protocol) {
     if (StringUtils.isEmpty(url))
       return null;
     try {
       Uri uri = Uri.parse(url);
       String scheme = uri.getScheme();
       if (StringUtils.isEmpty(scheme)) {
-        return Uri.parse("https://" + url);
-      } else if (!scheme.toLowerCase().equals(scheme)) {
-        return uri.buildUpon().scheme(scheme.toLowerCase()).build();
+        return Uri.parse(protocol + "://" + url);
+      } else if (!scheme.equals(protocol)) {
+        return uri.buildUpon().scheme(protocol).build();
+      } else {
+        return uri;
+      }
+    } catch (Throwable t) {
+      Log.e("Unable to parse uri: %s", t, url);
+      return null;
+    }
+  }
+
+  public static Uri wrapHttps (String url) {
+    return wrapProtocol(url, "https");
+  }
+
+  public static Uri wrapProtocol (String url, String defaultProtocol) {
+    if (StringUtils.isEmpty(url))
+      return null;
+    try {
+      Uri uri = Uri.parse(url);
+      String scheme = uri.getScheme();
+      if (StringUtils.isEmpty(scheme)) {
+        return Uri.parse(defaultProtocol + "://" + url);
+      } else if (!scheme.toLowerCase(Locale.ROOT).equals(scheme)) {
+        return uri.buildUpon().scheme(scheme.toLowerCase(Locale.ROOT)).build();
       } else {
         return uri;
       }
@@ -467,7 +499,7 @@ public class Strings {
 
   @Deprecated
   public static CharSequence highlightWords (String text, String highlight, int startIndex, @Nullable char[] special) {
-    return highlightWords(text, highlight, startIndex, special, 0);
+    return highlightWords(text, highlight, startIndex, special, ThemeId.NONE);
   }
 
   @Deprecated
@@ -492,21 +524,19 @@ public class Strings {
     }
     Spannable b = null;
     final int end = text.length();
-    final String lowercaseText = text.toLowerCase();
-    final String lowercaseHighlight = highlight.toLowerCase();
     ArrayList<String> splitted = null;
 
     int j = Text.indexOfSplitter(highlight, startIndex, special);
     int highlightIndex = 0;
     while (j != -1 || (splitted != null && highlightIndex < highlight.length())) {
       if (j == -1) {
-        splitted.add(lowercaseHighlight.substring(highlightIndex));
+        splitted.add(highlight.substring(highlightIndex));
         break;
       }
       if (splitted == null) {
         splitted = new ArrayList<>();
       }
-      String token = lowercaseHighlight.substring(highlightIndex, j);
+      String token = highlight.substring(highlightIndex, j);
       if (!StringUtils.isEmpty(token)) {
         splitted.add(token);
       }
@@ -517,11 +547,11 @@ public class Strings {
       Collections.sort(splitted, (o1, o2) -> Integer.compare(o2.length(), o1.length()));
     }
     while (startIndex < end) {
-      boolean found = lowercaseText.startsWith(lowercaseHighlight, startIndex);
-      String foundToken = lowercaseHighlight;
+      boolean found = text.regionMatches(true, startIndex, highlight, 0, highlight.length());
+      String foundToken = highlight;
       if (!found && splitted != null) {
         for (String token : splitted) {
-          if (lowercaseText.startsWith(token, startIndex)) {
+          if (text.regionMatches(true, startIndex, token, 0, token.length())) {
             foundToken = token;
             found = true;
             break;
@@ -532,7 +562,7 @@ public class Strings {
         if (b == null) {
           b = Spannable.Factory.getInstance().newSpannable(text);
         }
-        b.setSpan(new CustomTypefaceSpan(null, R.id.theme_color_textSearchQueryHighlight).setForceThemeId(forceThemeId), startIndex, startIndex + foundToken.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        b.setSpan(new CustomTypefaceSpan(null, ColorId.textSearchQueryHighlight).setForceThemeId(forceThemeId), startIndex, startIndex + foundToken.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
       }
       int i = Text.indexOfSplitter(text, startIndex, special);
       startIndex = i != -1 ? i + 1 : end;
@@ -541,8 +571,11 @@ public class Strings {
   }
 
   private static final char[] WORDS_LOOKUP = { ' ', '\n' };
+  public static boolean anyWordStartsWith (String source, String prefix) {
+    return anyWordStartsWith(source, prefix, null);
+  }
   public static boolean anyWordStartsWith (String source, String prefix, @Nullable int[] level) {
-    if (source.startsWith(prefix)) {
+    if (source.regionMatches(true, 0, prefix, 0, prefix.length())) {
       if (level != null) {
         level[0] = 0;
       }
@@ -556,7 +589,7 @@ public class Strings {
     while ((i = indexOfAnyChar(source, startIndex, WORDS_LOOKUP)) != -1) {
       startIndex = i + 1;
       l++;
-      if (source.startsWith(prefix, startIndex)) {
+      if (source.regionMatches(true, startIndex, prefix, 0, prefix.length())) {
         if (level != null) {
           level[0] = l;
         }
@@ -568,13 +601,17 @@ public class Strings {
 
   public static int indexOfAnyChar (String lookup, int startIndex, char[] chars) {
     final int length = lookup.length();
-    for (int i = startIndex; i < length; i++) {
-      char c = lookup.charAt(i);
-      for (char check : chars) {
-        if (c == check) {
-          return i;
+    for (int i = startIndex; i < length; ) {
+      int c = lookup.codePointAt(i);
+      int charCount = Character.charCount(c);
+      if (charCount == 1) {
+        for (char check : chars) {
+          if (c == check) {
+            return i;
+          }
         }
       }
+      i += charCount;
     }
     return -1;
   }
@@ -617,7 +654,7 @@ public class Strings {
       return false;
     }
     TdApi.TextEntity[] entities = Td.findEntities(in);
-    return entities != null && entities.length == 1 && entities[0].offset == 0 && entities[0].length == in.length() && entities[0].type.getConstructor() == TdApi.TextEntityTypeUrl.CONSTRUCTOR;
+    return entities != null && entities.length == 1 && entities[0].offset == 0 && entities[0].length == in.length() && Td.isUrl(entities[0].type);
   }
 
   public static boolean isValidEmail (String in) {
@@ -625,7 +662,7 @@ public class Strings {
       return false;
     }
     TdApi.TextEntity[] entities = Td.findEntities(in);
-    if (entities != null && entities.length == 1 && entities[0].offset == 0 && entities[0].length == in.length() && entities[0].type.getConstructor() == TdApi.TextEntityTypeEmailAddress.CONSTRUCTOR) {
+    if (entities != null && entities.length == 1 && entities[0].offset == 0 && entities[0].length == in.length() && Td.isEmailAddress(entities[0].type)) {
       return true;
     }
     try {
@@ -649,12 +686,12 @@ public class Strings {
     return b.toString();
   }
 
-  public static int getNumberLength (String input) {
+  public static int getNumberLength (CharSequence input) {
     if (StringUtils.isEmpty(input))
       return 0;
     int count = 0;
     for (int i = 0; i < input.length();) {
-      int codePoint = input.codePointAt(i);
+      int codePoint = Character.codePointAt(input, i);
       int size = Character.charCount(codePoint);
       if (size == 1 && codePoint >= '0' && codePoint <= '9') {
         count++;
@@ -682,11 +719,17 @@ public class Strings {
     return b.toString();
   }
 
-  public static CharSequence replaceBoldTokens (final String input) {
-    return replaceBoldTokens(input, 0);
+  public static CharSequence replaceBoldTokens (final CharSequence input) {
+    return replaceBoldTokens(input, Lang.boldCreator());
   }
 
-  public static CharSequence replaceBoldTokens (final String input, @ThemeColorId int colorId) {
+  public static CharSequence replaceBoldTokens (final CharSequence input, @ColorId int colorId) {
+    return replaceBoldTokens(input, (target, argStart, argEnd, argIndex, needFakeBold) ->
+      new CustomTypefaceSpan(needFakeBold ? Fonts.getRobotoRegular() : Fonts.getRobotoMedium(), colorId).setFakeBold(needFakeBold)
+    );
+  }
+
+  public static CharSequence replaceBoldTokens (final CharSequence input, Lang.SpanCreator spanCreator) {
     String token = "**";
     int tokenLen = token.length();
 
@@ -699,12 +742,17 @@ public class Strings {
       end = ssb.toString().indexOf(token, start);
 
       if (start > -1 && end > -1) {
-        boolean fakeBold = Text.needFakeBold(ssb, start, end);
-        CustomTypefaceSpan span = new CustomTypefaceSpan(fakeBold ? Fonts.getRobotoRegular() : Fonts.getRobotoMedium(), colorId).setFakeBold(fakeBold);
-        ssb.setSpan(span, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         // Delete the tokens before and after the span
         ssb.delete(end, end + tokenLen);
         ssb.delete(start - tokenLen, start);
+        start -= tokenLen;
+        end -= tokenLen;
+
+        // Set span
+        boolean fakeBold = Text.needFakeBold(ssb, start, end);
+        Object span = spanCreator.onCreateSpan(ssb, start, end, count, fakeBold);
+        ssb.setSpan(span, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+
         count++;
       }
     } while (start > -1 && end > -1);
@@ -834,13 +882,13 @@ public class Strings {
     }
   }
 
+  @SuppressWarnings("deprecation")
   public static String systemFormat (String formatPhone) {
     String result;
     try {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
         result = PhoneNumberUtils.formatNumber(formatPhone, "US");
       } else {
-        //noinspection deprecation
         result = PhoneNumberUtils.formatNumber(formatPhone);
       }
     } catch (Throwable t) {
@@ -906,6 +954,38 @@ public class Strings {
         return true;
     }
     return false;
+  }
+
+  public static String buildDurationFull (long duration, TimeUnit unit) {
+    StringBuilder builder = new StringBuilder(4);
+
+    String separator = " ";
+    long days = unit.toDays(duration);
+    if (days > 0) {
+      builder.append(Lang.plural(R.string.xDaysShort, days));
+      duration -= unit.convert(days, TimeUnit.DAYS);
+    }
+    long hours = unit.toHours(duration);
+    if (hours > 0) {
+      if (builder.length() > 0)
+        builder.append(separator);
+      builder.append(Lang.plural(R.string.xHoursShort, hours));
+      duration -= unit.convert(hours, TimeUnit.HOURS);
+    }
+    long minutes = unit.toMinutes(duration);
+    if (minutes > 0) {
+      if (builder.length() > 0)
+        builder.append(separator);
+      builder.append(Lang.plural(R.string.xMinutesShort, minutes));
+      duration -= unit.convert(minutes, TimeUnit.MINUTES);
+    }
+    long seconds = unit.toSeconds(duration);
+    if (builder.length() > 0)
+      builder.append(separator);
+    builder.append(Lang.plural(R.string.xSecondsShort, seconds));
+    duration -= unit.convert(seconds, TimeUnit.MINUTES);
+
+    return builder.toString();
   }
 
   public static String buildDuration (long durationSeconds) {
@@ -989,7 +1069,7 @@ public class Strings {
     return Lang.getString(stringRes, (allowFloat ? Lang.formatNumber(value) : Strings.buildCounter((long) value)));
   }
 
-  public static CharSequence setSpanColorId (CharSequence str, @ThemeColorId int colorId) {
+  public static CharSequence setSpanColorId (CharSequence str, @ColorId int colorId) {
     if (str instanceof Spannable) {
       CustomTypefaceSpan[] spans = ((Spannable) str).getSpans(0, str.length(), CustomTypefaceSpan.class);
       if (spans != null && spans.length > 0) {
@@ -999,6 +1079,10 @@ public class Strings {
       }
     }
     return str;
+  }
+
+  public static CharSequence buildMarkdown (TdlibDelegate context, CharSequence text) {
+    return buildMarkdown(context, text, null);
   }
 
   public static CharSequence buildMarkdown (TdlibDelegate context, CharSequence text, @Nullable CustomTypefaceSpan.OnClickListener onClickListener) {
@@ -1037,41 +1121,6 @@ public class Strings {
     return b;
   }
 
-  private static boolean isWeakRtl (int codePoint) {
-    switch (codePoint) {
-      case 0x5d1:
-      case 0x5d8:
-      case 0x5db:
-      case 0x5dc:
-      case 0x5de:
-      case 0x5e1:
-      case 0x5ea:
-      case 0xfb31:
-      case 0xfb38:
-      case 0xfb3c:
-      case 0xfb3e:
-      case 0xfb41:
-      case 0xfb4a:
-      case 0xfe91:
-      case 0xfb8c:
-      case 0x5dd:
-      case 0xfea1:
-      case 0x623:
-      case 0x628:
-      case 0x62d:
-      case 0x6a1:
-      case 0xfeaa:
-      case 0x642:
-      case 0xfea7:
-      case 0xfea8:
-      case 0x6aa:
-      case 0x6c3:
-      case 0xfe95:
-        return true;
-    }
-    return false;
-  }
-
   public static boolean isEuropeanNumber (int codePoint) {
     return Character.getDirectionality(codePoint) == Character.DIRECTIONALITY_EUROPEAN_NUMBER;
   }
@@ -1081,11 +1130,6 @@ public class Strings {
   }
 
   public static int getCodePointDirection (int codePoint) {
-    /*switch (codePoint) {
-      case '.'
-      return DIRECTION_NEUTRAL;
-    }*/
-
     int directionality = Character.getDirectionality(codePoint);
     switch (directionality) {
       case Character.DIRECTIONALITY_LEFT_TO_RIGHT:
@@ -1096,7 +1140,7 @@ public class Strings {
       case Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC:
       case Character.DIRECTIONALITY_RIGHT_TO_LEFT_EMBEDDING:
       case Character.DIRECTIONALITY_RIGHT_TO_LEFT_OVERRIDE:
-        return isWeakRtl(codePoint) ? DIRECTION_NEUTRAL : DIRECTION_RTL;
+        return DIRECTION_RTL;
     }
     return DIRECTION_NEUTRAL;
   }

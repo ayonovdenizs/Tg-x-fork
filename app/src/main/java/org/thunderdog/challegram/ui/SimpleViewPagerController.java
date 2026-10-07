@@ -19,10 +19,12 @@ import android.content.Context;
 import androidx.annotation.Nullable;
 
 import org.thunderdog.challegram.R;
+import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.navigation.BackHeaderButton;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.navigation.ViewPagerController;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.widget.ViewPager;
 
 import me.vkryl.android.widget.FrameLayoutFix;
@@ -40,6 +42,11 @@ public class SimpleViewPagerController extends ViewPagerController<Object> {
     }
     this.sections = sections;
     this.isWhite = isWhite;
+  }
+
+  @Override
+  public boolean supportsBottomInset () {
+    return true;
   }
 
   @Override
@@ -65,7 +72,7 @@ public class SimpleViewPagerController extends ViewPagerController<Object> {
   @Override
   protected void onCreateView (Context context, FrameLayoutFix contentView, ViewPager pager) {
     if (isWhite && headerCell != null) {
-      headerCell.getTopView().setTextFromToColorId(0, R.id.theme_color_text);
+      headerCell.getTopView().setTextFromToColorId(ColorId.NONE, ColorId.text);
     }
     prepareControllerForPosition(0, this::executeScheduledAnimation);
   }
@@ -93,23 +100,23 @@ public class SimpleViewPagerController extends ViewPagerController<Object> {
       return sections;
     String[] result = new String[controllers.length];
     for (int i = 0; i < result.length; i++) {
-      result[i] = controllers[i].getName().toString().toUpperCase();
+      result[i] = Lang.uppercase(controllers[i].getName().toString());
     }
     return result;
   }
 
   @Override
   protected int getHeaderColorId () {
-    return isWhite ? R.id.theme_color_filling : super.getHeaderColorId();
+    return isWhite ? ColorId.filling : super.getHeaderColorId();
   }
 
   @Override
   protected int getHeaderIconColorId () {
-    return isWhite ? R.id.theme_color_headerLightIcon : super.getHeaderIconColorId();
+    return isWhite ? ColorId.headerLightIcon : super.getHeaderIconColorId();
   }
 
   @Override
   protected int getHeaderTextColorId () {
-    return isWhite ? R.id.theme_color_text : super.getHeaderTextColorId();
+    return isWhite ? ColorId.text : super.getHeaderTextColorId();
   }
 }

@@ -29,8 +29,8 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.ListUpdateCallback;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BuildConfig;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
@@ -51,8 +51,10 @@ import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.LiveLocationManager;
 import org.thunderdog.challegram.telegram.MessageListener;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.telegram.TdlibAccentColor;
 import org.thunderdog.challegram.telegram.TdlibSender;
 import org.thunderdog.challegram.telegram.TdlibThread;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeDelegate;
 import org.thunderdog.challegram.tool.Intents;
@@ -78,8 +80,9 @@ import me.vkryl.core.ColorUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.collection.IntList;
 import me.vkryl.core.lambda.Destroyable;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
+@SuppressWarnings("unchecked")
 public abstract class MapController<V extends View, T> extends ViewController<MapController.Args> implements View.OnClickListener, LocationHelper.LocationChangeListener, MoreDelegate, FactorAnimator.Target, Client.ResultHandler, MessageListener, Comparator<MapController.LocationPoint<T>>, LiveLocationManager.Listener, ListUpdateCallback {
   protected static final int MODE_DROPPED_PIN = 0;
   protected static final int MODE_LIVE_LOCATION = 1;
@@ -97,7 +100,8 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     public long locationOwnerChatId;
     public boolean isFaded;
 
-    public long chatId, messageThreadId;
+    public long chatId;
+    public TdApi.MessageTopic topicId;
 
     public Args (double latitude, double longitude) {
       this.mode = MODE_DROPPED_PIN;
@@ -106,12 +110,12 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     }
 
     public Args (double latitude, double longitude, @Nullable TdApi.Message message) {
-      this.mode = message != null && ((TdApi.MessageLocation) message.content).expiresIn == 0 ? MODE_DROPPED_PIN : MODE_LIVE_LOCATION;
+      this.mode = message != null && ((TdApi.MessageLiveLocation) message.content).expiresIn == 0 ? MODE_DROPPED_PIN : MODE_LIVE_LOCATION;
       this.latitude = latitude;
       this.longitude = longitude;
       this.message = message;
       if (message != null) {
-        messageExpiresAt = SystemClock.uptimeMillis() + (long) ((TdApi.MessageLocation) message.content).expiresIn * 1000l;
+        messageExpiresAt = SystemClock.uptimeMillis() + (long) ((TdApi.MessageLiveLocation) message.content).expiresIn * 1000l;
       }
     }
 
@@ -120,9 +124,9 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
       return this;
     }
 
-    public Args setChatId (long chatId, long messageThreadId) {
+    public Args setChatId (long chatId, TdApi.MessageTopic messageTopicId) {
       this.chatId = chatId;
-      this.messageThreadId = messageThreadId;
+      this.topicId = messageTopicId;
       return this;
     }
 
@@ -212,7 +216,7 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     public LocationPoint<D> setSourceMessage (@Nullable TdApi.Message liveLocation, boolean isLiveLocation) {
       this.message = liveLocation;
       this.isLiveLocation = isLiveLocation;
-      this.expiresAt = liveLocation != null ? SystemClock.uptimeMillis() + (long) ((TdApi.MessageLocation) liveLocation.content).expiresIn * 1000l : 0;
+      this.expiresAt = liveLocation != null ? SystemClock.uptimeMillis() + (long) ((TdApi.MessageLiveLocation) liveLocation.content).expiresIn * 1000l : 0;
       return this;
     }
   }
@@ -260,13 +264,13 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
 
   @Override
   protected int getHeaderIconColorId () {
-    return R.id.theme_color_headerButtonIcon;
+    return ColorId.headerButtonIcon;
   }
 
   @Override
   protected View onCreateView (Context context) {
     contentView = new FrameLayoutFix(context);
-    ViewSupport.setThemedBackground(contentView, R.id.theme_color_filling, this);
+    ViewSupport.setThemedBackground(contentView, ColorId.filling, this);
     contentView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
     int bottomMargin = SettingHolder.measureHeightForType(ListItem.TYPE_ATTACH_LOCATION_BIG);
@@ -279,10 +283,10 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     contentView.addView(mapView);
 
     directionButton = new CircleButton(context);
-    directionButton.setBottomText(Lang.getString(R.string.DirectionGo).toUpperCase());
+    directionButton.setBottomText(Lang.uppercase(Lang.getString(R.string.DirectionGo)));
     directionButton.setId(R.id.btn_direction);
     directionButton.setOnClickListener(this);
-    directionButton.init(R.drawable.baseline_directions_24, 56f, 4f, R.id.theme_color_circleButtonRegular, R.id.theme_color_circleButtonRegularIcon);
+    directionButton.init(R.drawable.baseline_directions_24, 56f, 4f, ColorId.circleButtonRegular, ColorId.circleButtonRegularIcon);
     int padding = Screen.dp(4f);
     FrameLayoutFix.LayoutParams params;
     params = FrameLayoutFix.newParams(Screen.dp(56f) + padding * 2, Screen.dp(56f) + padding * 2, Gravity.RIGHT | Gravity.BOTTOM);
@@ -295,7 +299,7 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     myLocationButton = new CircleButton(context);
     myLocationButton.setId(R.id.btn_gps);
     myLocationButton.setOnClickListener(this);
-    myLocationButton.init(R.drawable.baseline_gps_fixed_24, 56f, 4f, R.id.theme_color_filling, R.id.theme_color_icon);
+    myLocationButton.init(R.drawable.baseline_gps_fixed_24, 56f, 4f, ColorId.filling, ColorId.icon);
     params = FrameLayoutFix.newParams(Screen.dp(56f) + padding * 2, Screen.dp(56f) + padding * 2, Gravity.RIGHT | Gravity.BOTTOM);
     params.rightMargin = Screen.dp(16f) - padding;
     params.bottomMargin = params.rightMargin + bottomMargin;
@@ -309,7 +313,7 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     tileButton = new CircleButton(context);
     tileButton.setId(R.id.btn_layer);
     tileButton.setOnClickListener(this);
-    tileButton.init(R.drawable.baseline_layers_24, 36f, 4f, R.id.theme_color_filling, R.id.theme_color_icon);
+    tileButton.init(R.drawable.baseline_layers_24, 36f, 4f, ColorId.filling, ColorId.icon);
     params = FrameLayoutFix.newParams(Screen.dp(36f) + padding * 2, Screen.dp(36f) + padding * 2, Gravity.RIGHT | Gravity.TOP);
     params.rightMargin = Screen.dp(10f) - padding;
     params.topMargin = HeaderView.getTopOffset() + params.rightMargin;
@@ -321,7 +325,7 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     backCircle = new CircleButton(context);
     backCircle.setEnabled(false);
     backCircle.setAlpha(0f);
-    backCircle.init(0, 36f, 4f, R.id.theme_color_filling, R.id.theme_color_icon);
+    backCircle.init(0, 36f, 4f, ColorId.filling, ColorId.icon);
     params = FrameLayoutFix.newParams(Screen.dp(36f) + padding * 2, Screen.dp(36f) + padding * 2, Gravity.LEFT | Gravity.TOP);
     params.leftMargin = Screen.dp(10f) - padding;
     params.topMargin = HeaderView.getTopOffset() + params.leftMargin;
@@ -339,7 +343,7 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     ViewSupport.setHigherElevation(recyclerView);
     recyclerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
     recyclerView.setVerticalScrollBarEnabled(false);
-    recyclerView.addItemDecoration(new SettingsAdapter.BackgroundDecoration(R.id.theme_color_background) {
+    recyclerView.addItemDecoration(new SettingsAdapter.BackgroundDecoration(ColorId.background) {
       @Override
       public void getItemOffsets (Rect outRect, View view, RecyclerView parent, RecyclerView.State state) {
         int position = parent.getChildAdapterPosition(view);
@@ -379,85 +383,80 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     adapter = new SettingsAdapter(this) {
       @Override
       protected void setPlace (ListItem item, int position, final MediaLocationPlaceView view, boolean isUpdate) {
-        switch (item.getId()) {
-          case R.id.liveLocation: {
-            LocationPoint<T> point = (LocationPoint<T>) item.getData();
-            setLocationPlaceView(view, point.message, point.expiresAt, false);
-            break;
-          }
-          case R.id.liveLocationSelf: {
-            final TdApi.Message msg = tdlib.cache().findOutputLiveLocationMessage(getArgumentsStrict().chatId);
-            if (msg != null) {
-              TGMessageLocation.TimeResult result = TGMessageLocation.buildLiveLocationSubtitle(tdlib, Math.max(msg.date, msg.editDate));
-              TdApi.MessageLocation location = ((TdApi.MessageLocation) msg.content);
-              long expiresIn = Math.max(0, (long) (msg.date + location.livePeriod) * 1000l - System.currentTimeMillis());
-              view.setLiveLocation(Lang.getString(R.string.StopSharingLiveLocation), result.text, true, true, location.expiresIn == 0, location.livePeriod, expiresIn > 0 ? SystemClock.uptimeMillis() + expiresIn : 0);
-              view.setInProgress(inShareProgress, isUpdate);
-              if (result.nextLiveLocationUpdateTime != -1) {
-                view.scheduleSubtitleUpdater(new Runnable() {
-                  @Override
-                  public void run () {
-                    if (view.getSubtitleUpdater() != this) {
-                      return;
-                    }
-                    TGMessageLocation.TimeResult result = TGMessageLocation.buildLiveLocationSubtitle(tdlib, Math.max(msg.date, msg.editDate));
-                    view.updateSubtitle(result.text);
-                    if (result.nextLiveLocationUpdateTime != -1) {
-                      view.scheduleSubtitleUpdater(this, SystemClock.uptimeMillis() - result.nextLiveLocationUpdateTime);
-                    }
+        final int itemId = item.getId();
+        if (itemId == R.id.liveLocation) {
+          LocationPoint<T> point = (LocationPoint<T>) item.getData();
+          setLocationPlaceView(view, point.message, point.expiresAt, false);
+        } else if (itemId == R.id.liveLocationSelf) {
+          final TdApi.Message msg = tdlib.cache().findOutputLiveLocationMessage(getArgumentsStrict().chatId);
+          if (msg != null) {
+            TGMessageLocation.TimeResult result = TGMessageLocation.buildLiveLocationSubtitle(tdlib, Math.max(msg.date, msg.editDate));
+            TdApi.MessageLiveLocation location = ((TdApi.MessageLiveLocation) msg.content);
+            long expiresIn = Math.max(0, (long) (msg.date + location.location.livePeriod) * 1000l - System.currentTimeMillis());
+            view.setLiveLocation(Lang.getString(R.string.StopSharingLiveLocation), result.text, true, true, location.expiresIn == 0, location.location.livePeriod, expiresIn > 0 ? SystemClock.uptimeMillis() + expiresIn : 0);
+            view.setInProgress(inShareProgress, isUpdate);
+            if (result.nextLiveLocationUpdateTime != -1) {
+              view.scheduleSubtitleUpdater(new Runnable() {
+                @Override
+                public void run () {
+                  if (view.getSubtitleUpdater() != this) {
+                    return;
                   }
-                }, SystemClock.uptimeMillis() - result.nextLiveLocationUpdateTime);
-              }
-            } else {
-              view.setDefaultLiveLocation(false);
-              view.setInProgress(inShareProgress, isUpdate);
+                  TGMessageLocation.TimeResult result = TGMessageLocation.buildLiveLocationSubtitle(tdlib, Math.max(msg.date, msg.editDate));
+                  view.updateSubtitle(result.text);
+                  if (result.nextLiveLocationUpdateTime != -1) {
+                    view.scheduleSubtitleUpdater(this, SystemClock.uptimeMillis() - result.nextLiveLocationUpdateTime);
+                  }
+                }
+              }, SystemClock.uptimeMillis() - result.nextLiveLocationUpdateTime);
             }
-            break;
+          } else {
+            view.setDefaultLiveLocation(false);
+            view.setInProgress(inShareProgress, isUpdate);
           }
-          case R.id.place: {
-            Args args = getArgumentsStrict();
-            switch (args.mode) {
-              case MODE_DROPPED_PIN: {
-                if (args.message != null) {
-                  setLocationPlaceView(view, args.message, args.messageExpiresAt, true);
-                  return;
-                }
-                String subtitle;
-                if (myLocation != null) {
-                  StringBuilder b = new StringBuilder();
-                  b.append(Lang.shortDistance(U.distanceBetween(args.latitude, args.longitude, myLocation.latitude, myLocation.longitude)));
-                  if (!StringUtils.isEmpty(args.address)) {
-                    b.append(Strings.DOT_SEPARATOR);
-                    b.append(args.address);
-                  }
-                  subtitle = b.toString();
-                } else if (isLoadingLocation) {
-                  subtitle = Lang.getString(R.string.CalculatingDistance);
-                } else {
-                  subtitle = !StringUtils.isEmpty(args.address) ? args.address : Lang.beautifyCoordinates(args.latitude, args.longitude);
-                }
-                String title = args.locationOwnerChatId != 0 ? tdlib.chatTitle(args.locationOwnerChatId) : !StringUtils.isEmpty(args.title) ? args.title : Lang.getString(R.string.DroppedPin);
-                view.setLocation(title, subtitle, R.id.theme_color_file, null, false, 0, 0);
-                if (args.locationOwnerChatId != 0) {
-                  ImageFile avatarFile = tdlib.chatAvatar(args.locationOwnerChatId);
-                  if (avatarFile != null) {
-                    view.setRoundedLocationImage(avatarFile);
-                  } else {
-                    view.setPlaceholder(tdlib.chatPlaceholderMetadata(args.locationOwnerChatId, false));
-                  }
-                } else {
-                  view.setLocationImage(args.iconImage);
-                }
-                view.setIsFaded(args.isFaded);
-                break;
+        } else if (itemId == R.id.place) {
+          Args args = getArgumentsStrict();
+          switch (args.mode) {
+            case MODE_DROPPED_PIN: {
+              if (args.message != null) {
+                setLocationPlaceView(view, args.message, args.messageExpiresAt, true);
+                return;
               }
-              case MODE_LIVE_LOCATION: {
-                LocationPoint<T> point = (LocationPoint<T>) item.getData();
-                setLocationPlaceView(view, point.message, point.expiresAt, true);
-                break;
+              String subtitle;
+              if (myLocation != null) {
+                StringBuilder b = new StringBuilder();
+                b.append(Lang.shortDistance(U.distanceBetween(args.latitude, args.longitude, myLocation.latitude, myLocation.longitude)));
+                if (!StringUtils.isEmpty(args.address)) {
+                  b.append(Strings.DOT_SEPARATOR);
+                  b.append(args.address);
+                }
+                subtitle = b.toString();
+              } else if (isLoadingLocation) {
+                subtitle = Lang.getString(R.string.CalculatingDistance);
+              } else {
+                subtitle = !StringUtils.isEmpty(args.address) ? args.address : Lang.beautifyCoordinates(args.latitude, args.longitude);
               }
+              String title = args.locationOwnerChatId != 0 ? tdlib.chatTitle(args.locationOwnerChatId) : !StringUtils.isEmpty(args.title) ? args.title : Lang.getString(R.string.DroppedPin);
+              TdlibAccentColor accentColor = args.locationOwnerChatId != 0 ? tdlib.chatAccentColor(args.locationOwnerChatId) : tdlib.accentColor(TdlibAccentColor.InternalId.FILE_REGULAR);
+              view.setLocation(title, subtitle, accentColor, null, false, 0, 0);
+              if (args.locationOwnerChatId != 0) {
+                ImageFile avatarFile = tdlib.chatAvatar(args.locationOwnerChatId);
+                if (avatarFile != null) {
+                  view.setRoundedLocationImage(avatarFile);
+                } else {
+                  view.setPlaceholder(tdlib.chatPlaceholderMetadata(args.locationOwnerChatId, false));
+                }
+              } else {
+                view.setLocationImage(args.iconImage);
+              }
+              view.setIsFaded(args.isFaded);
+              break;
             }
-            break;
+            case MODE_LIVE_LOCATION: {
+              LocationPoint<T> point = (LocationPoint<T>) item.getData();
+              setLocationPlaceView(view, point.message, point.expiresAt, true);
+              break;
+            }
           }
         }
       }
@@ -489,7 +488,7 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
           items.add(newShareLiveLocationCell());
         }
         if (sharingMessage != null) {
-          TdApi.Location location = ((TdApi.MessageLocation) sharingMessage.content).location;
+          TdApi.Location location = ((TdApi.MessageLiveLocation) sharingMessage.content).location.location;
           myLocation = new LocationPoint<>(this, location.latitude, location.longitude);
           myLocation.isSelfLocation = true;
         }
@@ -603,8 +602,8 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     view.setRoundedLocationImage(sender.getAvatar());
 
     TGMessageLocation.TimeResult result = buildLocationSubtitle(msg, isBase);
-    TdApi.MessageLocation location = (TdApi.MessageLocation) msg.content;
-    view.setLocation(sender.getName(), result.text, sender.getAvatarColorId(), sender.getLetters(), expiresAt == 0 || SystemClock.uptimeMillis() >= expiresAt, location.livePeriod, expiresAt);
+    TdApi.MessageLiveLocation location = (TdApi.MessageLiveLocation) msg.content;
+    view.setLocation(sender.getName(), result.text, sender.getAccentColor(), sender.getLetters(), expiresAt == 0 || SystemClock.uptimeMillis() >= expiresAt, location.location.livePeriod, expiresAt);
     if (result.nextLiveLocationUpdateTime != -1) {
       view.scheduleSubtitleUpdater(new Runnable() {
         @Override
@@ -623,8 +622,8 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
   }
 
   private TGMessageLocation.TimeResult buildLocationSubtitle (TdApi.Message msg, boolean isBase) {
-    TdApi.MessageLocation messageLocation = (TdApi.MessageLocation) msg.content;
-    TdApi.Location location = messageLocation.location;
+    TdApi.MessageLiveLocation messageLocation = (TdApi.MessageLiveLocation) msg.content;
+    TdApi.Location location = messageLocation.location.location;
     LocationPoint<T> targetPoint;
     targetPoint = myLocation;
     if (!isBase && hasFocusPoint()) {
@@ -635,7 +634,7 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
 
     StringBuilder b = new StringBuilder();
 
-    /*if (((TdApi.MessageLocation) msg.content).expiresIn > 0) {
+    /*if (((TdApi.MessageLiveLocation) msg.content).expiresIn > 0) {
 
     } else {
       String ago = Lang.getAgo(Math.max(msg.date, msg.editDate), System.currentTimeMillis(), false, true, true);
@@ -790,7 +789,23 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
             Args args = getArgumentsStrict();
             inShareProgress = true;
             adapter.updateValuedSettingById(R.id.liveLocationSelf);
-            tdlib.sendMessage(args.chatId, args.messageThreadId, 0, Td.newSendOptions(tdlib.chatDefaultDisableNotifications(args.chatId)), new TdApi.InputMessageLocation(new TdApi.Location(myLocation.latitude, myLocation.longitude, myLocation.accuracy), arg1, myLocation.heading, 0));
+            tdlib.sendMessage(
+              args.chatId,
+              args.topicId,
+              null,
+              Td.newSendOptions(
+                null,
+                tdlib.chatDefaultDisableNotifications(args.chatId)
+              ),
+              new TdApi.InputMessageLiveLocation(
+                new TdApi.LiveLocation(
+                  new TdApi.Location(myLocation.latitude, myLocation.longitude, myLocation.accuracy),
+                  arg1,
+                  myLocation.heading,
+                  0
+                )
+              )
+            );
           }
         });
         break;
@@ -813,11 +828,11 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     switch (id) {
       case ANIMATOR_MY: {
         if (factor == 0f) {
-          myLocationButton.setIconColorId(R.id.theme_color_icon);
+          myLocationButton.setIconColorId(ColorId.icon);
         } else if (factor == 1f) {
-          myLocationButton.setIconColorId(R.id.theme_color_iconActive);
+          myLocationButton.setIconColorId(ColorId.iconActive);
         } else {
-          myLocationButton.setCustomIconColor(ColorUtils.fromToArgb(Theme.iconColor(), Theme.getColor(R.id.theme_color_iconActive), factor));
+          myLocationButton.setCustomIconColor(ColorUtils.fromToArgb(Theme.iconColor(), Theme.getColor(ColorId.iconActive), factor));
         }
         break;
       }
@@ -1212,110 +1227,97 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
   @Override
   public void onClick (View v) {
     Args args = getArgumentsStrict();
-    switch (v.getId()) {
-      case R.id.liveLocation: {
-        LocationPoint<T> point = (LocationPoint<T>) ((ListItem) v.getTag()).getData();
-        if (focusMode == FOCUS_MODE_TARGET && focusTarget == point) {
-          setFocusMode(FOCUS_MODE_DEFAULT, null);
-        } else if (point != null) {
-          setFocusMode(FOCUS_MODE_TARGET, point);
-        }
-        if (BuildConfig.DEBUG) {
-          adapter.updateValuedSettingByPosition(adapter.indexOfViewByData(point));
-        }
-        break;
+    final int viewId = v.getId();
+    if (viewId == R.id.liveLocation) {
+      LocationPoint<T> point = (LocationPoint<T>) ((ListItem) v.getTag()).getData();
+      if (focusMode == FOCUS_MODE_TARGET && focusTarget == point) {
+        setFocusMode(FOCUS_MODE_DEFAULT, null);
+      } else if (point != null) {
+        setFocusMode(FOCUS_MODE_TARGET, point);
       }
-      case R.id.liveLocationSelf: {
-        if (inShareProgress)
-          return;
-        TdApi.Message msg = tdlib.cache().findOutputLiveLocationMessage(args.chatId);
-        this.inShareProgress = true;
-        adapter.updateValuedSettingById(R.id.liveLocationSelf);
-        if (msg != null) {
-          tdlib.client().send(new TdApi.EditMessageLiveLocation(msg.chatId, msg.id, null, null, 0, 0), tdlib.okHandler());
-        } else {
-          locationHelper.receiveLocation(REQUEST_SHARE_LIVE, null, 10000, true);
-        }
-        break;
+      if (BuildConfig.DEBUG) {
+        adapter.updateValuedSettingByPosition(adapter.indexOfViewByData(point));
       }
-      case R.id.place: {
-        /*if (!hasChangedFocus) {
+    } else if (viewId == R.id.liveLocationSelf) {
+      if (inShareProgress)
+        return;
+      TdApi.Message msg = tdlib.cache().findOutputLiveLocationMessage(args.chatId);
+      this.inShareProgress = true;
+      adapter.updateValuedSettingById(R.id.liveLocationSelf);
+      if (msg != null) {
+        tdlib.send(new TdApi.EditMessageLiveLocation(msg.chatId, msg.id, null, null), tdlib.errorHandler());
+      } else {
+        locationHelper.receiveLocation(REQUEST_SHARE_LIVE, null, 10000, true);
+      }
+    } else if (viewId == R.id.place) {/*if (!hasChangedFocus) {
           hasChangedFocus = true;
           if (mapView != null) {
             updateCameraAutomatically();
           }
           return;
         }*/
-        if (focusMode != FOCUS_MODE_DEFAULT && focusMode != FOCUS_MODE_SELF && !(focusMode == FOCUS_MODE_TARGET && hasFocusPoint() && focusTarget != pointsOfInterest.get(0))) {
-          if (myLocation == null) {
-            if (focusMode == FOCUS_MODE_TARGET) {
-              setLoadingLocation(true);
-              locationHelper.receiveLocation(REQUEST_FOCUS_DEFAULT, null, -1, true);
-            } else {
-              setFocusMode(FOCUS_MODE_TARGET, pointsOfInterest.get(0));
-            }
+      if (focusMode != FOCUS_MODE_DEFAULT && focusMode != FOCUS_MODE_SELF && !(focusMode == FOCUS_MODE_TARGET && hasFocusPoint() && focusTarget != pointsOfInterest.get(0))) {
+        if (myLocation == null) {
+          if (focusMode == FOCUS_MODE_TARGET) {
+            setLoadingLocation(true);
+            locationHelper.receiveLocation(REQUEST_FOCUS_DEFAULT, null, -1, true);
           } else {
-            setFocusMode(FOCUS_MODE_DEFAULT, null);
+            setFocusMode(FOCUS_MODE_TARGET, pointsOfInterest.get(0));
           }
-        } else if (hasFocusPoint()) {
-          setFocusMode(FOCUS_MODE_TARGET, pointsOfInterest.get(0));
-        }
-        break;
-      }
-      case R.id.btn_direction: {
-        if (!onBuildDirectionTo(mapView, args.latitude, args.longitude)) {
-          Intents.openDirections(args.latitude, args.longitude, args.title, args.address);
-        }
-        break;
-      }
-      case R.id.btn_gps: {
-        if (focusMode == FOCUS_MODE_SELF) {
-          myLocationButton.setInProgress(false);
-          locationHelper.cancel();
-          setFocusMode(FOCUS_MODE_DEFAULT, null);
         } else {
-          myLocationButton.setInProgress(true);
-          locationHelper.receiveLocation(REQUEST_FOCUS_SELF, null, -1, true);
+          setFocusMode(FOCUS_MODE_DEFAULT, null);
         }
-        break;
+      } else if (hasFocusPoint()) {
+        setFocusMode(FOCUS_MODE_TARGET, pointsOfInterest.get(0));
       }
-      case R.id.btn_layer: {
-        IntList ids = new IntList(4);
-        StringList strings = new StringList(4);
-        int[] mapTypes = getAvailableMapTypes();
-        for (int mapType : mapTypes) {
-          int id, string;
-          switch (mapType) {
-            case Settings.MAP_TYPE_DEFAULT:
-              id = R.id.btn_layerTypeMapDefault;
-              string = R.string.LayerMapDefault;
-              break;
-            case Settings.MAP_TYPE_DARK:
-              id = R.id.btn_layerTypeMapDark;
-              string = R.string.LayerMapDark;
-              break;
-            case Settings.MAP_TYPE_SATELLITE:
-              id = R.id.btn_layerTypeMapSatellite;
-              string = R.string.LayerMapSatellite;
-              break;
-            case Settings.MAP_TYPE_TERRAIN:
-              id = R.id.btn_layerTypeMapTerrain;
-              string = R.string.LayerMapTerrain;
-              break;
-            case Settings.MAP_TYPE_HYBRID:
-              id = R.id.btn_layerTypeMapHybrid;
-              string = R.string.LayerMapHybrid;
-              break;
-            default:
-              throw new IllegalArgumentException();
-          }
-          ids.append(id);
-          strings.append(string);
+    } else if (viewId == R.id.btn_direction) {
+      if (!onBuildDirectionTo(mapView, args.latitude, args.longitude)) {
+        Intents.openDirections(args.latitude, args.longitude, args.title, args.address);
+      }
+    } else if (viewId == R.id.btn_gps) {
+      if (focusMode == FOCUS_MODE_SELF) {
+        myLocationButton.setInProgress(false);
+        locationHelper.cancel();
+        setFocusMode(FOCUS_MODE_DEFAULT, null);
+      } else {
+        myLocationButton.setInProgress(true);
+        locationHelper.receiveLocation(REQUEST_FOCUS_SELF, null, -1, true);
+      }
+    } else if (viewId == R.id.btn_layer) {
+      IntList ids = new IntList(4);
+      StringList strings = new StringList(4);
+      int[] mapTypes = getAvailableMapTypes();
+      for (int mapType : mapTypes) {
+        int id, string;
+        switch (mapType) {
+          case Settings.MAP_TYPE_DEFAULT:
+            id = R.id.btn_layerTypeMapDefault;
+            string = R.string.LayerMapDefault;
+            break;
+          case Settings.MAP_TYPE_DARK:
+            id = R.id.btn_layerTypeMapDark;
+            string = R.string.LayerMapDark;
+            break;
+          case Settings.MAP_TYPE_SATELLITE:
+            id = R.id.btn_layerTypeMapSatellite;
+            string = R.string.LayerMapSatellite;
+            break;
+          case Settings.MAP_TYPE_TERRAIN:
+            id = R.id.btn_layerTypeMapTerrain;
+            string = R.string.LayerMapTerrain;
+            break;
+          case Settings.MAP_TYPE_HYBRID:
+            id = R.id.btn_layerTypeMapHybrid;
+            string = R.string.LayerMapHybrid;
+            break;
+          default:
+            throw new IllegalArgumentException();
         }
-        if (!ids.isEmpty()) {
-          showMore(ids.get(), strings.get(), 0);
-        }
-        break;
+        ids.append(id);
+        strings.append(string);
+      }
+      if (!ids.isEmpty()) {
+        showMore(ids.get(), strings.get(), 0);
       }
     }
   }
@@ -1323,15 +1325,18 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
   @Override
   public void onMoreItemPressed (int id) {
     int newMapType;
-    switch (id) {
-      case R.id.btn_layerTypeMapDefault: newMapType = Settings.MAP_TYPE_DEFAULT; break;
-      case R.id.btn_layerTypeMapDark: newMapType = Settings.MAP_TYPE_DARK; break;
-      case R.id.btn_layerTypeMapSatellite: newMapType = Settings.MAP_TYPE_SATELLITE; break;
-      case R.id.btn_layerTypeMapTerrain: newMapType = Settings.MAP_TYPE_TERRAIN; break;
-      case R.id.btn_layerTypeMapHybrid: newMapType = Settings.MAP_TYPE_HYBRID; break;
-      default: {
-        return;
-      }
+    if (id == R.id.btn_layerTypeMapDefault) {
+      newMapType = Settings.MAP_TYPE_DEFAULT;
+    } else if (id == R.id.btn_layerTypeMapDark) {
+      newMapType = Settings.MAP_TYPE_DARK;
+    } else if (id == R.id.btn_layerTypeMapSatellite) {
+      newMapType = Settings.MAP_TYPE_SATELLITE;
+    } else if (id == R.id.btn_layerTypeMapTerrain) {
+      newMapType = Settings.MAP_TYPE_TERRAIN;
+    } else if (id == R.id.btn_layerTypeMapHybrid) {
+      newMapType = Settings.MAP_TYPE_HYBRID;
+    } else {
+      return;
     }
     if (mapType() != newMapType && ((newMapType == Settings.MAP_TYPE_DEFAULT && !Theme.isDark()) || (newMapType == Settings.MAP_TYPE_DARK && Theme.isDark()))) {
       newMapType = Settings.MAP_TYPE_UNSET;
@@ -1553,8 +1558,8 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     if (point.message == null) {
       return;
     }
-    TdApi.MessageLocation messageLocation = (TdApi.MessageLocation) point.message.content;
-    TdApi.Location location = messageLocation.location;
+    TdApi.MessageLiveLocation messageLocation = (TdApi.MessageLiveLocation) point.message.content;
+    TdApi.Location location = messageLocation.location.location;
     point.expiresAt = SystemClock.uptimeMillis() + (long) messageLocation.expiresIn * 1000l;
     if (location.latitude != point.latitude || location.longitude != point.longitude) {
       point.latitude = location.latitude;
@@ -1566,7 +1571,7 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
         updateCameraAutomatically();
       }
     } else {
-      onPointOfInterestActiveStateMightChanged(point, ((TdApi.MessageLocation) point.message.content).expiresIn > 0);
+      onPointOfInterestActiveStateMightChanged(point, ((TdApi.MessageLiveLocation) point.message.content).expiresIn > 0);
     }
   }
 
@@ -1605,7 +1610,7 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
 
     int cellStartIndex = liveLocationsStartIndex();
 
-    TdApi.Location location = ((TdApi.MessageLocation) message.content).location;
+    TdApi.Location location = ((TdApi.MessageLiveLocation) message.content).location.location;
     LocationPoint<T> point = new LocationPoint<>(this, location.latitude, location.longitude);
     point.setSourceMessage(message, true);
 
@@ -1671,7 +1676,7 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     onLivePersonListChanged(true, true);
   }
 
-  private void updateLiveLocationMessage (long messageId, @NonNull TdApi.MessageLocation location) {
+  private void updateLiveLocationMessage (long messageId, @NonNull TdApi.MessageLiveLocation location) {
     int currentPosition = indexOfLiveLocation(messageId);
     if (currentPosition != -1) {
       LocationPoint<T> point = pointsOfInterest.get(currentPosition);
@@ -1720,7 +1725,7 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
         if (messages.length > 0) {
           final ArrayList<LocationPoint<T>> list = new ArrayList<>(messages.length);
           for (TdApi.Message message : messages) {
-            if (message.content.getConstructor() != TdApi.MessageLocation.CONSTRUCTOR) {
+            if (!Td.isLiveLocation(message.content)) {
               continue;
             }
             if (message.isOutgoing || tdlib.isSelfSender(message)) {
@@ -1728,9 +1733,9 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
             }
             LocationPoint<T> ignorePoint = pointsOfInterest.isEmpty() ? null : pointsOfInterest.get(0);
             TdApi.Message ignoreMessage = ignorePoint != null ? ignorePoint.message : null;
-            TdApi.MessageLocation location = (TdApi.MessageLocation) message.content;
-            if (location.livePeriod > 0 && (ignoreMessage == null || ignoreMessage.id != message.id) && (location.expiresIn > 0 || ignoreMessage == null || getArgumentsStrict().mode == MODE_LIVE_LOCATION)) {
-              list.add(new LocationPoint<>(this, location.location.latitude, location.location.longitude).setSourceMessage(message, true));
+            TdApi.MessageLiveLocation location = (TdApi.MessageLiveLocation) message.content;
+            if (location.location.livePeriod > 0 && (ignoreMessage == null || ignoreMessage.id != message.id) && (location.expiresIn > 0 || ignoreMessage == null || getArgumentsStrict().mode == MODE_LIVE_LOCATION)) {
+              list.add(new LocationPoint<>(this, location.location.location.latitude, location.location.location.longitude).setSourceMessage(message, true));
             }
           }
           if (list.isEmpty()) {
@@ -1757,13 +1762,13 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     if (isDestroyed()) {
       return;
     }
-    if (message.content.getConstructor() != TdApi.MessageLocation.CONSTRUCTOR) {
+    if (!Td.isLiveLocation(message.content)) {
       return;
     }
     if (message.schedulingState != null || tdlib.isSelfSender(message)) {
       return;
     }
-    if (((TdApi.MessageLocation) message.content).livePeriod <= 0) {
+    if (((TdApi.MessageLiveLocation) message.content).location.livePeriod <= 0) {
       return;
     }
     executeOnUiThread(() -> {
@@ -1773,11 +1778,11 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     });
   }
 
-  private void updateMessageIfNeeded (final long chatId, final long messageId, final TdApi.MessageLocation location) {
+  private void updateMessageIfNeeded (final long chatId, final long messageId, final TdApi.MessageLiveLocation location) {
     if (isDestroyed()) {
       return;
     }
-    if (location.livePeriod <= 0) {
+    if (location.location.livePeriod <= 0) {
       return;
     }
     executeOnUiThread(() -> {
@@ -1802,13 +1807,13 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
 
   @Override
   public void onMessageContentChanged (long chatId, long messageId, TdApi.MessageContent newContent) {
-    if (newContent.getConstructor() == TdApi.MessageLocation.CONSTRUCTOR) {
-      updateMessageIfNeeded(chatId, messageId, (TdApi.MessageLocation) newContent);
+    if (Td.isLiveLocation(newContent)) {
+      updateMessageIfNeeded(chatId, messageId, (TdApi.MessageLiveLocation) newContent);
     }
   }
 
   @Override
-  public void onMessageSendFailed (TdApi.Message message, long oldMessageId, int errorCode, String errorMessage) { }
+  public void onMessageSendFailed (TdApi.Message message, long oldMessageId, TdApi.Error error) { }
 
   @Override
   public int compare (LocationPoint<T> o1, LocationPoint<T> o2) {
@@ -1863,12 +1868,12 @@ public abstract class MapController<V extends View, T> extends ViewController<Ma
     TdApi.Message m1 = o1.message;
     TdApi.Message m2 = o2.message;
 
-    TdApi.MessageLocation l1 = (TdApi.MessageLocation) m1.content;
-    TdApi.MessageLocation l2 = (TdApi.MessageLocation) m2.content;
+    TdApi.MessageLiveLocation l1 = (TdApi.MessageLiveLocation) m1.content;
+    TdApi.MessageLiveLocation l2 = (TdApi.MessageLiveLocation) m2.content;
 
     if (needCompareDistance) {
-      float d1 = U.distanceBetween(compareToLatitude, compareToLongitude, l1.location.latitude, l1.location.longitude);
-      float d2 = U.distanceBetween(compareToLatitude, compareToLongitude, l2.location.latitude, l2.location.longitude);
+      float d1 = U.distanceBetween(compareToLatitude, compareToLongitude, l1.location.location.latitude, l1.location.location.longitude);
+      float d2 = U.distanceBetween(compareToLatitude, compareToLongitude, l2.location.location.latitude, l2.location.location.longitude);
       if (d1 != d2) {
         return (d1 < d2) ? -1 : 1;
       }

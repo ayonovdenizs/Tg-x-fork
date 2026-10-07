@@ -43,12 +43,16 @@ class EmojiSpanImpl extends ReplacementSpan implements EmojiSpan {
   }
 
   protected final @Nullable EmojiInfo info;
-
-  private final Paint.FontMetricsInt mTmpFontMetrics = new Paint.FontMetricsInt();
-  protected int mSize = -1;
+  protected final EmojiSize size = new EmojiSize();
 
   protected EmojiSpanImpl (@Nullable EmojiInfo info) {
     this.info = info;
+  }
+
+
+  @Override
+  public EmojiInfo getBuiltInEmojiInfo () {
+    return info;
   }
 
   @Override
@@ -62,33 +66,20 @@ class EmojiSpanImpl extends ReplacementSpan implements EmojiSpan {
 
   @Override
   public final int getRawSize (Paint paint) {
-    if (mSize == -1) {
-      getSize(paint, null, 0, 0, null);
-    }
-    return mSize;
+    size.initialize(paint, null, true);
+    return size.getSize();
   }
 
   @Override
   public final int getSize (@NonNull final Paint paint, final CharSequence text, final int start,
                       final int end, final Paint.FontMetricsInt fm) {
-    paint.getFontMetricsInt(mTmpFontMetrics);
-    mSize = Math.abs(mTmpFontMetrics.descent - mTmpFontMetrics.ascent);
-
-    if (fm != null) {
-      fm.ascent = mTmpFontMetrics.ascent;
-      fm.descent = mTmpFontMetrics.descent;
-      fm.top = mTmpFontMetrics.top;
-      fm.bottom = mTmpFontMetrics.bottom;
-    }
-
-    return mSize;
+    size.initialize(paint, fm, false);
+    return size.getSize();
   }
 
   protected final int getEmojiSize (Paint paint) {
-    if (mSize == -1) {
-      getRawSize(paint);
-    }
-    return mSize;
+    size.initialize(paint, null, true);
+    return size.getSize();
   }
 
   protected boolean needInvalidate;
@@ -125,10 +116,10 @@ class EmojiSpanImpl extends ReplacementSpan implements EmojiSpan {
       }
     }
 
-    drawEmoji(canvas, centerX, centerY, emojiSize);
+    drawEmoji(canvas, centerX, centerY, emojiSize, Color.alpha(paint.getColor()));
   }
 
-  protected void drawEmoji (Canvas canvas, float centerX, float centerY, int emojiSize) {
+  protected void drawEmoji (Canvas canvas, float centerX, float centerY, int emojiSize, int alpha) {
     Rect rect = Paints.getRect();
 
     int reduce = Emoji.instance().getReduceSize();
@@ -138,6 +129,6 @@ class EmojiSpanImpl extends ReplacementSpan implements EmojiSpan {
     rect.right = rect.left + emojiSize - reduce / 2 - reduce % 2;
     rect.bottom = rect.top + emojiSize - reduce / 2 - reduce % 2;
 
-    this.needInvalidate = !Emoji.instance().draw(canvas, info, rect);
+    this.needInvalidate = !Emoji.instance().draw(canvas, info, rect, alpha);
   }
 }

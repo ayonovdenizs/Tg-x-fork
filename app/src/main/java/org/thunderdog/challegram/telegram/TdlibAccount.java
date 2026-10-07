@@ -20,8 +20,8 @@ import android.os.SystemClock;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.drinkmore.Tracer;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.U;
@@ -40,10 +40,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import me.vkryl.core.StringUtils;
 import me.vkryl.core.BitwiseUtils;
-import me.vkryl.leveldb.LevelDB;
-import me.vkryl.td.Td;
+import me.vkryl.core.StringUtils;
+import tgx.td.Td;
 
 public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
   public static final int NO_ID = -1;
@@ -51,7 +50,8 @@ public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
 
   public static final int VERSION_1 = 1;
   public static final int VERSION_2 = 2;
-  public static final int VERSION = VERSION_2;
+  public static final int VERSION_3 = 3;
+  public static final int VERSION = VERSION_3;
 
   private static final int FLAG_UNAUTHORIZED = 1;
   private static final int FLAG_DEBUG = 1 << 1;
@@ -114,9 +114,9 @@ public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
 
   @Override
   public final int compareTo (@NonNull TdlibAccount o) {
-    if (this.order != o.order) {
-      int x = this.order != -1 ? this.order : Integer.MAX_VALUE;
-      int y = o.order != -1 ? o.order : Integer.MAX_VALUE;
+    int x = this.order != -1 ? this.order : Integer.MAX_VALUE;
+    int y = o.order != -1 ? o.order : Integer.MAX_VALUE;
+    if (x != y) {
       return Integer.compare(x, y);
     }
     if (this.modificationTime != o.modificationTime) {
@@ -126,15 +126,19 @@ public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
   }
 
   private void restore (RandomAccessFile r, int version, boolean allowIntegrityChecks) throws IOException {
-    this.flags            = r.readByte();
-    this.knownUserId      = version == VERSION_2 ? r.readLong() : r.readInt();
+    if (version >= VERSION_3) {
+      this.flags = r.readInt();
+    } else {
+      this.flags = r.read();
+    }
+    this.knownUserId      = version >= VERSION_2 ? r.readLong() : r.readInt();
     this.modificationTime = r.readLong();
     this.order            = r.readInt();
     boolean integrityCheckFailed = false;
     if (allowIntegrityChecks) {
       if (BitwiseUtils.hasFlag(flags, FLAG_SERVICE | FLAG_DEBUG) && !Settings.instance().allowSpecialTdlibInstanceMode(id)) {
-        int flags = this.flags & ~FLAG_DEBUG;
-        flags &= ~FLAG_SERVICE;
+        int flags = BitwiseUtils.setFlag(this.flags, FLAG_SERVICE, false);
+        flags = BitwiseUtils.setFlag(flags, FLAG_DEBUG, false);
         this.flags = flags;
         integrityCheckFailed = true;
       }
@@ -142,10 +146,10 @@ public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
     Log.i(Log.TAG_ACCOUNTS, "restored accountId:%d flags:%d userId:%d time:%d order:%d integrity_check_failed:%b", id, flags, knownUserId, modificationTime, order, integrityCheckFailed);
   }
 
-  static final int SIZE_PER_ENTRY = 1 /*flags*/ + 8 /*knownUserId*/ + 8 /*modification_time*/ + 4 /*order*/;
+  static final int SIZE_PER_ENTRY = 4 /*flags*/ + 8 /*knownUserId*/ + 8 /*modification_time*/ + 4 /*order*/;
 
   void save (RandomAccessFile r) throws IOException {
-    r.write(flags);
+    r.writeInt(flags);
     r.writeLong(knownUserId);
     r.writeLong(modificationTime);
     r.writeInt(order);
@@ -153,7 +157,7 @@ public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
 
   int saveOrder (RandomAccessFile r, final int position) throws IOException {
     int skipSize =
-        1 /*flags*/
+        4 /*flags*/
       + 8 /*knownUserId*/
       + 8 /*modificationTime*/;
     r.seek(position + skipSize);
@@ -163,7 +167,7 @@ public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
 
   int saveFlags (RandomAccessFile r, final int position) throws IOException {
     r.seek(position);
-    r.write(flags);
+    r.writeInt(flags);
     return position + SIZE_PER_ENTRY;
   }
 
@@ -468,194 +472,44 @@ public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
 
   // Fake display info
 
-  public static class DisplayInformation {
-    public final String prefix;
-
-    private long userId;
-    private String firstName;
-    private String lastName;
-    private TdApi.Usernames usernames;
-    private String phoneNumber;
-    private String profilePhotoSmallPath, profilePhotoBigPath;
-
-    DisplayInformation (String prefix) {
-      this.prefix = prefix;
-    }
-
-    DisplayInformation (String prefix, int accountId, TdApi.User user, boolean isUpdate) {
-      this.prefix = prefix;
-      this.userId = user.id;
-      this.firstName = user.firstName;
-      this.lastName = user.lastName;
-      this.usernames = user.usernames;
-      this.phoneNumber = user.phoneNumber;
-      if (user.profilePhoto != null) {
-        this.profilePhotoSmallPath = TD.isFileLoaded(user.profilePhoto.small) ? user.profilePhoto.small.local.path : isUpdate ? getUserProfilePhotoPath(accountId, false) : null;
-        this.profilePhotoBigPath = TD.isFileLoaded(user.profilePhoto.big) ? user.profilePhoto.big.local.path : isUpdate ? getUserProfilePhotoPath(accountId, true) : null;
-      } else {
-        this.profilePhotoSmallPath = this.profilePhotoBigPath = null;
-      }
-      saveAll();
-    }
-
-    public String getFirstName () {
-      return firstName;
-    }
-
-    public String getLastName () {
-      return lastName;
-    }
-
-    @Nullable
-    public TdApi.Usernames getUsernames () {
-      return usernames;
-    }
-
-    @Nullable
-    public String getUsername () {
-      return Td.primaryUsername(usernames);
-    }
-
-    public String getPhoneNumber () {
-      return phoneNumber;
-    }
-
-    public String getProfilePhotoPath (boolean big) {
-      return big ? profilePhotoBigPath : profilePhotoSmallPath;
-    }
-
-    void setUserProfilePhotoPath (boolean big, String path) {
-      String key;
-      if (big) {
-        profilePhotoBigPath = path;
-        key = prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_PHOTO_FULL;
-      } else {
-        profilePhotoSmallPath = path;
-        key = prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_PHOTO;
-      }
-      if (StringUtils.isEmpty(path)) {
-        Settings.instance().remove(key);
-      } else {
-        Settings.instance().putString(key, path);
-      }
-    }
-
-    static String getUserProfilePhotoPath (int accountId, boolean big) {
-      String key;
-      if (big)
-        key = Settings.accountInfoPrefix(accountId) + Settings.KEY_ACCOUNT_INFO_SUFFIX_PHOTO_FULL;
-      else
-        key = Settings.accountInfoPrefix(accountId) + Settings.KEY_ACCOUNT_INFO_SUFFIX_PHOTO;
-      return Settings.instance().getString(key, null);
-    }
-
-    static void setUserProfilePhotoPath (int accountId, boolean big, String path) {
-      String key;
-      if (big)
-        key = Settings.accountInfoPrefix(accountId) + Settings.KEY_ACCOUNT_INFO_SUFFIX_PHOTO_FULL;
-      else
-        key = Settings.accountInfoPrefix(accountId) + Settings.KEY_ACCOUNT_INFO_SUFFIX_PHOTO;
-      if (StringUtils.isEmpty(path)) {
-        Settings.instance().remove(key);
-      } else {
-        Settings.instance().putString(key, path);
-      }
-    }
-
-    private void saveAll () {
-      LevelDB editor = Settings.instance().edit();
-      editor.putLong(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_ID, userId);
-      editor.putString(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_NAME1, firstName);
-      editor.putString(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_NAME2, lastName);
-      if (usernames != null) {
-        editor
-          .putString(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_USERNAME, usernames.editableUsername);
-      } else {
-        editor
-          .remove(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_USERNAME);
-      }
-      if (usernames != null && usernames.activeUsernames != null && usernames.activeUsernames.length > 0) {
-        editor.putStringArray(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_USERNAMES_ACTIVE, usernames.activeUsernames);
-      } else {
-        editor.remove(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_USERNAMES_ACTIVE);
-      }
-      if (usernames != null && usernames.disabledUsernames != null && usernames.disabledUsernames.length > 0) {
-        editor.putStringArray(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_USERNAMES_DISABLED, usernames.disabledUsernames);
-      } else {
-        editor.remove(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_USERNAMES_DISABLED);
-      }
-      editor.putString(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_PHONE, phoneNumber);
-      if (!StringUtils.isEmpty(profilePhotoSmallPath)) {
-        editor.putString(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_PHOTO, profilePhotoSmallPath);
-      } else {
-        editor.remove(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_PHOTO);
-      }
-      if (!StringUtils.isEmpty(profilePhotoBigPath)) {
-        editor.putString(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_PHOTO_FULL, profilePhotoBigPath);
-      } else {
-        editor.remove(prefix + Settings.KEY_ACCOUNT_INFO_SUFFIX_PHOTO_FULL);
-      }
-      editor.apply();
-    }
-
-    static DisplayInformation fullRestore (String prefix, long expectedUserId) {
-      DisplayInformation info = null;
-      for (LevelDB.Entry entry : Settings.instance().pmc().find(prefix)) {
-        /*if (entry.key().length() == prefix.length()) {
-          long userId = entry.asLong();
-          if (userId != expectedUserId)
-            return null;
-          info = new DisplayInformation(prefix);
-        }*/
-        if (info == null)
-          info = new DisplayInformation(prefix);
-        switch (entry.key().substring(prefix.length())) {
-          case Settings.KEY_ACCOUNT_INFO_SUFFIX_ID:
-            info.userId = entry.asLong();
-            if (info.userId != expectedUserId)
-              return null;
-            break;
-          case Settings.KEY_ACCOUNT_INFO_SUFFIX_NAME1:
-            info.firstName = entry.asString();
-            break;
-          case Settings.KEY_ACCOUNT_INFO_SUFFIX_NAME2:
-            info.lastName = entry.asString();
-            break;
-          case Settings.KEY_ACCOUNT_INFO_SUFFIX_PHONE:
-            info.phoneNumber = entry.asString();
-            break;
-          case Settings.KEY_ACCOUNT_INFO_SUFFIX_PHOTO:
-            info.profilePhotoSmallPath = entry.asString();
-            break;
-          case Settings.KEY_ACCOUNT_INFO_SUFFIX_PHOTO_FULL:
-            info.profilePhotoBigPath = entry.asString();
-            break;
-        }
-      }
-      return info != null && info.userId == expectedUserId ? info : null;
-    }
-  }
-
   private ImageFile avatarSmallFile, avatarBigFile;
   private DisplayInformation displayInformation;
 
-  void storeUserInformation (@Nullable TdApi.User user) {
+  void storeUserInformation (@Nullable TdApi.User user, @Nullable TdApi.AccentColor accentColor, @Nullable TdApi.Sticker emojiStatus) {
     avatarSmallFile = avatarBigFile = null;
     if (user != null && user.id == knownUserId) {
       String prefix = Settings.accountInfoPrefix(id);
       boolean isUpdate = Settings.instance().getLong(prefix, 0) == user.id;
-      displayInformation = new DisplayInformation(prefix, id, user, isUpdate);
+      displayInformation = new DisplayInformation(prefix, user, accentColor, emojiStatus, isUpdate);
     } else {
       deleteDisplayInformation();
       counters.clear();
     }
   }
 
-  void storeUserProfilePhotoPath (boolean big, @Nullable String photoPath) {
+  void storeUserProfilePhotoPath (boolean big, @Nullable String absolutePhotoPath) {
     if (displayInformation != null) {
-      displayInformation.setUserProfilePhotoPath(big, photoPath);
+      displayInformation.storeUserProfilePhotoPath(big, absolutePhotoPath);
     } else {
-      DisplayInformation.setUserProfilePhotoPath(id, big, photoPath);
+      DisplayInformation.storeUserProfilePhotoPath(Settings.accountInfoPrefix(id), big, absolutePhotoPath);
+    }
+  }
+
+  void storeUserEmojiStatusMetadata (long customEmojiId, @NonNull TdApi.Sticker sticker) {
+    // Called when custom emoji metadata was loaded (doesn't mean that sticker.sticker or sticker.thumbnail.file are loaded)
+    if (displayInformation != null) {
+      displayInformation.storeEmojiStatusMetadata(customEmojiId, sticker);
+    } else {
+      DisplayInformation.storeEmojiStatusMetadata(Settings.accountInfoPrefix(id), customEmojiId, sticker);
+    }
+  }
+
+  void storeUserEmojiStatusPath (long customEmojiId, @NonNull TdApi.Sticker sticker, boolean isThumbnail, String filePath) {
+    // Called when remote file (sticker.sticker or sticker.thumbnail.file) was loaded
+    if (displayInformation != null) {
+      displayInformation.storeEmojiStatusPath(customEmojiId, sticker, isThumbnail, filePath);
+    } else {
+      DisplayInformation.storeEmojiStatusPath(Settings.accountInfoPrefix(id), customEmojiId, sticker, isThumbnail, filePath);
     }
   }
 
@@ -688,7 +542,7 @@ public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
   public DisplayInformation getDisplayInformation () {
     if (knownUserId == 0)
       return null;
-    if (displayInformation != null && displayInformation.userId == knownUserId)
+    if (displayInformation != null && displayInformation.getUserId() == knownUserId)
       return displayInformation;
     return displayInformation = DisplayInformation.fullRestore(Settings.accountInfoPrefix(id), knownUserId); // FIXME replace with singular restore
   }
@@ -699,7 +553,7 @@ public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
   }
 
   private boolean hasUserInformation () {
-    return knownUserId != 0 && (displayInformation != null && displayInformation.userId == knownUserId) ||
+    return knownUserId != 0 && (displayInformation != null && displayInformation.getUserId() == knownUserId) ||
       (Settings.instance().pmc().getLong(Settings.accountInfoPrefix(id) + Settings.KEY_ACCOUNT_INFO_SUFFIX_ID, 0) == knownUserId);
   }
 
@@ -714,6 +568,14 @@ public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
     return allowTdlib() ? tdlib().myUser() : null;
   }
 
+  public boolean isPremium () {
+    TdApi.User user = getUser();
+    if (user != null)
+      return user.isPremium;
+    DisplayInformation info = getDisplayInformation();
+    return info != null && info.isPremium();
+  }
+
   public String getPhoneNumber () {
     TdApi.User user = getUser();
     if (user != null)
@@ -722,21 +584,60 @@ public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
     return info != null ? info.getPhoneNumber() : "…";
   }
 
+  public String getPhoneNumberCountryCode () {
+    TdApi.User user = getUser();
+    if (user != null) {
+      return TD.getPhoneNumberCountryCode(user.phoneNumber);
+    }
+    DisplayInformation info = getDisplayInformation();
+    return info != null ? TD.getPhoneNumberCountryCode(info.getPhoneNumber()) : null;
+  }
+
   public AvatarPlaceholder.Metadata getAvatarPlaceholderMetadata () {
     TdApi.User user = getUser();
     if (user != null)
       return tdlib.cache().userPlaceholderMetadata(user, false);
     DisplayInformation info = getDisplayInformation();
-    if (info != null)
-      return new AvatarPlaceholder.Metadata(TD.getAvatarColorId(knownUserId, knownUserId), TD.getLetters(info.getFirstName(), info.getLastName()));
-    if (knownUserId != 0)
-      return new AvatarPlaceholder.Metadata(TD.getAvatarColorId(knownUserId, knownUserId));
+    if (info != null) {
+      TdlibAccentColor accentColor = info.getAccentColor();
+      return new AvatarPlaceholder.Metadata(accentColor, TD.getLetters(info.getFirstName(), info.getLastName()));
+    }
+    if (knownUserId != 0) {
+      int accentColorId = TdlibAccentColor.defaultAccentColorIdForUserId(knownUserId);
+      return new AvatarPlaceholder.Metadata(new TdlibAccentColor(accentColorId));
+    }
     return null;
+  }
+
+  public long getEmojiStatusCustomEmojiId () {
+    TdApi.User user = getUser();
+    if (user != null) {
+      return Td.customEmojiId(user.emojiStatus);
+    }
+    DisplayInformation info = getDisplayInformation();
+    return info != null ? info.getEmojiStatusCustomEmojiId() : 0;
+  }
+
+  public @Nullable TdApi.Sticker getEmojiStatusSticker () {
+    TdApi.User user = getUser();
+    if (user != null) {
+      TdApi.EmojiStatus emojiStatus = user.emojiStatus;
+      if (emojiStatus == null) {
+        return null;
+      }
+      TdlibEmojiManager.Entry entry = allowTdlib() ? tdlib().emoji().find(Td.customEmojiId(emojiStatus)) : null;
+      if (entry != null) {
+        return entry.isNotFound() ? null : entry.value;
+      }
+    }
+    DisplayInformation info = getDisplayInformation();
+    // sticker.sticker and sticker.thumbnail might both be null, if corresponding files were not loaded
+    return info != null ? info.getEmojiStatusSticker() : null;
   }
 
   public ImageFile getAvatarFile (boolean big) {
     DisplayInformation info = getDisplayInformation();
-    String path = info != null ? info.getProfilePhotoPath(big) : null; // DisplayInformation.getUserProfilePhotoPath(id, big)
+    String path = info != null ? info.getProfilePhotoPath(big) : null;
     if (!StringUtils.isEmpty(path)) {
       ImageFile avatarFile = big ? avatarBigFile : avatarSmallFile;
       if (!(avatarFile instanceof ImageFileLocal) || !StringUtils.equalsOrBothEmpty(((ImageFileLocal) avatarFile).getPath(), path)) {
@@ -878,4 +779,5 @@ public class TdlibAccount implements Comparable<TdlibAccount>, TdlibProvider {
     }
     return firstName + " " + Strings.formatPhone(phoneNumber);
   }
+
 }

@@ -30,7 +30,7 @@ import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.U;
@@ -42,18 +42,20 @@ import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.loader.ImageCache;
 import org.thunderdog.challegram.loader.ImageFilteredFile;
 import org.thunderdog.challegram.loader.ImageReader;
+import org.thunderdog.challegram.mediaview.crop.CropState;
 import org.thunderdog.challegram.mediaview.paint.PaintState;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.PropertyId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeColors;
 import org.thunderdog.challegram.theme.ThemeDelegate;
 import org.thunderdog.challegram.theme.ThemeId;
 import org.thunderdog.challegram.theme.ThemeManager;
 import org.thunderdog.challegram.theme.ThemeProperties;
-import org.thunderdog.challegram.theme.ThemeProperty;
 import org.thunderdog.challegram.theme.ThemeSet;
 import org.thunderdog.challegram.tool.Strings;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.xmlpull.v1.XmlSerializer;
 
@@ -68,15 +70,16 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
-import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.unit.ByteUnit;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -89,6 +92,7 @@ import okio.BufferedSource;
 import okio.Okio;
 import okio.Sink;
 import okio.Source;
+import tgx.td.Td;
 
 public final class TdlibFileGenerationManager {
   private OkHttpClient getClient () {
@@ -386,7 +390,7 @@ public final class TdlibFileGenerationManager {
       String[] args = arg.split(",");
       final int themeId = StringUtils.parseInt(args[0]);
       final int flags = args.length > 1 ? StringUtils.parseInt(args[1]) : 0;
-      if (ThemeManager.isCustomTheme(themeId) || BitwiseUtils.hasFlag(flags, Theme.EXPORT_FLAG_INCLUDE_DEFAULT_VALUES) || ThemeSet.getProperty(themeId, ThemeProperty.PARENT_THEME) != 0) {
+      if (ThemeManager.isCustomTheme(themeId) || BitwiseUtils.hasFlag(flags, Theme.EXPORT_FLAG_INCLUDE_DEFAULT_VALUES) || ThemeSet.getProperty(themeId, PropertyId.PARENT_THEME) != 0) {
         String author = args.length > 2 ? args[2] : null;
         exportTheme(generationId, themeId, flags, author, destinationPath);
       } else {
@@ -889,7 +893,7 @@ public final class TdlibFileGenerationManager {
             "import androidx.annotation.ColorInt;\n\n");
           b.append("public final class Theme").append(info.name).append(" extends ThemeBase {\n");
           b.append("  public Theme").append(info.name).append(" () {\n");
-          b.append("    super(ThemeId.").append(info.name.toUpperCase()).append(");\n");
+          b.append("    super(ThemeId.").append(info.name.toUpperCase(Locale.ROOT)).append(");\n");
           b.append("  }\n");
           ThemeDelegate base = ThemeSet.getBuiltinTheme(ThemeId.BLUE);
           if (!info.properties.isEmpty()) {
@@ -982,7 +986,7 @@ public final class TdlibFileGenerationManager {
     final String sourceUri = conversion.substring(0, i);
     String arg = conversion.substring(i + 1);
     int j = arg.indexOf('_');
-    final long expectedSize = StringUtils.parseInt(j != -1 ? arg.substring(0, j) : arg);
+    final long expectedSize = StringUtils.parseLong(j != -1 ? arg.substring(0, j) : arg);
 
     getContentExecutor().execute(() -> {
       boolean success = false;
@@ -1034,7 +1038,7 @@ public final class TdlibFileGenerationManager {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && maxSize <= BIG_THUMB_RESOLUTION && info.getCropState() == null && info.getPaintState() == null) {
       android.graphics.ImageDecoder.Source source;
       if (uri != null) {
-        source = android.graphics.ImageDecoder.createSource(UI.getAppContext().getContentResolver(), uri);
+        source = android.graphics.ImageDecoder.createSource(AppContext.get().getContentResolver(), uri);
       } else {
         source = android.graphics.ImageDecoder.createSource(new File(originalPath));
       }
@@ -1252,9 +1256,29 @@ public final class TdlibFileGenerationManager {
       bitmap = ImageReader.resizeBitmap(bitmap, resolution, resolution, false, true, true);
     }
 
-    int rotate = info.getRotate();
+    int rotate = info.getFullRotate();
     if (rotate != 0) {
       bitmap = rotateBitmap(bitmap, rotate);
+    }
+    CropState cropState = info.getCropState();
+    if (cropState != null && (cropState.needMirror() || !cropState.isRegionEmpty())) {
+      int left = (int) Math.round(cropState.getLeft() * (double) bitmap.getWidth());
+      int top = (int) Math.round(cropState.getTop() * (double) bitmap.getHeight());
+      int right = (int) Math.round(cropState.getRight() * (double) bitmap.getWidth());
+      int bottom = (int) Math.round(cropState.getBottom() * (double) bitmap.getHeight());
+      Bitmap cropped;
+      if (cropState.needMirror()) {
+        Matrix matrix = new Matrix();
+        matrix.preScale(
+          cropState.needMirrorHorizontally() ? -1.0f : 1.0f,
+          cropState.needMirrorVertically() ? -1.0f : 1.0f
+        );
+        cropped = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top, matrix, false);
+      } else {
+        cropped = Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top);
+      }
+      bitmap.recycle();
+      bitmap = cropped;
     }
 
     // bitmap = rotateBitmap(bitmap, outputRotation);
@@ -1290,7 +1314,7 @@ public final class TdlibFileGenerationManager {
       bitmap = ImageReader.resizeBitmap(bitmap, resolution, resolution, false, true, true);
     }
 
-    int rotate = info.getRotate();
+    int rotate = info.getFullRotate();
     if (rotate != 0) {
       bitmap = rotateBitmap(bitmap, rotate);
     }
@@ -1358,7 +1382,7 @@ public final class TdlibFileGenerationManager {
         // int rotation = ImageReader.getRotation(originalPath);
         android.graphics.ImageDecoder.Source source;
         if (uri != null) {
-          source = android.graphics.ImageDecoder.createSource(UI.getAppContext().getContentResolver(), uri);
+          source = android.graphics.ImageDecoder.createSource(AppContext.get().getContentResolver(), uri);
         } else {
           source = android.graphics.ImageDecoder.createSource(new File(originalPath));
         }
@@ -1497,12 +1521,13 @@ public final class TdlibFileGenerationManager {
   }
 
   public <T extends TdApi.InputMessageContent> T createThumbnail (@NonNull final T content, final boolean isSecretChat, @Nullable final TdApi.File file) {
-    final boolean isSecret = isSecretChat || TD.isSecret(content);
+    final boolean isSecret = isSecretChat || Td.isSecret(content);
     final int resolution = content.getConstructor() == TdApi.InputMessageSticker.CONSTRUCTOR || isSecret ? SMALL_THUMB_RESOLUTION : BIG_THUMB_RESOLUTION;
 
     switch (content.getConstructor()) {
       case TdApi.InputMessagePhoto.CONSTRUCTOR: {
-        TdApi.InputMessagePhoto photo = (TdApi.InputMessagePhoto) content;
+        TdApi.InputMessagePhoto inputMessagePhoto = (TdApi.InputMessagePhoto) content;
+        TdApi.InputPhoto photo = inputMessagePhoto.photo;
         if (photo.thumbnail == null && isSecret) {
           TdApi.InputFile thumbnail;
           if (Math.max(photo.width, photo.height) <= resolution) {
@@ -1529,7 +1554,8 @@ public final class TdlibFileGenerationManager {
         int width, height;
         switch (content.getConstructor()) {
           case TdApi.InputMessageAnimation.CONSTRUCTOR: {
-            TdApi.InputMessageAnimation animation = (TdApi.InputMessageAnimation) content;
+            TdApi.InputMessageAnimation inputMessageAnimation = (TdApi.InputMessageAnimation) content;
+            TdApi.InputAnimation animation = inputMessageAnimation.animation;
             sourceFile = animation.animation;
             currentThumbnail = animation.thumbnail;
             width = animation.width;
@@ -1537,7 +1563,8 @@ public final class TdlibFileGenerationManager {
             break;
           }
           case TdApi.InputMessageVideo.CONSTRUCTOR: {
-            TdApi.InputMessageVideo video = (TdApi.InputMessageVideo) content;
+            TdApi.InputMessageVideo inputMessageVideo = (TdApi.InputMessageVideo) content;
+            TdApi.InputVideo video = inputMessageVideo.video;
             sourceFile = video.video;
             currentThumbnail = video.thumbnail;
             width = video.width;
@@ -1558,11 +1585,11 @@ public final class TdlibFileGenerationManager {
             TdApi.InputThumbnail newThumbnail = newThumbnail(thumbnail, resolution, width, height);
             switch (content.getConstructor()) {
               case TdApi.InputMessageAnimation.CONSTRUCTOR: {
-                ((TdApi.InputMessageAnimation) content).thumbnail = newThumbnail;
+                ((TdApi.InputMessageAnimation) content).animation.thumbnail = newThumbnail;
                 break;
               }
               case TdApi.InputMessageVideo.CONSTRUCTOR: {
-                ((TdApi.InputMessageVideo) content).thumbnail = newThumbnail;
+                ((TdApi.InputMessageVideo) content).video.thumbnail = newThumbnail;
                 break;
               }
             }
@@ -1571,7 +1598,8 @@ public final class TdlibFileGenerationManager {
         break;
       }
       case TdApi.InputMessageDocument.CONSTRUCTOR: {
-        TdApi.InputMessageDocument document = (TdApi.InputMessageDocument) content;
+        TdApi.InputMessageDocument inputMessageDocument = (TdApi.InputMessageDocument) content;
+        TdApi.InputDocument document = inputMessageDocument.document;
         if (document.thumbnail == null) {
           TdApi.InputFileGenerated thumbnail = newThumbnailFile(document.document, file, (originalPath, originalConversion) -> {
             String mimeType = U.resolveMimeType(originalPath);
@@ -1643,7 +1671,8 @@ public final class TdlibFileGenerationManager {
         break;
       }
       case TdApi.InputMessageAudio.CONSTRUCTOR: {
-        TdApi.InputMessageAudio audio = (TdApi.InputMessageAudio) content;
+        TdApi.InputMessageAudio inputMessageAudio = (TdApi.InputMessageAudio) content;
+        TdApi.InputAudio audio = inputMessageAudio.audio;
         if (audio.albumCoverThumbnail == null) {
           TdApi.InputFileGenerated thumbnail = newThumbnailFile(audio.audio, file, (originalPath, originalConversion) -> ThumbGenerationInfo.makeConversion(ThumbGenerationInfo.TYPE_MUSIC, null, resolution));
           if (thumbnail != null) {
@@ -1672,7 +1701,8 @@ public final class TdlibFileGenerationManager {
         break;
       }
       case TdApi.InputMessageVideoNote.CONSTRUCTOR: {
-        TdApi.InputMessageVideoNote videoNote = (TdApi.InputMessageVideoNote) content;
+        TdApi.InputMessageVideoNote messageVideoNote = (TdApi.InputMessageVideoNote) content;
+        TdApi.InputVideoNote videoNote = messageVideoNote.videoNote;
         if (videoNote.thumbnail == null) {
           TdApi.InputFile thumbnail = newThumbnailFile(videoNote.videoNote, file, (originalPath, originalConversion) -> ThumbGenerationInfo.makeConversion(ThumbGenerationInfo.TYPE_VIDEO, originalConversion, resolution));
           if (thumbnail != null) {
@@ -1682,7 +1712,8 @@ public final class TdlibFileGenerationManager {
         break;
       }
       case TdApi.InputMessageSticker.CONSTRUCTOR: {
-        TdApi.InputMessageSticker sticker = (TdApi.InputMessageSticker) content;
+        TdApi.InputMessageSticker messageSticker = (TdApi.InputMessageSticker) content;
+        TdApi.InputSticker sticker = messageSticker.sticker;
         if (sticker.thumbnail == null) {
           TdApi.InputFile thumbnail = newThumbnailFile(sticker.sticker, file, (originalPath, originalConversion) -> originalConversion != null ? PhotoGenerationInfo.editResolutionLimit(originalConversion, resolution) : PhotoGenerationInfo.makeConversion(0, 0, true, resolution));
           if (thumbnail != null) {

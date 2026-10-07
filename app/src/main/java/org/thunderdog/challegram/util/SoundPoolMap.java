@@ -21,7 +21,7 @@ import android.util.SparseIntArray;
 import androidx.annotation.RawRes;
 
 import org.thunderdog.challegram.core.BaseThread;
-import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 
 public class SoundPoolMap {
   private final SparseIntArray sounds;
@@ -43,22 +43,27 @@ public class SoundPoolMap {
     }
   }
 
+  @SuppressWarnings("deprecation")
   public int get (@RawRes int res) {
     if (soundPool == null) {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && false) {
+        // Unused, because there was a sound glitch bug present in AOSP
+        // FIXME[sdk]: test with recent Android versions
         android.media.AudioAttributes attributes = new android.media.AudioAttributes.Builder()
           .setUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION)
           .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
           .build();
-        soundPool = new SoundPool.Builder().setMaxStreams(1).setAudioAttributes(attributes).build();
+        soundPool = new SoundPool.Builder()
+          .setMaxStreams(1)
+          .setAudioAttributes(attributes)
+          .build();
       } else {
-        //noinspection deprecation
         soundPool = new SoundPool(1, stream, 0);
       }
     }
     int sound = sounds.get(res);
     if (sound == 0) {
-      sound = soundPool.load(UI.getAppContext(), res, 1);
+      sound = soundPool.load(AppContext.get(), res, 1);
       sounds.put(res, sound);
     }
     return sound;

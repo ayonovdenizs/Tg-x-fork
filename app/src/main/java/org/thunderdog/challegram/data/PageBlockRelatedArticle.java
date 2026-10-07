@@ -18,7 +18,7 @@ import android.view.View;
 
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.loader.ComplexReceiver;
@@ -37,7 +37,7 @@ import org.thunderdog.challegram.util.text.TextColorSets;
 import org.thunderdog.challegram.util.text.TextWrapper;
 
 import me.vkryl.core.StringUtils;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
 public class PageBlockRelatedArticle extends PageBlock {
   private final TdApi.PageBlockRelatedArticle article;
@@ -47,8 +47,8 @@ public class PageBlockRelatedArticle extends PageBlock {
   @Nullable
   private final TdlibUi.UrlOpenParameters openParameters;
 
-  public PageBlockRelatedArticle (ViewController<?> context, TdApi.PageBlockRelatedArticles articles, TdApi.PageBlockRelatedArticle article, @Nullable TdlibUi.UrlOpenParameters openParameters) {
-    super(context, articles);
+  public PageBlockRelatedArticle (ViewController<?> context, TdApi.PageBlockRelatedArticles articles, int quoteLevel, TdApi.PageBlockRelatedArticle article, @Nullable TdlibUi.UrlOpenParameters openParameters) {
+    super(context, articles, quoteLevel);
     this.article = article;
     this.openParameters = openParameters;
 

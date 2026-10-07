@@ -7,8 +7,8 @@ import androidx.annotation.Nullable;
 import androidx.annotation.UiThread;
 import androidx.collection.LongSparseArray;
 
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibThread;
 import org.thunderdog.challegram.tool.UI;
@@ -17,10 +17,10 @@ import org.thunderdog.challegram.ui.MessagesController;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Objects;
 
+import me.vkryl.core.ObjectUtils;
 import me.vkryl.core.StringUtils;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
 public class MessagesSearchManagerMiddleware {
   public static final int FILTER_NONE = 1;
@@ -106,7 +106,15 @@ public class MessagesSearchManagerMiddleware {
 
   @SuppressLint("DefaultLocale")
   private static String makeContextId (TdApi.SearchChatMessages query) {
-    return String.format("chat_%d_%d_%d_%d_%s", query.chatId, Td.getSenderId(query.senderId), query.filter != null ? query.filter.getConstructor() : 0, query.messageThreadId, query.query);
+    return String.format("chat_%d_%d_%d_%s_%s", query.chatId, Td.getSenderId(query.senderId), query.filter != null ? query.filter.getConstructor() : 0, keyOf(query.topicId), query.query);
+  }
+
+  private static String keyOf (TdApi.MessageTopic topicId) {
+    if (topicId != null) {
+      return Td.cacheKey(topicId);
+    } else {
+      return "default";
+    }
   }
 
   public static class BaseSearchResultManager implements SendSearchRequestManager {
@@ -236,7 +244,7 @@ public class MessagesSearchManagerMiddleware {
 
   @UiThread
   public void sendSearchRequest (SendSearchRequestArguments args) {
-    TdApi.SearchChatMessages query = cloneSearchChatQuery(args.function);
+    TdApi.SearchChatMessages query = Td.copyOf(args.function);
     query.limit = Math.min(query.limit, 25);
     query.offset = args.direction == SEARCH_DIRECTION_TOP ? 0 : 1 - query.limit;
     query.fromMessageId = args.fromMessageId != 0 ? args.fromMessageId : query.fromMessageId;
@@ -281,7 +289,7 @@ public class MessagesSearchManagerMiddleware {
     int discardedCount = 0;
 
     ArrayList<TdApi.Message> filteredArr = new ArrayList<>();
-    for (TdApi.Message message: messages) {
+    for (TdApi.Message message : messages) {
       final boolean isFiltered = manager.filter(message);
       if (isFiltered) {
         filteredArr.add(message);
@@ -300,7 +308,7 @@ public class MessagesSearchManagerMiddleware {
   }
 
   private boolean isWasDiscardedBefore (long id) {
-    for (SendSearchRequestFilterChunkInfo part: filteredChunksInfo) {
+    for (SendSearchRequestFilterChunkInfo part : filteredChunksInfo) {
       if (part.isChunkPart(id)) return true;
     }
 
@@ -348,13 +356,13 @@ public class MessagesSearchManagerMiddleware {
     final String contextId = makeContextId(query, sender);
     checkContextId(contextId);
 
-    TdApi.FoundMessages cached = secretMessagesCache.get(query.offset != null ? query.offset: "");
+    TdApi.FoundMessages cached = secretMessagesCache.get(query.offset != null ? query.offset : "");
     if (cached != null) {
       resultHandler.onResult(cached);
       return;
     }
 
-    if (!Objects.equals(lastSecretNextOffset, query.offset)) {
+    if (!ObjectUtils.equals(lastSecretNextOffset, query.offset)) {
       TdApi.Error error = new TdApi.Error(400, "INCORRECT OFFSET");
       UI.showError(error);
       resultHandler.onResult(error);
@@ -461,7 +469,7 @@ public class MessagesSearchManagerMiddleware {
   }
 
   private boolean checkContextId (String contextId) {
-    if (!Objects.equals(contextId, currentContextId)) {
+    if (!ObjectUtils.equals(contextId, currentContextId)) {
       currentContextId = contextId;
       Log.i("SEARCH_MIDDLEWARE", "RESET");
       reset();
@@ -487,14 +495,14 @@ public class MessagesSearchManagerMiddleware {
 
   private static TdApi.Function<?> safeSearchSecretQuery (TdApi.SearchSecretMessages query) {
     final TdApi.SearchMessagesFilter safeFilter = safeFilter(query.filter);
-    final boolean hasMediaFilter = query.filter != null && safeFilter != null && safeFilter.getConstructor() != TdApi.SearchMessagesFilterEmpty.CONSTRUCTOR;
+    final boolean hasMediaFilter = query.filter != null && safeFilter != null && !Td.isEmptyFilter(safeFilter);
     final boolean queryIsEmpty = StringUtils.isEmpty(query.query);
 
     if (queryIsEmpty) {
       if (hasMediaFilter) {
-        return new TdApi.SearchChatMessages(query.chatId, query.query, null, !StringUtils.isEmpty(query.offset) ? Long.parseLong(query.offset): 0, 0, query.limit, safeFilter, 0);
+        return new TdApi.SearchChatMessages(query.chatId, null, query.query, null, !StringUtils.isEmpty(query.offset) ? Long.parseLong(query.offset) : 0, 0, query.limit, safeFilter);
       } else {
-        return new TdApi.GetChatHistory(query.chatId, !StringUtils.isEmpty(query.offset) ? Long.parseLong(query.offset): 0, 0, query.limit, false);
+        return new TdApi.GetChatHistory(query.chatId, !StringUtils.isEmpty(query.offset) ? Long.parseLong(query.offset) : 0, 0, query.limit, false);
       }
     }
 
@@ -502,19 +510,29 @@ public class MessagesSearchManagerMiddleware {
   }
 
   private static TdApi.SearchSecretMessages cloneSearchSecretQuery (TdApi.SearchSecretMessages query, String newOffset) {
-    return new TdApi.SearchSecretMessages(query.chatId, query.query, newOffset, query.limit, query.filter);
+    TdApi.SearchSecretMessages modifiedQuery = Td.copyOf(query);
+    modifiedQuery.offset = newOffset;
+    return modifiedQuery;
   }
 
   private static TdApi.SearchChatMessages safeSearchChatQuery (TdApi.SearchChatMessages query, boolean withoutSenderId, boolean withoutFilter) {
-    return new TdApi.SearchChatMessages(query.chatId, query.query, withoutSenderId ? null : query.senderId, query.fromMessageId, query.offset, query.limit, withoutFilter ? null: safeFilter(query.filter), query.messageThreadId);
+    TdApi.SearchChatMessages modifiedQuery = Td.copyOf(query);
+    if (withoutSenderId) {
+      modifiedQuery.senderId = null;
+    }
+    if (withoutFilter) {
+      modifiedQuery.filter = null;
+    } else {
+      modifiedQuery.filter = safeFilter(query.filter);
+    }
+    return modifiedQuery;
   }
 
   private static TdApi.SearchChatMessages cloneSearchChatQuery (TdApi.SearchChatMessages query, long newFromMessageId, int newOffset) {
-    return new TdApi.SearchChatMessages(query.chatId, query.query, query.senderId, newFromMessageId, newOffset, query.limit, query.filter, query.messageThreadId);
-  }
-
-  private static TdApi.SearchChatMessages cloneSearchChatQuery (TdApi.SearchChatMessages query) {
-    return new TdApi.SearchChatMessages(query.chatId, query.query, query.senderId, query.fromMessageId, query.offset, query.limit, query.filter, query.messageThreadId);
+    TdApi.SearchChatMessages modifiedQuery = Td.copyOf(query);
+    modifiedQuery.fromMessageId = newFromMessageId;
+    modifiedQuery.offset = newOffset;
+    return modifiedQuery;
   }
 
   private static TdApi.FoundMessages messagesToFoundMessages (TdApi.FoundChatMessages messages) {

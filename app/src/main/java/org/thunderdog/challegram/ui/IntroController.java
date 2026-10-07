@@ -44,7 +44,7 @@ import androidx.annotation.StringRes;
 import androidx.collection.SparseArrayCompat;
 import androidx.viewpager.widget.PagerAdapter;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BuildConfig;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.MainActivity;
@@ -64,6 +64,7 @@ import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibContext;
 import org.thunderdog.challegram.telegram.TdlibManager;
 import org.thunderdog.challegram.telegram.TdlibOptionListener;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.ColorState;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeListenerEntry;
@@ -86,6 +87,7 @@ import java.util.List;
 
 import javax.microedition.khronos.egl.EGL10;
 import javax.microedition.khronos.egl.EGLConfig;
+import javax.microedition.khronos.egl.EGLContext;
 import javax.microedition.khronos.egl.EGLDisplay;
 import javax.microedition.khronos.opengles.GL10;
 
@@ -102,8 +104,8 @@ import me.vkryl.core.lambda.RunnableBool;
 
 @SuppressWarnings("JniMissingFunction")
 public class IntroController extends ViewController<Void> implements GLSurfaceView.EGLConfigChooser, GLSurfaceView.Renderer, ViewPager.OnPageChangeListener, Runnable, View.OnClickListener, View.OnLongClickListener, TdlibOptionListener, ConnectionListener, GlobalAccountListener {
-  public IntroController (Context context) {
-    super(context, null);
+  public IntroController (Context context, Tdlib tdlib) {
+    super(context, tdlib);
   }
 
   @Override
@@ -132,7 +134,7 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
   }
 
   @Override
-  public boolean passBackPressToActivity (boolean fromTop) {
+  public boolean needPassBackPressToActivity (boolean fromTop) {
     return true;
   }
 
@@ -205,9 +207,64 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
   }
 
   public static boolean isIntroAttemptedButFailed () {
-    if (!BuildConfig.DEBUG && Settings.instance().isIntroAttempted()) {
+    if (Settings.instance().isIntroAttempted()) {
       Log.w("Not showing intro controller, because it has failed once");
       return true;
+    }
+    return false;
+  }
+
+  private static boolean hasDefaultGlConfig, hasDefaultGlConfigChecked;
+
+  public static boolean hasDefaultGlConfig () {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+      return true;
+    }
+    if (hasDefaultGlConfigChecked) {
+      return hasDefaultGlConfig;
+    }
+    boolean result = hasDefaultGlConfigImpl();
+    hasDefaultGlConfig = result;
+    hasDefaultGlConfigChecked = true;
+    return result;
+  }
+
+  private static boolean hasDefaultGlConfigImpl () {
+    try {
+      EGL10 egl = (EGL10) EGLContext.getEGL();
+      EGLDisplay display = egl.eglGetDisplay(EGL10.EGL_DEFAULT_DISPLAY);
+      boolean isRgb888 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1;
+      int[] spec = {
+        EGL10.EGL_RED_SIZE, isRgb888 ? 8 : 5,
+        EGL10.EGL_GREEN_SIZE, isRgb888 ? 8 : 6,
+        EGL10.EGL_BLUE_SIZE, isRgb888 ? 8 : 5,
+        EGL10.EGL_ALPHA_SIZE, 0,
+        EGL10.EGL_DEPTH_SIZE, 16,
+        EGL10.EGL_STENCIL_SIZE, 0,
+        EGL10.EGL_RENDERABLE_TYPE, 4 /*EGL_OPENGL_ES2_BIT*/, EGL10.EGL_NONE};
+      int[] version = new int[2];
+      int[] count = new int[1];
+      if (!egl.eglInitialize(display, version) || !egl.eglChooseConfig(display, spec, null, 0, count)) {
+        return false;
+      }
+      EGLConfig[] configs = new EGLConfig[count[0]];
+      if (!egl.eglChooseConfig(display, spec, configs, configs.length, count)) {
+        return false;
+      }
+      int[] value = new int[1];
+      for (int i = 0; i < Math.min(count[0], configs.length); i++) {
+        boolean isExactMatch = configs[i] != null;
+        for (int j = 0; j < 4 && isExactMatch; j++) {
+          final int attribute = spec[j * 2];
+          final int expectedValue = spec[j * 2 + 1];
+          isExactMatch = egl.eglGetConfigAttrib(display, configs[i], attribute, value) && value[0] == expectedValue;
+        }
+        if (isExactMatch) {
+          return true;
+        }
+      }
+    } catch (Throwable t) {
+      Log.i("Unable to check for config", t);
     }
     return false;
   }
@@ -236,54 +293,48 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
 
     CharSequence info = Strings.buildMarkdown(new TdlibContext(context, getTdlib()), Lang.getString(languagePackInfo, R.string.LoginErrorLongConnecting), null);
     PopupLayout popupLayout = showOptions(info, ids.get(), strings.get(), null, icons.get(), (itemView, id) -> {
-      switch (id) {
-        case R.id.btn_done: {
-          break;
+      if (id == R.id.btn_startMessaging) {
+        // nothing to do?
+      } else if (id == R.id.btn_help) {
+        TdApi.NetworkType networkType = getTdlib().networkType();
+        String networkTypeStr;
+        if (networkType != null) {
+          switch (networkType.getConstructor()) {
+            case TdApi.NetworkTypeMobile.CONSTRUCTOR:
+              networkTypeStr = "Mobile";
+              break;
+            case TdApi.NetworkTypeMobileRoaming.CONSTRUCTOR:
+              networkTypeStr = "Roaming";
+              break;
+            case TdApi.NetworkTypeOther.CONSTRUCTOR:
+              networkTypeStr = "Other";
+              break;
+            case TdApi.NetworkTypeWiFi.CONSTRUCTOR:
+              networkTypeStr = "Wifi";
+              break;
+            case TdApi.NetworkTypeNone.CONSTRUCTOR:
+            default:
+              networkTypeStr = "None";
+              break;
+          }
+        } else {
+          networkTypeStr = "Unknown";
         }
-        case R.id.btn_help: {
-          TdApi.NetworkType networkType = getTdlib().networkType();
-          String networkTypeStr;
-          if (networkType != null) {
-            switch (networkType.getConstructor()) {
-              case TdApi.NetworkTypeMobile.CONSTRUCTOR:
-                networkTypeStr = "Mobile";
-                break;
-              case TdApi.NetworkTypeMobileRoaming.CONSTRUCTOR:
-                networkTypeStr = "Roaming";
-                break;
-              case TdApi.NetworkTypeOther.CONSTRUCTOR:
-                networkTypeStr = "Other";
-                break;
-              case TdApi.NetworkTypeWiFi.CONSTRUCTOR:
-                networkTypeStr = "Wifi";
-                break;
-              case TdApi.NetworkTypeNone.CONSTRUCTOR:
-              default:
-                networkTypeStr = "None";
-                break;
-            }
-          } else {
-            networkTypeStr = "Unknown";
-          }
-          if (getTdlib().isConnected()) {
-            networkTypeStr = networkTypeStr + ", " + Lang.getString(languagePackInfo, R.string.Connected);
-          }
-          String text = Lang.getString(languagePackInfo,
-            R.string.email_LoginTooLong_text,
+        if (getTdlib().isConnected()) {
+          networkTypeStr = networkTypeStr + ", " + Lang.getString(languagePackInfo, R.string.Connected);
+        }
+        String text = Lang.getString(languagePackInfo,
+          R.string.email_LoginTooLong_text,
 
-            BuildConfig.VERSION_NAME,
-            languagePackInfo.id,
-            Lang.getDuration((int) (getTdlib().timeSinceFirstConnectionAttemptMs() / 1000l)) + " (" + networkTypeStr + ")",
-            TdlibManager.getSystemLanguageCode(),
-            TdlibManager.getSystemVersion()
-          );
-          Intents.sendEmail(Lang.getStringSecure(R.string.email_SmsHelp), Lang.getString(languagePackInfo, R.string.email_LoginTooLong_subject), text, Lang.getString(languagePackInfo, R.string.HelpEmailError));
-          break;
-        }
-        case R.id.btn_proxy: {
-          getTdlib().ui().openProxySettings(new TdlibContext(context, getTdlib()), true);
-          break;
-        }
+          BuildConfig.VERSION_NAME,
+          languagePackInfo.id,
+          Lang.getDuration((int) (getTdlib().timeSinceFirstConnectionAttemptMs() / 1000l)) + " (" + networkTypeStr + ")",
+          TdlibManager.getSystemLanguageCode(),
+          TdlibManager.getSystemVersion()
+        );
+        Intents.sendEmail(Lang.getStringSecure(R.string.email_SmsHelp), Lang.getString(languagePackInfo, R.string.email_LoginTooLong_subject), text, Lang.getString(languagePackInfo, R.string.HelpEmailError));
+      } else if (id == R.id.btn_proxy) {
+        getTdlib().ui().openProxySettings(new TdlibContext(context, getTdlib()), true);
       }
       return true;
     });
@@ -300,9 +351,11 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
         }
       }
       popupLayout.setDisableCancelOnTouchDown(true);
-      popupLayout.setBackListener((fromTop) -> {
+      popupLayout.setBackListener((fromTop, commit) -> {
         if (loginRequest == request) {
-          cancelLoginRequest();
+          if (commit) {
+            cancelLoginRequest();
+          }
         }
         return false;
       });
@@ -327,23 +380,22 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
     strings.append(Lang.getString(languagePackInfo, R.string.Settings));
     icons.append(R.drawable.baseline_settings_24);
     PopupLayout popupLayout = showOptions(msg, ids.get(), strings.get(), null, icons.get(), (itemView, id) -> {
-      switch (id) {
-        case R.id.btn_settings: {
-          if (U.isAirplaneModeOn()) {
-            Intents.openAirplaneSettings();
-          } else {
-            Intents.openWirelessSettings();
-          }
-          break;
+      if (id == R.id.btn_settings) {
+        if (U.isAirplaneModeOn()) {
+          Intents.openAirplaneSettings();
+        } else {
+          Intents.openWirelessSettings();
         }
       }
       return true;
     });
     if (popupLayout != null) {
       popupLayout.setDisableCancelOnTouchDown(true);
-      popupLayout.setBackListener((fromTop) -> {
+      popupLayout.setBackListener((fromTop, commit) -> {
         if (loginRequest == request) {
-          cancelLoginRequest();
+          if (commit) {
+            cancelLoginRequest();
+          }
         }
         return false;
       });
@@ -548,7 +600,7 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
      */
     public void setPopup (@Nullable PopupLayout popupLayout, int windowType) {
       if (this.popupLayout != null && !this.popupLayout.isWindowHidden()) {
-        this.popupLayout.hideWindow(UI.getContext(this.popupLayout.getContext()).getActivityState() == UI.STATE_RESUMED);
+        this.popupLayout.hideWindow(UI.getContext(this.popupLayout.getContext()).getActivityState() == UI.State.RESUMED);
       }
       this.popupLayout = popupLayout;
       if (popupLayout != null) {
@@ -854,7 +906,7 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
     initLanguages();
 
     FrameLayoutFix contentView = new FrameLayoutFix(context);
-    ViewSupport.setThemedBackground(contentView, R.id.theme_color_filling, this);
+    ViewSupport.setThemedBackground(contentView, ColorId.filling, this);
     contentView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
     // UI.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
@@ -1006,7 +1058,7 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
     progressComponent = new ProgressComponent(UI.getContext(context), Screen.dp(3.5f));
     progressComponent.setAlpha(0f);
     progressComponent.setViewProvider(new SingleViewProvider(button));
-    button.setId(R.id.btn_done);
+    button.setId(R.id.btn_startMessaging);
     button.setPadding(0, 0, 0, Screen.dp(1f));
     button.setTypeface(Fonts.getRobotoMedium());
     button.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 17f);
@@ -1015,8 +1067,8 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
     button.setOnClickListener(this);
     button.setOnLongClickListener(this);
     button.setLayoutParams(params);
-    button.setTextColor(Theme.getColor(R.id.theme_color_textNeutral));
-    addThemeTextColorListener(button, R.id.theme_color_textNeutral);
+    button.setTextColor(Theme.getColor(ColorId.textNeutral));
+    addThemeTextColorListener(button, ColorId.textNeutral);
     RippleSupport.setSimpleWhiteBackground(button);
     textWrap.addView(button);
 
@@ -1042,9 +1094,9 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
     continueButton.setLayoutParams(params);
     continueButton.setOnClickListener(this);
     continueButton.setPadding(Screen.dp(16f), 0, Screen.dp(16f), Screen.dp(1f));
-    continueButton.setTextColor(Theme.getColor(R.id.theme_color_textNeutral));
+    continueButton.setTextColor(Theme.getColor(ColorId.textNeutral));
     continueButton.setTranslationY(Screen.dp(48f) + Screen.dp(16f));
-    addThemeTextColorListener(continueButton, R.id.theme_color_textNeutral);
+    addThemeTextColorListener(continueButton, ColorId.textNeutral);
     textWrap.addView(continueButton);
 
     continueAnimator = new BoolAnimator(0, new FactorAnimator.Target() {
@@ -1085,13 +1137,11 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
 
   @Override
   public void onClick (View v) {
-    switch (v.getId()) {
-      case R.id.btn_done:
-        requestLogin(false);
-        break;
-      case R.id.btn_cancel:
-        requestLogin(true);
-        break;
+    final int viewId = v.getId();
+    if (viewId == R.id.btn_startMessaging) {
+      requestLogin(false);
+    } else if (viewId == R.id.btn_cancel) {
+      requestLogin(true);
     }
   }
 
@@ -1147,7 +1197,7 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
     ids.append(R.id.btn_log_files);
     icons.append(R.drawable.baseline_bug_report_24);
     strings.append("Log Settings");
-    if (Config.ALLOW_DEBUG_DC) {
+    if (Config.ALLOW_DEBUG_DC || getTdlib().account().isDebug()) {
       ids.append(R.id.btn_tdlib_debugDatacenter);
       icons.append(R.drawable.baseline_build_24);
       strings.append("Proceed in " + (getTdlib().account().isDebug() ? "production" : "debug") + " Telegram environment");
@@ -1159,27 +1209,18 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
     }
 
     showOptions(null, ids.get(), strings.get(), null, icons.get(), (itemView, id) -> {
-      switch (id) {
-        case R.id.btn_tdlib_debugDatacenter: {
-          if (Config.ALLOW_DEBUG_DC) {
-            proceedInDebugMode(!getTdlib().account().isDebug());
-          }
-          break;
+      if (id == R.id.btn_tdlib_debugDatacenter) {
+        if (Config.ALLOW_DEBUG_DC) {
+          proceedInDebugMode(!getTdlib().account().isDebug());
         }
-        case R.id.btn_log_files: {
-          navigateTo(new SettingsBugController(context, getTdlib()));
-          break;
-        }
-        case R.id.btn_proxy: {
-          getTdlib().ui().openProxySettings(new TdlibContext(context, getTdlib()), true);
-          break;
-        }
-        case R.id.btn_test: {
-          if (!UI.inTestMode()) {
-            UI.TEST_MODE = UI.TEST_MODE_USER;
-            proceedInDebugMode(true);
-          }
-          break;
+      } else if (id == R.id.btn_log_files) {
+        navigateTo(new SettingsBugController(context, getTdlib()));
+      } else if (id == R.id.btn_proxy) {
+        getTdlib().ui().openProxySettings(new TdlibContext(context, getTdlib()), true);
+      } else if (id == R.id.btn_test) {
+        if (!UI.inTestMode()) {
+          UI.TEST_MODE = UI.TEST_MODE_USER;
+          proceedInDebugMode(true);
         }
       }
       return true;
@@ -1329,22 +1370,18 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
   }
 
   private static boolean belongsToIntro (@StringRes int res) {
-    switch (res) {
-      case R.string.Page1Title:
-      case R.string.Page1Message:
-      case R.string.Page2Title:
-      case R.string.Page2Message:
-      case R.string.Page3Title:
-      case R.string.Page3Message:
-      case R.string.Page4Title:
-      case R.string.Page4Message:
-      case R.string.Page5Title:
-      case R.string.Page5Message:
-      case R.string.Page6Title:
-      case R.string.Page6Message:
-        return true;
-    }
-    return false;
+    return res == R.string.Page1Title ||
+      res == R.string.Page1Message ||
+      res == R.string.Page2Title ||
+      res == R.string.Page2Message ||
+      res == R.string.Page3Title ||
+      res == R.string.Page3Message ||
+      res == R.string.Page4Title ||
+      res == R.string.Page4Message ||
+      res == R.string.Page5Title ||
+      res == R.string.Page5Message ||
+      res == R.string.Page6Title ||
+      res == R.string.Page6Message;
   }
 
   private static int getTitleString (int position, boolean isDesc) {
@@ -1366,7 +1403,7 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
       return descs[pos];
     } else {
       String text = getString(getTitleString(pos, true));
-      return (descs[pos] = Strings.replaceBoldTokens(text, R.id.theme_color_text));
+      return (descs[pos] = Strings.replaceBoldTokens(text, ColorId.text));
     }
   }
 
@@ -1452,8 +1489,8 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
     }
 
     public void initWithController (IntroController c) {
-      c.getThemeListeners().addThemeListener(titlePaint, R.id.theme_color_text, ThemeListenerEntry.MODE_PAINT_COLOR);
-      c.getThemeListeners().addThemeListener(textPaint, R.id.theme_color_text, ThemeListenerEntry.MODE_PAINT_COLOR);
+      c.getThemeListeners().addThemeListener(titlePaint, ColorId.text, ThemeListenerEntry.MODE_PAINT_COLOR);
+      c.getThemeListeners().addThemeListener(textPaint, ColorId.text, ThemeListenerEntry.MODE_PAINT_COLOR);
     }
 
     public void setUseCenter (boolean useCenter) {
@@ -1675,6 +1712,7 @@ public class IntroController extends ViewController<Void> implements GLSurfaceVi
 
   @Override
   public void onPageScrolled (int position, float positionOffset, int positionOffsetPixels) {
+    positionOffset = ViewPager.clampPositionOffset(positionOffset);
     lastActualPosition = position;
     lastOffset = positionOffset;
     updateTexts(false);

@@ -28,17 +28,19 @@ import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.UiThread;
 import androidx.collection.SparseArrayCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.dialogs.SearchManager;
 import org.thunderdog.challegram.component.user.BubbleHeaderView;
+import org.thunderdog.challegram.component.user.BubbleView;
 import org.thunderdog.challegram.component.user.UserView;
 import org.thunderdog.challegram.core.Background;
 import org.thunderdog.challegram.core.Lang;
@@ -54,6 +56,7 @@ import org.thunderdog.challegram.support.RippleSupport;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibCache;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Fonts;
 import org.thunderdog.challegram.tool.Keyboard;
 import org.thunderdog.challegram.tool.Screen;
@@ -62,8 +65,8 @@ import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.unsorted.Size;
 import org.thunderdog.challegram.util.OptionDelegate;
-import org.thunderdog.challegram.util.Unlockable;
 import org.thunderdog.challegram.util.SenderPickerDelegate;
+import org.thunderdog.challegram.util.Unlockable;
 import org.thunderdog.challegram.util.UserPickerMultiDelegate;
 import org.thunderdog.challegram.v.HeaderEditText;
 import org.thunderdog.challegram.widget.NoScrollTextView;
@@ -74,11 +77,12 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 import me.vkryl.android.widget.FrameLayoutFix;
 import me.vkryl.core.StringUtils;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.Td;
+import me.vkryl.core.collection.LongList;
+import tgx.td.Td;
 
 public class ContactsController extends TelegramViewController<ContactsController.Args> implements OptionDelegate, BubbleHeaderView.Callback, TextWatcher, Runnable, Menu, Unlockable,
   TdlibCache.UserDataChangeListener, TdlibCache.UserStatusChangeListener, Comparator<TdApi.User> {
@@ -136,7 +140,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
   private DoubleHeaderView addMemberHeaderView;
 
   private TdApi.MessageSender pickedSenderId;
-  private List<TGUser> pickedChats;
+  private List<BubbleView.Entry> pickedBubbles;
 
   private int mode;
   private int sourceType;
@@ -158,25 +162,19 @@ public class ContactsController extends TelegramViewController<ContactsControlle
       case MODE_IMPORT: {
         if (mode == MODE_MULTI_PICK) {
           long[] chatIds = multiDelegate.getAlreadySelectedChatIds();
-          pickedChats = new ArrayList<>(chatIds != null ? chatIds.length : 10);
+          pickedBubbles = new ArrayList<>(chatIds != null ? chatIds.length : 10);
           if (chatIds != null) {
             for (long chatId : chatIds) {
-              long userId = ChatId.toUserId(chatId);
+              long userId = tdlib.chatUserId(chatId);
               if (userId != 0) {
-                TdApi.User user = tdlib.cache().user(userId);
-                if (user != null) {
-                  pickedChats.add(new TGUser(tdlib, user));
-                }
+                pickedBubbles.add(BubbleView.Entry.valueOf(tdlib, new TdApi.MessageSenderUser(userId)));
               } else {
-                TdApi.Chat chat = tdlib.chat(chatId);
-                if (chat != null) {
-                  pickedChats.add(new TGUser(tdlib, chat));
-                }
+                pickedBubbles.add(BubbleView.Entry.valueOf(tdlib, new TdApi.MessageSenderChat(chatId)));
               }
             }
           }
         } else {
-          pickedChats = new ArrayList<>(10);
+          pickedBubbles = new ArrayList<>(10);
         }
         break;
       }
@@ -274,13 +272,25 @@ public class ContactsController extends TelegramViewController<ContactsControlle
     return mode == MODE_NEW_CHAT || mode == MODE_CALL;
   }
 
+  @Override
+  public boolean supportsBottomInset () {
+    return true;
+  }
+
+  @Override
+  protected void onBottomInsetChanged (int extraBottomInset, int extraBottomInsetWithoutIme, boolean isImeInset) {
+    super.onBottomInsetChanged(extraBottomInset, extraBottomInsetWithoutIme, isImeInset);
+    Views.applyBottomInset(recyclerView, extraBottomInset);
+  }
+
   @SuppressWarnings("ResourceType")
   @Override
   protected View onCreateView (Context context) {
     contentView = new FrameLayoutFix(context);
-    ViewSupport.setThemedBackground(contentView, R.id.theme_color_filling, this);
+    ViewSupport.setThemedBackground(contentView, ColorId.filling, this);
 
     recyclerView = new SectionedRecyclerView(context);
+    Views.applyBottomInset(recyclerView, extraBottomInset);
     recyclerView.setSectionedAdapter(adapter = new ContactsAdapter(recyclerView, this));
     recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
       @Override
@@ -301,11 +311,11 @@ public class ContactsController extends TelegramViewController<ContactsControlle
       addMemberHeaderView.setTitle(titleRes);
       addMemberHeaderView.setSubtitle(chatTitle);
     } else if (hasBubbles()) {
-      headerCell = new BubbleHeaderView(context);
+      headerCell = new BubbleHeaderView(context, tdlib);
       headerCell.setHint(bindLocaleChanger(mode == MODE_MULTI_PICK ? multiDelegate.provideMultiUserPickerHint() : R.string.SendMessageTo, headerCell.getInput(), true, false));
       headerCell.setCallback(this);
-      if (pickedChats != null && pickedChats.size() > 0) {
-        headerCell.forceUsers(pickedChats);
+      if (pickedBubbles != null && !pickedBubbles.isEmpty()) {
+        headerCell.forceBubbles(pickedBubbles);
         headerOffset = headerCell.getCurrentWrapHeight();
         recyclerView.setTranslationY(headerOffset);
         ((FrameLayoutFix.LayoutParams) recyclerView.getLayoutParams()).bottomMargin = headerOffset;
@@ -332,7 +342,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
 
     if (needChatSearch()) {
       RecyclerView recyclerView = generateChatSearchView(contentView);
-      if (pickedChats != null && pickedChats.size() > 0) {
+      if (pickedBubbles != null && !pickedBubbles.isEmpty()) {
         recyclerView.setTranslationY(headerOffset);
         ((FrameLayoutFix.LayoutParams) recyclerView.getLayoutParams()).bottomMargin = headerOffset;
       }
@@ -351,7 +361,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
 
   @Override
   public void onTextChanged (CharSequence s, int start, int before, int count) {
-    searchUser(s.toString());
+    searchForItems(s.toString());
   }
 
   @Override
@@ -415,18 +425,13 @@ public class ContactsController extends TelegramViewController<ContactsControlle
     if (pickedSenderId != null && delegate != null && id != R.id.btn_cancel) {
       delegate.onSenderConfirm(this, pickedSenderId, id);
       navigateBack();
-    } else switch (id) {
-      case R.id.btn_newContact: {
+    } else {
+      if (id == R.id.btn_newContact) {
         createContact();
-        break;
-      }
-      case R.id.btn_localContacts: {
+      } else if (id == R.id.btn_localContacts) {
         importContacts(SOURCE_TYPE_LOCAL);
-        break;
-      }
-      case R.id.btn_gmailContacts: {
+      } else if (id == R.id.btn_gmailContacts) {
         importContacts(SOURCE_TYPE_GMAIL);
-        break;
       }
     }
     return true;
@@ -474,13 +479,10 @@ public class ContactsController extends TelegramViewController<ContactsControlle
 
   @Override
   public void fillMenuItems (int id, HeaderView header, LinearLayout menu) {
-    switch (id) {
-      case R.id.menu_search:
-        header.addSearchButton(menu, this, getHeaderIconColorId());
-        break;
-      case R.id.menu_contacts:
-        header.addButton(menu, R.id.menu_btn_addContact, R.drawable.baseline_person_add_24, getHeaderIconColorId(), this, Screen.dp(49f));
-        break;
+    if (id == R.id.menu_search) {
+      header.addSearchButton(menu, this, getHeaderIconColorId());
+    } else if (id == R.id.menu_contacts) {
+      header.addButton(menu, R.id.menu_btn_addContact, R.drawable.baseline_person_add_24, getHeaderIconColorId(), this, Screen.dp(49f));
     }
   }
 
@@ -492,22 +494,15 @@ public class ContactsController extends TelegramViewController<ContactsControlle
 
   @Override
   public void onMenuItemPressed (int id, View view) {
-    switch (id) {
-      case R.id.menu_btn_addContact: {
-        if (users != null) {
-          createContact();
-          // showOptions(new int[] {R.id.btn_newContact, R.id.btn_localContacts, R.id.btn_gmailContacts}, new String[] {UI.getString(R.string.NewContact), UI.getString(R.string.ImportContacts), UI.getString(R.string.ImportGmailContacts)}, null, new int[] {R.drawable.ic_person_add_gray, R.drawable.ic_contact_gray, R.drawable.ic_mail_gray});
-        }
-        break;
+    if (id == R.id.menu_btn_addContact) {
+      if (users != null) {
+        createContact();
+        // showOptions(new int[] {R.id.btn_newContact, R.id.btn_localContacts, R.id.btn_gmailContacts}, new String[] {UI.getString(R.string.NewContact), UI.getString(R.string.ImportContacts), UI.getString(R.string.ImportGmailContacts)}, null, new int[] {R.drawable.ic_person_add_gray, R.drawable.ic_contact_gray, R.drawable.ic_mail_gray});
       }
-      case R.id.menu_btn_search: {
-        openSearchMode();
-        break;
-      }
-      case R.id.menu_btn_clear: {
-        clearSearchInput();
-        break;
-      }
+    } else if (id == R.id.menu_btn_search) {
+      openSearchMode();
+    } else if (id == R.id.menu_btn_clear) {
+      clearSearchInput();
     }
   }
 
@@ -587,7 +582,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
 
   @Override
   protected int getFloatingButtonId () {
-    return mode == MODE_ADD_MEMBER || mode == MODE_MULTI_PICK ? 0 : mode == MODE_PICK || mode == MODE_NEW_CHAT || mode == MODE_CALL || mode == MODE_NEW_SECRET_CHAT || pickedChats.size() == 0 ? 0 : mode == MODE_CHANNEL_MEMBERS || mode == MODE_MULTI_PICK ? R.drawable.baseline_check_24 : R.drawable.baseline_arrow_forward_24;
+    return mode == MODE_ADD_MEMBER || mode == MODE_MULTI_PICK ? 0 : mode == MODE_PICK || mode == MODE_NEW_CHAT || mode == MODE_CALL || mode == MODE_NEW_SECRET_CHAT || pickedBubbles.isEmpty() ? 0 : mode == MODE_CHANNEL_MEMBERS || mode == MODE_MULTI_PICK ? R.drawable.baseline_check_24 : R.drawable.baseline_arrow_forward_24;
   }
 
   @Override
@@ -605,7 +600,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
   }
 
   private void createChannel () {
-    int size = pickedChats.size();
+    int size = pickedBubbles.size();
 
     if (size == 0 || creatingChat) {
       return;
@@ -614,28 +609,23 @@ public class ContactsController extends TelegramViewController<ContactsControlle
     setStackLocked(true);
     creatingChat = true;
 
-    long[] userIds = new long[size];
+    LongList userIdsList = new LongList(size);
     for (int i = 0; i < size; i++) {
-      userIds[i] = pickedChats.get(i).getUserId();
+      TdApi.MessageSender senderId = pickedBubbles.get(i).senderId;
+      long userId = tdlib.senderUserId(senderId);
+      if (userId != 0) {
+        userIdsList.append(userId);
+      }
     }
+    long[] userIds = userIdsList.get();
 
-    tdlib.client().send(new TdApi.AddChatMembers(chat.id, userIds), object -> {
-      switch (object.getConstructor()) {
-        case TdApi.Ok.CONSTRUCTOR: {
-          UI.unlock(ContactsController.this);
-          tdlib.ui().openChat(ContactsController.this, chat, null);
-          break;
-        }
-        case TdApi.Error.CONSTRUCTOR: {
-          UI.showError(object);
-          UI.unlock(ContactsController.this);
-          break;
-        }
-        default: {
-          Log.unexpectedTdlibResponse(object, TdApi.AddChatMembers.class, TdApi.Ok.class);
-          UI.unlock(ContactsController.this);
-          break;
-        }
+    tdlib.send(new TdApi.AddChatMembers(chat.id, userIds), (ok, error) -> {
+      if (error != null) {
+        UI.showError(error);
+        UI.unlock(ContactsController.this);
+      } else {
+        UI.unlock(ContactsController.this);
+        tdlib.ui().openChat(ContactsController.this, chat, null);
       }
     });
   }
@@ -649,7 +639,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
   private boolean creatingChat;
 
   private void createGroup () {
-    int size = pickedChats.size();
+    int size = pickedBubbles.size();
 
     if (size == 0 || creatingChat) {
       return;
@@ -659,8 +649,10 @@ public class ContactsController extends TelegramViewController<ContactsControlle
     creatingChat = true;
 
     final ArrayList<TGUser> users = new ArrayList<>(size);
-    for (int i = 0; i < size; i++) {
-      users.add(pickedChats.get(i));
+    for (TGUser user : this.users) {
+      if (isSelected(user)) {
+        users.add(user);
+      }
     }
 
     Background.instance().post(() -> {
@@ -689,7 +681,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
   // Multi-user
 
   private boolean isSelected (TGUser u) {
-    return canSelectContacts() && indexOfSelectedChat(u.getChatId()) >= 0;
+    return canSelectContacts() && indexOfSelectedChat(u.getChatId()) != -1;
   }
 
   private boolean selectUser (TGUser u, UserView v) {
@@ -707,32 +699,33 @@ public class ContactsController extends TelegramViewController<ContactsControlle
     }
     int selectedIndex = indexOfSelectedChat(u.getChatId());
     if (canSelectContacts() && selectedIndex >= 0) {
-      pickedChats.remove(selectedIndex);
+      BubbleView.Entry removedEntry = pickedBubbles.remove(selectedIndex);
       if (v != null)
         v.setChecked(false, true);
       if (hasBubbles()) {
-        headerCell.removeUser(u);
+        headerCell.removeBubble(removedEntry);
       }
-      if (pickedChats.size() == 0) {
+      if (pickedBubbles.isEmpty()) {
         if (floatingButton != null) {
           floatingButton.hide();
         }
       }
     } else {
-      int nextSize = pickedChats.size() + 1;
+      int nextSize = pickedBubbles.size() + 1;
       if (mode == MODE_NEW_GROUP) {
-        if (nextSize >= tdlib.supergroupMaxSize()) {
-          context.tooltipManager().builder(v).show(this, tdlib, R.drawable.baseline_error_24, Lang.pluralBold(R.string.ParticipantXLimitReached, tdlib.supergroupMaxSize()));
+        if (nextSize >= tdlib.supergroupSizeMax()) {
+          context.tooltipManager().builder(v).show(this, tdlib, R.drawable.baseline_error_24, Lang.pluralBold(R.string.ParticipantXLimitReached, tdlib.supergroupSizeMax()));
           return false;
         }
       }
-      pickedChats.add(u);
+      BubbleView.Entry entry = BubbleView.Entry.valueOf(tdlib, u);
+      pickedBubbles.add(entry);
       if (v != null)
         v.setChecked(true, true);
       if (hasBubbles()) {
-        headerCell.addUser(u);
+        headerCell.addBubble(entry);
       }
-      if (pickedChats.size() == 1) {
+      if (pickedBubbles.size() == 1) {
         if (floatingButton != null && getFloatingButtonId() != 0) {
           floatingButton.show(this);
         }
@@ -743,7 +736,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
       // hideSoftwareKeyboard();
     }
     if (mode == MODE_MULTI_PICK) {
-      multiDelegate.onAlreadyPickedChatsChanged(pickedChats);
+      multiDelegate.onAlreadyPickedChatsChanged(pickedBubbles);
     }
     if (viewIndex != -1) {
       adapter.notifyItemChanged(viewIndex);
@@ -819,7 +812,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
   private String lastQuery;
 
   @Override
-  public void searchUser (String q) {
+  public void searchForItems (String q) {
     if (lastQuery == null) {
       lastQuery = "";
     }
@@ -846,9 +839,9 @@ public class ContactsController extends TelegramViewController<ContactsControlle
         forceSearchChats(q);
       }
     } else if (users != null && users.length > 0) {
-      q = Strings.clean(q.trim().toLowerCase());
+      q = Strings.clean(q.trim());
       if (!q.equals(lastQuery)) {
-        searchInternal(q, q.length() > lastQuery.length() && lastQuery.length() > 0 && q.startsWith(lastQuery));
+        searchInternal(q, q.length() > lastQuery.length() && lastQuery.length() > 0 && q.regionMatches(true, 0, lastQuery, 0, lastQuery.length()));
         lastQuery = q;
       }
     }
@@ -901,13 +894,11 @@ public class ContactsController extends TelegramViewController<ContactsControlle
           Log.critical("ContactsController::sortUsers: TGUser is null");
           continue;
         }
-        String firstName = Strings.clean(user.getFirstName().trim()).toLowerCase();
-        String lastName = Strings.clean(user.getLastName().trim()).toLowerCase();
         TdApi.Usernames usernames = user.getUsernames();
-        String check = (firstName + " " + lastName).trim();
+        String check = TD.getUserName(user.getFirstName(), user.getLastName());
 
         if (q != null) {
-          if (!firstName.startsWith(q) && !lastName.startsWith(q) && !check.startsWith(q) && !Td.findUsernameByPrefix(usernames, q)) {
+          if (!Strings.anyWordStartsWith(check, q) && !Td.findUsernameByPrefix(usernames, q)) {
             continue;
           }
         }
@@ -921,7 +912,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
           if ((charCount == 1 && Character.isDigit(codePoint)) || charCount > check.length()) {
             c = "#";
           } else {
-            c = check.substring(0, charCount).toUpperCase();
+            c = check.substring(0, charCount).toUpperCase(Locale.ROOT);
           }
         }
 
@@ -971,6 +962,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
           adapter.setData(resultArray, finalSectionCount, finalSections, finalLetters);
         }
         recyclerView.postInvalidate();
+        onContactsLoaded();
       });
     });
   }
@@ -987,45 +979,66 @@ public class ContactsController extends TelegramViewController<ContactsControlle
     }
   }
 
+  private int indexOfSelectedChat (BubbleView.Entry entry) {
+    return pickedBubbles != null ? pickedBubbles.indexOf(entry) : -1;
+  }
+
   private int indexOfSelectedChat (long chatId) {
-    for (int index = 0; index < pickedChats.size(); index++) {
-      if (pickedChats.get(index).getChatId() == chatId) {
-        return index;
+    if (pickedBubbles != null) {
+      for (int index = 0; index < pickedBubbles.size(); index++) {
+        BubbleView.Entry entry = pickedBubbles.get(index);
+        if (entry.senderId != null && Td.getSenderId(entry.senderId) == chatId) {
+          return index;
+        }
       }
     }
     return -1;
   }
 
+  private int indexOfSenderId (TdApi.MessageSender senderId) {
+    if (senderId == null) {
+      return -1;
+    }
+    int index = 0;
+    for (TGUser user : users) {
+      if (user.belongsToSenderId(senderId)) {
+        return index;
+      }
+      index++;
+    }
+    return -1;
+  }
+
   @Override
-  public void onBubbleRemoved (long chatId) {
-    int index = indexOfSelectedChat(chatId);
+  public void onBubbleRemoved (@NonNull BubbleView.Entry entry) {
+    if (entry.senderId == null) {
+      // ContactsController doesn't support custom bubbles, because there was no need
+      return;
+    }
+    int index = indexOfSelectedChat(entry);
     if (index != -1) {
-      pickedChats.remove(index);
-      if (pickedChats.size() == 0 && floatingButton != null) {
+      pickedBubbles.remove(index);
+      if (pickedBubbles.isEmpty() && floatingButton != null) {
         floatingButton.hide();
       }
 
-      int i = 0;
-      for (TGUser user : users) {
-        if (user.getChatId() == chatId) {
-          View v = recyclerView.getLayoutManager().findViewByPosition(i);
+      int userIndex = indexOfSenderId(entry.senderId);
+      if (userIndex != -1) {
+        View v = recyclerView.getLayoutManager().findViewByPosition(userIndex);
 
-          if (v != null && v instanceof UserView) {
-            UserView u = (UserView) v;
-            if (u.getUser().getChatId() == chatId) {
-              u.setChecked(false, true);
-              break;
-            }
+        if (v instanceof UserView) {
+          UserView u = (UserView) v;
+          TGUser user = u.getUser();
+          if (user != null && user.belongsToSenderId(entry.senderId)) {
+            u.setChecked(false, true);
           }
-
-          adapter.notifyItemChanged(i);
-          break;
         }
-        i++;
+
+        adapter.notifyItemChanged(userIndex);
       }
 
       if (mode == MODE_MULTI_PICK) {
-        multiDelegate.onAlreadyPickedChatsChanged(pickedChats);
+        multiDelegate.onAlreadyPickedChatsChanged(pickedBubbles);
       }
     }
   }
@@ -1188,6 +1201,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
     }
 
     @Override
+    @NonNull
     public String getSectionName (int section) {
       return sUsers == null ? letters[section] : sLetters[section];
     }
@@ -1214,7 +1228,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
     }
 
     @Override
-    public void updateView (SectionedRecyclerView.SectionViewHolder holder, int position) {
+    public void updateView (SectionedRecyclerView.SectionViewHolder holder, int position, boolean isUpdate) {
       TGUser user = sUsers == null ? users[position] : sUsers[position];
       ((UserView) holder.itemView).setUser(user);
       ((UserView) holder.itemView).setChecked(controller.canSelectContacts() && controller.isSelected(user), false);
@@ -1237,6 +1251,24 @@ public class ContactsController extends TelegramViewController<ContactsControlle
         controller.onClick(user, v);
       }
     }
+  }
+
+  // Async opening
+
+  private boolean contactsLoaded;
+
+  private void onContactsLoaded () {
+    executeOnUiThreadOptional(() -> {
+      if (!contactsLoaded) {
+        contactsLoaded = true;
+        executeScheduledAnimation();
+      }
+    });
+  }
+
+  @Override
+  public boolean needAsynchronousAnimation () {
+    return !contactsLoaded;
   }
 
   // Data
@@ -1266,6 +1298,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
             }
             case TdApi.Error.CONSTRUCTOR: {
               UI.showError(object);
+              onContactsLoaded();
               break;
             }
           }
@@ -1307,6 +1340,7 @@ public class ContactsController extends TelegramViewController<ContactsControlle
         if (isDestroyed()) return;
         hideProgress();
         showEmptyView();
+        onContactsLoaded();
       });
     } else {
       sortUsers(users, null, false);

@@ -4,19 +4,20 @@ import android.annotation.SuppressLint;
 
 import androidx.annotation.UiThread;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
+import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibThread;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.util.text.Highlight;
 
 import java.util.ArrayList;
-import java.util.Objects;
 
 import me.vkryl.core.ArrayUtils;
+import me.vkryl.core.ObjectUtils;
 import me.vkryl.core.StringUtils;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.Td;
+import tgx.td.ChatId;
+import tgx.td.Td;
 
 public class ChatMembersSearcher {
   public static final int FILTER_TYPE_CONTACTS = 1;
@@ -74,12 +75,16 @@ public class ChatMembersSearcher {
     boolean isSupergroup = supergroupId != 0;
 
     if (currentFilter == FILTER_TYPE_GLOBAL_GLOBAL) {
-      tdlib.client().send(new TdApi.SearchPublicChats(query), o -> onResult(contextId, o));
+      Log.ensureReturnType(TdApi.SearchPublicChats.class, TdApi.Chats.class);
+      tdlib.client().send(new TdApi.SearchPublicChats(query, null), o -> onResult(contextId, o));
     } else if (currentFilter == FILTER_TYPE_GLOBAL_LOCAL) {
-      tdlib.client().send(new TdApi.SearchChatsOnServer(query, 50), o -> onResult(contextId, o));
+      Log.ensureReturnType(TdApi.SearchChatsOnServer.class, TdApi.Chats.class);
+      tdlib.client().send(new TdApi.SearchChatsOnServer(query, null, 50), o -> onResult(contextId, o));
     } else if (isSupergroup) {
+      Log.ensureReturnType(TdApi.GetSupergroupMembers.class, TdApi.ChatMembers.class);
       tdlib.client().send(new TdApi.GetSupergroupMembers(supergroupId, makeSupergroupFilter(query, currentFilter), currentOffset, LIMIT), o -> onResult(contextId, o));
     } else {
+      Log.ensureReturnType(TdApi.SearchChatMembers.class, TdApi.ChatMembers.class);
       tdlib.client().send(new TdApi.SearchChatMembers(chatId, query, LIMIT, makeBasicGroupFilter(currentFilter)), o -> onResult(contextId, o));
     }
   }
@@ -131,6 +136,8 @@ public class ChatMembersSearcher {
           UI.showError(object);
           break;
         }
+        default:
+          throw new UnsupportedOperationException(object.toString());
       }
 
       if (needSetNextFilter) {
@@ -209,7 +216,7 @@ public class ChatMembersSearcher {
   }
 
   private void performRequestForUserChat (long userId, String query, Handler handler) {
-    long otherUserId = ChatId.isSecret(userId) ? tdlib.chatUserId(userId): userId;
+    long otherUserId = ChatId.isSecret(userId) ? tdlib.chatUserId(userId) : userId;
     long myUserId = tdlib.myUserId();
 
     boolean otherUserOk = queryUserCheck(otherUserId, query);
@@ -230,7 +237,7 @@ public class ChatMembersSearcher {
   }
 
   private boolean checkContextId (String contextId) {
-    if (!Objects.equals(contextId, currentContextId)) {
+    if (!ObjectUtils.equals(contextId, currentContextId)) {
       currentContextId = contextId;
       reset();
       return true;

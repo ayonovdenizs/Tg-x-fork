@@ -15,7 +15,6 @@ package org.thunderdog.challegram.util;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.IntentSender;
-import android.os.Build;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
@@ -32,12 +31,11 @@ import com.google.android.play.core.install.model.InstallErrorCode;
 import com.google.android.play.core.install.model.InstallStatus;
 import com.google.android.play.core.install.model.UpdateAvailability;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.BuildConfig;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
-import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.navigation.ViewController;
@@ -48,16 +46,18 @@ import org.thunderdog.challegram.telegram.TdlibContext;
 import org.thunderdog.challegram.tool.Intents;
 import org.thunderdog.challegram.tool.Strings;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 
 import java.io.File;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 
+import me.vkryl.android.AppInstallationUtil;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.RunnableBool;
 import me.vkryl.core.reference.ReferenceList;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
 public class AppUpdater implements InstallStateUpdatedListener, FileUpdateListener, ConnectionListener {
   public interface Listener {
@@ -85,12 +85,15 @@ public class AppUpdater implements InstallStateUpdatedListener, FileUpdateListen
 
   @Retention(RetentionPolicy.SOURCE)
   @IntDef({
+    FlowType.NONE,
     FlowType.TELEGRAM_CHANNEL,
     FlowType.GOOGLE_PLAY
   })
   public @interface FlowType {
-    int TELEGRAM_CHANNEL = 1;
-    int GOOGLE_PLAY = 2;
+    int
+      NONE = 0,
+      TELEGRAM_CHANNEL = 1,
+      GOOGLE_PLAY = 2;
   }
 
   private final BaseActivity context;
@@ -119,7 +122,7 @@ public class AppUpdater implements InstallStateUpdatedListener, FileUpdateListen
     this.context = context;
     this.listeners = new ReferenceList<>();
     AppUpdateManager appUpdateManager = null;
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && !BuildConfig.SIDE_LOAD_ONLY) {
+    if (AppInstallationUtil.allowInAppGooglePlayUpdates(context)) {
       try {
         appUpdateManager = AppUpdateManagerFactory.create(context);
       } catch (Throwable t) {
@@ -167,7 +170,6 @@ public class AppUpdater implements InstallStateUpdatedListener, FileUpdateListen
 
   public void checkForUpdates () {
     if (state == State.NONE) {
-      setState(State.CHECKING);
       if (preferTelegramChannelFlow()) {
         checkForTelegramChannelUpdates();
       } else {
@@ -180,9 +182,26 @@ public class AppUpdater implements InstallStateUpdatedListener, FileUpdateListen
 
   private boolean preferTelegramChannelFlow () {
     // TODO: add server config to force
-    return googlePlayUpdateManager == null ||
-      forceTelegramChannelFlow ||
-      (googlePlayFlowError && U.isAppSideLoaded());
+    if (googlePlayUpdateManager == null ||
+      forceTelegramChannelFlow) return true;
+    if (!googlePlayFlowError) return false;
+    return AppInstallationUtil.isAppSideLoaded(AppContext.get());
+  }
+
+  public static AppInstallationUtil.PublicMarketUrls publicMarketUrls () {
+    return new AppInstallationUtil.PublicMarketUrls(
+      BuildConfig.DOWNLOAD_URL,
+      BuildConfig.GOOGLE_PLAY_URL,
+      BuildConfig.GALAXY_STORE_URL,
+      BuildConfig.HUAWEI_APPGALLERY_URL,
+      BuildConfig.AMAZON_APPSTORE_URL
+    );
+  }
+
+  public static AppInstallationUtil.DownloadUrl getDownloadUrl (@Nullable String serverSuggestedDownloadUrl) {
+    @AppInstallationUtil.InstallerId int installerId = AppInstallationUtil.getInstallerId(AppContext.get());
+    AppInstallationUtil.PublicMarketUrls publicMarketUrls = publicMarketUrls();
+    return publicMarketUrls.toDownloadUrl(installerId, serverSuggestedDownloadUrl);
   }
 
   private void setState (@State int state) {
@@ -197,19 +216,20 @@ public class AppUpdater implements InstallStateUpdatedListener, FileUpdateListen
 
   private void checkForGooglePlayUpdates () {
     if (googlePlayUpdateManager == null)
-      throw new IllegalStateException();
+      return;
+    setState(State.CHECKING);
     googlePlayUpdateManager.getAppUpdateInfo().addOnSuccessListener(updateInfo -> {
       this.googlePlayUpdateInfo = updateInfo;
       int installStatus = updateInfo.installStatus();
       if (installStatus == InstallStatus.DOWNLOADED) {
-        onUpdateAvailable(FlowType.GOOGLE_PLAY, updateInfo.bytesDownloaded(), updateInfo.totalBytesToDownload(), "#" + (int) (updateInfo.availableVersionCode() / 1000), null, true);
+        onUpdateAvailable(FlowType.GOOGLE_PLAY, updateInfo.bytesDownloaded(), updateInfo.totalBytesToDownload(), "#" + (updateInfo.availableVersionCode() / 1000), null, true);
       } else if (installStatus == InstallStatus.FAILED) {
         onGooglePlayFlowError();
       } else {
         int updateAvailability = updateInfo.updateAvailability();
         switch (updateAvailability) {
           case UpdateAvailability.UPDATE_AVAILABLE: {
-            onUpdateAvailable(FlowType.GOOGLE_PLAY, updateInfo.bytesDownloaded(), updateInfo.totalBytesToDownload(), "#" + (int) (updateInfo.availableVersionCode() / 1000), null, false);
+            onUpdateAvailable(FlowType.GOOGLE_PLAY, updateInfo.bytesDownloaded(), updateInfo.totalBytesToDownload(), "#" + (updateInfo.availableVersionCode() / 1000), null, false);
             break;
           }
           case UpdateAvailability.UNKNOWN: {
@@ -218,7 +238,7 @@ public class AppUpdater implements InstallStateUpdatedListener, FileUpdateListen
           }
           case UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS:
           case UpdateAvailability.UPDATE_NOT_AVAILABLE: {
-            if (U.isAppSideLoaded()) {
+            if (AppInstallationUtil.isAppSideLoaded(AppContext.get())) {
               onGooglePlayFlowError();
             } else {
               onUpdateUnavailable();
@@ -302,8 +322,13 @@ public class AppUpdater implements InstallStateUpdatedListener, FileUpdateListen
   }
 
   private void checkForTelegramChannelUpdates () {
+    setState(State.CHECKING);
     Tdlib tdlib = context.hasTdlib() ? context.currentTdlib() : null;
-    if (BuildConfig.EXPERIMENTAL || tdlib == null || tdlib.context().inRecoveryMode() || !tdlib.isAuthorized()) {
+    if (tdlib == null || tdlib.context().inRecoveryMode() || !tdlib.isAuthorized()) {
+      onUpdateUnavailable();
+      return;
+    }
+    if (BuildConfig.EXPERIMENTAL || (!AppInstallationUtil.allowInAppTelegramUpdates(AppContext.get()) && !tdlib.hasUrgentInAppUpdate())) {
       onUpdateUnavailable();
       return;
     }
@@ -347,20 +372,17 @@ public class AppUpdater implements InstallStateUpdatedListener, FileUpdateListen
               (target, argStart, argEnd, argIndex, needFakeBold) -> argIndex != 1 ? Lang.boldCreator().onCreateSpan(target, argStart, argEnd, argIndex, needFakeBold) : null,
               Strings.buildSize(bytesToDownload), displayVersion
             ))
-            .item(new ViewController.OptionItem(R.id.btn_update, Lang.getString(R.string.DownloadUpdate), ViewController.OPTION_COLOR_BLUE, R.drawable.baseline_system_update_24));
+            .item(new ViewController.OptionItem(R.id.btn_update, Lang.getString(R.string.DownloadUpdate), ViewController.OptionColor.BLUE, R.drawable.baseline_system_update_24));
           final String changesUrl = commit != null && !BuildConfig.COMMIT.equals(commit) ? BuildConfig.REMOTE_URL + "/compare/" + BuildConfig.COMMIT + "..." + commit : null;
           if (changesUrl != null) {
-            b.item(new ViewController.OptionItem(R.id.btn_sourceCode, Lang.getString(R.string.UpdateSourceChanges), ViewController.OPTION_COLOR_NORMAL, R.drawable.baseline_code_24));
+            b.item(new ViewController.OptionItem(R.id.btn_sourceCode, Lang.getString(R.string.UpdateSourceChanges), ViewController.OptionColor.NORMAL, R.drawable.baseline_code_24));
           }
           b.cancelItem();
           c.showOptions(b.build(), (optionItemView, id) -> {
-            switch (id) {
-              case R.id.btn_update:
-                downloadUpdate();
-                break;
-              case R.id.btn_sourceCode:
-                UI.openUrl(changesUrl);
-                break;
+            if (id == R.id.btn_update) {
+              downloadUpdate();
+            } else if (id == R.id.btn_sourceCode) {
+              UI.openUrl(changesUrl);
             }
             return true;
           });
@@ -433,6 +455,9 @@ public class AppUpdater implements InstallStateUpdatedListener, FileUpdateListen
   public void offerUpdate () {
     if (!updateOffered) {
       switch (flowType) {
+        case FlowType.NONE:
+          // Do nothing.
+          break;
         case FlowType.GOOGLE_PLAY: {
           updateOffered = offerGooglePlayUpdate();
           break;
@@ -450,6 +475,9 @@ public class AppUpdater implements InstallStateUpdatedListener, FileUpdateListen
       return;
     }
     switch (flowType) {
+      case FlowType.NONE:
+        // Do nothing.
+        break;
       case FlowType.GOOGLE_PLAY: {
         updateOffered = offerGooglePlayUpdate();
         break;
@@ -475,6 +503,9 @@ public class AppUpdater implements InstallStateUpdatedListener, FileUpdateListen
       return;
     }
     switch (flowType) {
+      case FlowType.NONE:
+        // Do nothing.
+        break;
       case FlowType.TELEGRAM_CHANNEL: {
         // TODO guide on how to allow installing APKs
         UI.openFile(new TdlibContext(context, telegramChannelTdlib), telegramChannelFile.document.fileName, new File(telegramChannelFile.document.document.local.path), telegramChannelFile.document.mimeType, 0);

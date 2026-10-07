@@ -15,6 +15,7 @@
 package org.thunderdog.challegram.telegram;
 
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -28,11 +29,10 @@ import android.text.TextPaint;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.TDLib;
-import org.thunderdog.challegram.TokenRetrieverFactory;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.config.Device;
@@ -40,17 +40,22 @@ import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.loader.ImageCache;
 import org.thunderdog.challegram.loader.ImageFile;
 import org.thunderdog.challegram.loader.ImageReader;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
-import org.thunderdog.challegram.theme.ThemeColorId;
+import org.thunderdog.challegram.theme.ThemeId;
 import org.thunderdog.challegram.tool.Drawables;
 import org.thunderdog.challegram.tool.Fonts;
 import org.thunderdog.challegram.tool.Intents;
 import org.thunderdog.challegram.tool.PorterDuffPaint;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.DeviceTokenRetrieverInstance;
 import org.thunderdog.challegram.util.DeviceTokenType;
-import org.thunderdog.challegram.util.TokenRetriever;
 import org.thunderdog.challegram.util.text.Letters;
+
+import tgx.bridge.DeviceTokenRetriever;
+import tgx.bridge.TokenRetrieverListener;
+import tgx.td.Td;
 
 public class TdlibNotificationUtils {
   private static TextPaint lettersPaint;
@@ -62,7 +67,7 @@ public class TdlibNotificationUtils {
     if (tdlib.isSelfChat(chat)) {
       return buildSelfIcon(tdlib);
     } else {
-      return buildLargeIcon(tdlib, chat.photo != null ? chat.photo.small : null, tdlib.chatAvatarColorId(chat), tdlib.chatLetters(chat), true, allowDownload);
+      return buildLargeIcon(tdlib, chat.photo != null ? chat.photo.small : null, tdlib.chatAccentColor(chat), tdlib.chatLetters(chat), true, allowDownload);
     }
   }
 
@@ -99,12 +104,12 @@ public class TdlibNotificationUtils {
         Bitmap createdBitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(createdBitmap);
 
-        final int color = Theme.getColor(R.id.theme_color_avatarSavedMessages, tdlib.settings().globalTheme());
+        final int color = Theme.getColor(ColorId.avatarSavedMessages, tdlib.settings().globalTheme());
 
         bitmapPaint.setColor(color);
         if (Device.ROUND_NOTIFICAITON_IMAGE) {
           fillingPaint.setColor(color);
-          c.drawCircle(size / 2, size / 2, size / 2, fillingPaint);
+          c.drawCircle(size / 2f, size / 2f, size / 2f, fillingPaint);
         } else {
           c.drawColor(color);
         }
@@ -113,9 +118,9 @@ public class TdlibNotificationUtils {
         float scale = (float) size / (float) Screen.dp(44f);
         if (scale != 1f) {
           c.save();
-          c.scale(scale, scale, size / 2, size / 2);
+          c.scale(scale, scale, size / 2f, size / 2f);
         }
-        Drawables.draw(c, d, size / 2 - d.getMinimumWidth() / 2, size / 2 - d.getMinimumHeight() / 2, PorterDuffPaint.get(R.id.theme_color_avatar_content));
+        Drawables.draw(c, d, size / 2f - d.getMinimumWidth() / 2f, size / 2f - d.getMinimumHeight() / 2f, PorterDuffPaint.get(ColorId.avatar_content));
         if (scale != 1f) {
           c.restore();
         }
@@ -130,13 +135,13 @@ public class TdlibNotificationUtils {
     return bitmap;
   }
 
-  public static Bitmap buildLargeIcon (Tdlib tdlib, TdApi.File rawFile, @ThemeColorId int colorId, Letters letters, boolean allowSyncDownload, boolean allowDownload) {
+  public static Bitmap buildLargeIcon (Tdlib tdlib, TdApi.File rawFile, TdlibAccentColor accentColor, Letters letters, boolean allowSyncDownload, boolean allowDownload) {
     Bitmap avatarBitmap = null;
     if (rawFile != null) {
       tdlib.files().syncFile(rawFile, null, 500);
       boolean fileLoaded = TD.isFileLoadedAndExists(rawFile);
       if (!fileLoaded && allowSyncDownload && allowDownload) {
-        tdlib.files().downloadFileSync(rawFile, 1000, null, null, null);
+        tdlib.files().downloadFileSync(rawFile, TdlibFilesManager.PRIORITY_NOTIFICATION_AVATAR, 1000, null, null, null);
         fileLoaded = TD.isFileLoadedAndExists(rawFile);
       }
       if (fileLoaded) {
@@ -157,7 +162,7 @@ public class TdlibNotificationUtils {
         }
       } else if (allowDownload) {
         if (!Config.DEBUG_DISABLE_DOWNLOAD) {
-          tdlib.client().send(new TdApi.DownloadFile(rawFile.id, 1, 0, 0, false), tdlib.silentHandler());
+          tdlib.client().send(new TdApi.DownloadFile(rawFile.id, TdlibFilesManager.PRIORITY_NOTIFICATION_MEDIA, 0, 0, false), tdlib.silentHandler());
         }
       }
     }
@@ -188,23 +193,29 @@ public class TdlibNotificationUtils {
         Bitmap createdBitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(createdBitmap);
 
-        final int color = Theme.getColor(colorId, tdlib.settings().globalTheme());
+        long complexColor = accentColor.getPrimaryComplexColor();
+        final @ThemeId int themeId = tdlib.settings().globalTheme();
+        final int color = Theme.toColorInt(complexColor, themeId);
 
         bitmapPaint.setColor(color);
         if (Device.ROUND_NOTIFICAITON_IMAGE) {
           fillingPaint.setColor(color);
-          c.drawCircle(size / 2, size / 2, size / 2, fillingPaint);
+          c.drawCircle(size / 2f, size / 2f, size / 2f, fillingPaint);
         } else {
           c.drawColor(color);
         }
 
         if (avatarBitmap == null) {
-          c.drawText(letters.text, size / 2 - U.measureText(letters.text, letters.needFakeBold ? lettersPaintFake : lettersPaint) / 2, size / 2 + Screen.dp(8f, MAX_DENSITY), letters.needFakeBold ? lettersPaintFake : lettersPaint);
+          final long lettersComplexColor = accentColor.getPrimaryContentComplexColor();
+          final int lettersColor = Theme.toColorInt(lettersComplexColor, themeId);
+          final Paint paint = letters.needFakeBold ? lettersPaintFake : lettersPaint;
+          paint.setColor(lettersColor);
+          c.drawText(letters.text, size / 2f - U.measureText(letters.text, letters.needFakeBold ? lettersPaintFake : lettersPaint) / 2, size / 2f + Screen.dp(8f, MAX_DENSITY), paint);
         } else {
           float scale = (float) size / (float) avatarBitmap.getWidth();
           c.save();
-          c.scale(scale, scale, size / 2, size / 2);
-          c.drawBitmap(avatarBitmap, size / 2 - avatarBitmap.getWidth() / 2, size / 2 - avatarBitmap.getHeight() / 2, bitmapPaint);
+          c.scale(scale, scale, size / 2f, size / 2f);
+          c.drawBitmap(avatarBitmap, size / 2f - avatarBitmap.getWidth() / 2f, size / 2f - avatarBitmap.getHeight() / 2f, bitmapPaint);
           c.restore();
         }
         bitmap = createdBitmap;
@@ -231,58 +242,51 @@ public class TdlibNotificationUtils {
     }
   }
 
-  private static TokenRetriever tokenRetriever;
-
-  public static synchronized boolean initialize () {
-    if (tokenRetriever == null) {
-      TokenRetriever retriever = TokenRetrieverFactory.newRetriever(UI.getAppContext());
-      //noinspection ConstantConditions
-      if (retriever == null) {
-        return false;
-      }
-      tokenRetriever = retriever;
-    }
-    return tokenRetriever.initialize(UI.getAppContext());
-  }
-
   @DeviceTokenType
   public static int getDeviceTokenType (TdApi.DeviceToken deviceToken) {
-    switch (deviceToken.getConstructor()) {
-      // TODO more push services
-      case TdApi.DeviceTokenFirebaseCloudMessaging.CONSTRUCTOR:
-        return DeviceTokenType.FIREBASE_CLOUD_MESSAGING;
-      default:
-        throw new UnsupportedOperationException(deviceToken.toString());
-    }
+    return switch (deviceToken.getConstructor()) {
+      case TdApi.DeviceTokenFirebaseCloudMessaging.CONSTRUCTOR ->
+        DeviceTokenType.FIREBASE_CLOUD_MESSAGING;
+      case TdApi.DeviceTokenHuaweiPush.CONSTRUCTOR ->
+        DeviceTokenType.HUAWEI_PUSH_SERVICE;
+      case TdApi.DeviceTokenSimplePush.CONSTRUCTOR ->
+        DeviceTokenType.SIMPLE_PUSH_SERVICE;
+      default -> {
+        Td.assertDeviceToken_de4a4f61();
+        throw Td.unsupported(deviceToken);
+      }
+    };
   }
 
-  public static void getDeviceToken (int retryCount, TokenRetriever.RegisterCallback callback) {
+  public static void getDeviceToken (Context context, int retryCount, TokenRetrieverListener listener) {
     if (retryCount > 0) {
-      getDeviceTokenImpl(retryCount, new TokenRetriever.RegisterCallback() {
+      getDeviceTokenImpl(context, retryCount, new TokenRetrieverListener() {
         @Override
-        public void onSuccess (@NonNull TdApi.DeviceToken token) {
-          callback.onSuccess(token);
+        public void onTokenRetrievalSuccess (@NonNull TdApi.DeviceToken token) {
+          listener.onTokenRetrievalSuccess(token);
         }
 
         @Override
-        public void onError (@NonNull String errorKey, @Nullable Throwable e) {
+        public void onTokenRetrievalError (@NonNull String errorKey, @Nullable Throwable e) {
           UI.post(() ->
-            getDeviceToken(retryCount - 1, callback),
+            getDeviceToken(context, retryCount - 1, listener),
             3500
           );
         }
       });
     } else {
-      getDeviceTokenImpl(0, callback);
+      getDeviceTokenImpl(context, 0, listener);
     }
   }
 
-  private static void getDeviceTokenImpl (int retryCount, TokenRetriever.RegisterCallback callback) {
-    if (initialize()) {
-      tokenRetriever.retrieveDeviceToken(retryCount, callback);
+  private static void getDeviceTokenImpl (Context context, int retryCount, TokenRetrieverListener listener) {
+    if (DeviceTokenRetrieverInstance.initialize()) {
+      DeviceTokenRetriever deviceTokenRetriever = DeviceTokenRetrieverInstance.get();
+      TDLib.Tag.notifications("Retrieving device token via %s... retryCount: %d", deviceTokenRetriever.name, retryCount);
+      deviceTokenRetriever.retrieveDeviceToken(context, listener);
     } else {
       TDLib.Tag.notifications("Token fetch failed because TokenRetriever was not initialized, retryCount: %d", retryCount);
-      callback.onError("INITIALIZATION_ERROR", new NotificationInitializationFailedError());
+      listener.onTokenRetrievalError("INITIALIZATION_ERROR", new NotificationInitializationFailedError());
     }
   }
 }

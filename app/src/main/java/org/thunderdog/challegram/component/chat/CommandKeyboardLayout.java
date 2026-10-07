@@ -25,9 +25,9 @@ import android.widget.ScrollView;
 
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
-import org.thunderdog.challegram.R;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.navigation.ViewController;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Keyboard;
 import org.thunderdog.challegram.tool.Screen;
@@ -137,7 +137,7 @@ public class CommandKeyboardLayout extends ViewGroup implements ViewTreeObserver
   private TextView genButton () {
     TextView text = new EmojiTextView(getContext());
     text.setScrollDisabled(true);
-    ViewUtils.setBackground(text, Theme.rectSelector(4f, 0f, R.id.theme_color_chatKeyboardButton));
+    ViewUtils.setBackground(text, Theme.rectSelector(4f, 0f, ColorId.chatKeyboardButton));
     if (themeProvider != null) {
       themeProvider.addThemeInvalidateListener(text);
     }
@@ -189,7 +189,11 @@ public class CommandKeyboardLayout extends ViewGroup implements ViewTreeObserver
 
   public int getParentSize () {
     ViewParent parent = getParent();
-    return parent != null ? ((View) parent).getLayoutParams().height : 0;
+    if (parent != null) {
+      ViewGroup viewGroup = (ViewGroup) parent;
+      return viewGroup.getLayoutParams().height - viewGroup.getPaddingBottom();
+    }
+    return 0;
   }
 
   public void setSize (int size, int parentSize) {
@@ -213,7 +217,7 @@ public class CommandKeyboardLayout extends ViewGroup implements ViewTreeObserver
 
   @Override
   protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
-    setMeasuredDimension(widthMeasureSpec, MeasureSpec.makeMeasureSpec(Math.max(getParentSize(), size), MeasureSpec.EXACTLY));
+    setMeasuredDimension(widthMeasureSpec, MeasureSpec.makeMeasureSpec(Math.max(getParentSize(), size) + getPaddingBottom() + getPaddingTop(), MeasureSpec.EXACTLY));
     // children measuring is inside onLayout
   }
 

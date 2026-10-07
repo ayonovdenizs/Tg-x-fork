@@ -26,6 +26,7 @@ import android.view.ViewGroup;
 import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.RecyclerView;
 
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
@@ -35,13 +36,17 @@ import org.thunderdog.challegram.loader.AvatarReceiver;
 import org.thunderdog.challegram.loader.ComplexReceiver;
 import org.thunderdog.challegram.loader.Receiver;
 import org.thunderdog.challegram.navigation.ViewController;
+import org.thunderdog.challegram.receiver.RefreshRateLimiter;
 import org.thunderdog.challegram.support.RippleSupport;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.telegram.TdlibMessageViewer;
 import org.thunderdog.challegram.telegram.TdlibSettingsManager;
 import org.thunderdog.challegram.telegram.TdlibStatusManager;
+import org.thunderdog.challegram.telegram.TdlibUi;
+import org.thunderdog.challegram.theme.ColorId;
+import org.thunderdog.challegram.theme.PropertyId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeManager;
-import org.thunderdog.challegram.theme.ThemeProperty;
 import org.thunderdog.challegram.tool.DrawAlgorithms;
 import org.thunderdog.challegram.tool.Drawables;
 import org.thunderdog.challegram.tool.Fonts;
@@ -52,20 +57,22 @@ import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.ui.ChatsController;
 import org.thunderdog.challegram.unsorted.Settings;
+import org.thunderdog.challegram.util.EmojiStatusHelper;
 import org.thunderdog.challegram.util.text.Counter;
 import org.thunderdog.challegram.util.text.Text;
+import org.thunderdog.challegram.util.text.TextMedia;
 import org.thunderdog.challegram.widget.BaseView;
+
+import java.util.List;
 
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.animator.BoolAnimator;
-import me.vkryl.android.animator.BounceAnimator;
 import me.vkryl.android.util.InvalidateContentProvider;
-import me.vkryl.android.util.SingleViewProvider;
 import me.vkryl.core.ColorUtils;
 import me.vkryl.core.collection.IntList;
-import me.vkryl.td.ChatPosition;
+import tgx.td.ChatPosition;
 
-public class ChatView extends BaseView implements TdlibSettingsManager.PreferenceChangeListener, InvalidateContentProvider {
+public class ChatView extends BaseView implements TdlibSettingsManager.PreferenceChangeListener, InvalidateContentProvider, EmojiStatusHelper.EmojiStatusReceiverInvalidateDelegate, TdlibUi.MessageProvider {
   private static Paint timePaint;
   private static TextPaint titlePaint, titlePaintFake; // counterTextPaint
 
@@ -83,20 +90,20 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
     titlePaint.setColor(Theme.textAccentColor());
     titlePaint.setTextSize(Screen.dp(17f));
     titlePaint.setTypeface(Fonts.getRobotoMedium());
-    ThemeManager.addThemeListener(titlePaint, R.id.theme_color_text);
+    ThemeManager.addThemeListener(titlePaint, ColorId.text);
 
     titlePaintFake = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
     titlePaintFake.setColor(Theme.textAccentColor());
     titlePaintFake.setTextSize(Screen.dp(17f));
     titlePaintFake.setTypeface(Fonts.getRobotoRegular());
     titlePaintFake.setFakeBoldText(true);
-    ThemeManager.addThemeListener(titlePaintFake, R.id.theme_color_text);
+    ThemeManager.addThemeListener(titlePaintFake, ColorId.text);
 
     timePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
     timePaint.setColor(Theme.textDecentColor());
     timePaint.setTextSize(Screen.dp(12f));
     timePaint.setTypeface(Fonts.getRobotoRegular());
-    ThemeManager.addThemeListener(timePaint, R.id.theme_color_textLight);
+    ThemeManager.addThemeListener(timePaint, ColorId.textLight);
   }
 
   public static TextPaint getTitlePaint (boolean needFake) {
@@ -171,22 +178,32 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
 
   private TGChat chat;
   private final AvatarReceiver avatarReceiver;
+  private final ComplexReceiver emojiStatusReceiver;
   private final ComplexReceiver textMediaReceiver;
+  private final ComplexReceiver reactionsReceiver;
 
   private final BoolAnimator isSelected = new BoolAnimator(this, AnimatorUtils.DECELERATE_INTERPOLATOR, 180l);
+  private final RefreshRateLimiter refreshRateLimiter;
 
   public ChatView (Context context, Tdlib tdlib) {
     super(context, tdlib);
     if (titlePaint == null) {
       initPaints();
     }
+    this.refreshRateLimiter = new RefreshRateLimiter(this, Config.MAX_ANIMATED_EMOJI_REFRESH_RATE);
     setId(R.id.chat);
     RippleSupport.setTransparentSelector(this);
     int chatListMode = getChatListMode();
-    avatarReceiver = new AvatarReceiver(this);
-    avatarReceiver.setAvatarRadiusPropertyIds(ThemeProperty.AVATAR_RADIUS_CHAT_LIST, ThemeProperty.AVATAR_RADIUS_CHAT_LIST_FORUM);
+    emojiStatusReceiver = new ComplexReceiver(this)
+      .setUpdateListener(refreshRateLimiter);
+    reactionsReceiver = new ComplexReceiver(this)
+      .setUpdateListener(refreshRateLimiter);
+    avatarReceiver = new AvatarReceiver(this)
+      .setUpdateListener(refreshRateLimiter.passThroughUpdateListener());
+    avatarReceiver.setAvatarRadiusPropertyIds(PropertyId.AVATAR_RADIUS_CHAT_LIST, PropertyId.AVATAR_RADIUS_CHAT_LIST_FORUM);
     avatarReceiver.setBounds(getAvatarLeft(chatListMode), getAvatarTop(chatListMode), getAvatarLeft(chatListMode) + getAvatarSize(chatListMode), getAvatarTop(chatListMode) + getAvatarSize(chatListMode));
-    textMediaReceiver = new ComplexReceiver(this, Config.MAX_ANIMATED_EMOJI_REFRESH_RATE);
+    textMediaReceiver = new ComplexReceiver(this)
+      .setUpdateListener(refreshRateLimiter);
     setLayoutParams(new RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
   }
 
@@ -197,6 +214,8 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
   public void setAnimationsDisabled (boolean disabled) {
     avatarReceiver.setAnimationDisabled(disabled);
     textMediaReceiver.setAnimationDisabled(disabled);
+    emojiStatusReceiver.setAnimationDisabled(disabled);
+    reactionsReceiver.setAnimationDisabled(disabled);
   }
 
   public static int getViewHeight (int chatListMode) {
@@ -329,11 +348,15 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
   public void attach () {
     avatarReceiver.attach();
     textMediaReceiver.attach();
+    emojiStatusReceiver.attach();
+    reactionsReceiver.attach();
   }
 
   public void detach () {
     avatarReceiver.detach();
     textMediaReceiver.detach();
+    emojiStatusReceiver.detach();
+    reactionsReceiver.detach();
   }
 
   public void setChat (TGChat chat) {
@@ -348,7 +371,6 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
       this.isPinnedArchive.setValue(chat != null && chat.isArchive() && !tdlib.settings().needHideArchive(), false);
       if (chat != null) {
         chat.checkLayout(getMeasuredWidth());
-        chat.syncCounter();
         chat.attachToView(this);
         if (chat.isArchive()) {
           this.tdlib.settings().addUserPreferenceChangeListener(this);
@@ -381,8 +403,37 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
       } else {
         setCustomControllerProvider(null);
       }
+      if (chat != null) {
+        chat.onAttachToView();
+      }
     }
     requestContent();
+  }
+
+  @Override
+  public void invalidateEmojiStatusReceiver (Text text, @Nullable TextMedia specificMedia) {
+    requestEmojiStatus();
+  }
+
+  private void requestEmojiStatus () {
+    EmojiStatusHelper.EmojiStatusDrawable text = chat != null ? chat.getEmojiStatus() : null;
+    if (text != null) {
+      text.requestMedia(emojiStatusReceiver);
+    } else {
+      emojiStatusReceiver.clear();
+    }
+  }
+
+  public ComplexReceiver getReactionsReceiver () {
+    return reactionsReceiver;
+  }
+
+  public void requestReactionFiles () {
+    if (chat != null) {
+      chat.requestReactionFiles(reactionsReceiver);
+    } else {
+      reactionsReceiver.clear();
+    }
   }
 
   private void requestTextContent () {
@@ -396,6 +447,8 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
 
   private void requestContent () {
     requestTextContent();
+    requestEmojiStatus();
+    requestReactionFiles();
     if (chat != null) {
       AvatarPlaceholder.Metadata avatarPlaceholder = chat.getAvatarPlaceholder();
       if (avatarPlaceholder != null) {
@@ -502,6 +555,8 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
   public boolean invalidateContent (Object cause) {
     if (this.chat == cause) {
       requestTextContent();
+      requestEmojiStatus();
+      requestReactionFiles();
       return true;
     }
     return false;
@@ -537,6 +592,11 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
       title.draw(c, titleX, titleTop);
     }
 
+    EmojiStatusHelper.EmojiStatusDrawable emojiStatus = chat.getEmojiStatus();
+    if (emojiStatus != null) {
+      emojiStatus.draw(c, chat.getEmojiStatusLeft(), getTitleTop2(chatListMode), 1f, emojiStatusReceiver);
+    }
+
     if (chat.showVerify()) {
       Drawables.drawRtl(c, Icons.getChatVerifyDrawable(), chat.getVerifyLeft(), getMuteTop(chatListMode), Paints.getVerifyPaint(), viewWidth, rtl);
     }
@@ -549,32 +609,39 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
 
       RectF rct = Paints.getRectF();
       rct.set(chatMarkLeft - additionalPadding, chatMarkY, chatMarkLeft + chat.getChatMark().getWidth() + additionalPadding, chatMarkY + chat.getChatMark().getLineHeight(true));
-      c.drawRoundRect(rct, Screen.dp(2f), Screen.dp(2f), Paints.getProgressPaint(Theme.getColor(R.id.theme_color_textNegative), Screen.dp(1.5f)));
+      c.drawRoundRect(rct, Screen.dp(2f), Screen.dp(2f), Paints.getProgressPaint(Theme.getColor(ColorId.textNegative), Screen.dp(1.5f)));
 
       chat.getChatMark().draw(c, chatMarkLeft, chatMarkY + Screen.dp(1f));
     }
 
     if (chat.showMute()) {
-      Drawables.drawRtl(c, Icons.getChatMuteDrawable(R.id.theme_color_chatListMute), chat.getMuteLeft(), getMuteTop(chatListMode), Paints.getChatsMutePaint(), viewWidth, rtl);
+      Drawables.drawRtl(c, Icons.getChatMuteDrawable(ColorId.chatListMute), chat.getMuteLeft(), getMuteTop(chatListMode), Paints.getChatsMutePaint(), viewWidth, rtl);
     }
 
     if (chat.isSending()) {
       int x = chat.getChecksRight() - Screen.dp(10f) - Screen.dp(Icons.CLOCK_SHIFT_X);
-      Drawables.drawRtl(c, Icons.getClockIcon(R.id.theme_color_iconLight), x, getClockTop(chatListMode) - Screen.dp(Icons.CLOCK_SHIFT_Y), Paints.getIconLightPorterDuffPaint(), viewWidth, rtl);
-    } else if (chat.isOutgoing() && !chat.isSelfChat()) {
+      Drawables.drawRtl(c, Icons.getClockIcon(ColorId.iconLight), x, getClockTop(chatListMode) - Screen.dp(Icons.CLOCK_SHIFT_Y), Paints.getIconLightPorterDuffPaint(), viewWidth, rtl);
+    } else {
       int x = chat.getChecksRight();
       int y = getClockTop(chatListMode);
-      if (chat.showViews()) {
-        y -= Screen.dp(.5f);
-      } else if (chat.isUnread()) {
-        x += Screen.dp(4f);
+      if (chat.isOutgoing() && !chat.isSelfChat()) {
+        if (chat.showViews()) {
+          y -= Screen.dp(.5f);
+        } else if (chat.isUnread()) {
+          x += Screen.dp(4f);
+        }
+        if (chat.showViews()) {
+          chat.getViewCounter().draw(c, x + Screen.dp(3f), y + Screen.dp(14f) / 2f, Gravity.RIGHT, 1f, this, ColorId.ticksRead);
+          x -= chat.getViewCounter().getScaledWidth(Screen.dp(3));
+        } else {
+          int iconX = x - Screen.dp(Icons.TICKS_SHIFT_X) - Screen.dp(14f);
+          boolean unread = chat.isUnread();
+          Drawables.drawRtl(c, unread ? Icons.getSingleTick(ColorId.ticks) : Icons.getDoubleTick(ColorId.ticks), iconX, y - Screen.dp(Icons.TICKS_SHIFT_Y), unread ? Paints.getTicksPaint() : Paints.getTicksReadPaint(), viewWidth, rtl);
+          x -= Screen.dp(24 - 8 + 3);
+        }
       }
-      if (chat.showViews()) {
-        chat.getViewCounter().draw(c, x + Screen.dp(3f), y + Screen.dp(14f) / 2f, Gravity.RIGHT, 1f, this, R.id.theme_color_ticksRead);
-      } else {
-        int iconX = x - Screen.dp(Icons.TICKS_SHIFT_X) - Screen.dp(14f);
-        boolean unread = chat.isUnread();
-        Drawables.drawRtl(c, unread ? Icons.getSingleTick(R.id.theme_color_ticks) : Icons.getDoubleTick(R.id.theme_color_ticks), iconX, y - Screen.dp(Icons.TICKS_SHIFT_Y), unread ? Paints.getTicksPaint() : Paints.getTicksReadPaint(), viewWidth, rtl);
+      if (chat.needDrawReactionsPreview()) {
+        chat.getReactionsCounterDrawable().draw(c, x - chat.getReactionsWidth(), y + Screen.dp(6f));
       }
     }
 
@@ -586,11 +653,11 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
     counterRight -= counter.getScaledWidth(getTimePaddingLeft());
 
     Counter mentionCounter = chat.getMentionCounter();
-    mentionCounter.draw(c, counterRight - counterRadius, counterCenterY, Gravity.RIGHT, 1f, this, R.id.theme_color_badgeText);
+    mentionCounter.draw(c, counterRight - counterRadius, counterCenterY, Gravity.RIGHT, 1f, this, ColorId.badgeText);
     counterRight -= mentionCounter.getScaledWidth(getTimePaddingLeft());
 
     Counter reactionCounter = chat.getReactionsCounter();
-    reactionCounter.draw(c, counterRight - counterRadius, counterCenterY, Gravity.RIGHT, 1f, this, chat.notificationsEnabled() ? R.id.theme_color_badgeText: R.id.theme_color_badgeMutedText);
+    reactionCounter.draw(c, counterRight - counterRadius, counterCenterY, Gravity.RIGHT, 1f, this, chat.notificationsEnabled() ? ColorId.badgeText : ColorId.badgeMutedText);
     counterRight -= reactionCounter.getScaledWidth(getTimePaddingLeft());
 
     TdlibStatusManager.Helper status = chat.statusHelper();
@@ -629,7 +696,7 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
           for (int i = 0; i < prefixIcons.size(); i++) {
             Paint paint = PorterDuffPaint.get(chat.getTextIconColorId(), textAlpha);
             int iconId = prefixIcons.get(i);
-            Drawable d = getSparseDrawable(iconId, 0);
+            Drawable d = getSparseDrawable(iconId, ColorId.NONE);
             int y = textTop + text.getLineHeight(false) / 2 - d.getMinimumHeight() / 2;
             if (iconId == R.drawable.baseline_camera_alt_16) {
               y += Screen.dp(.5f);
@@ -654,7 +721,7 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
         if (chatListMode != Settings.CHAT_MODE_2LINE && text.getLineCount() == 1) {
           top += getSingleLineOffset(chatListMode);
         }
-        DrawAlgorithms.drawStatus(c, state, rtl ? viewWidth - getLeftPadding(chatListMode) : getLeftPadding(chatListMode), top + text.getLineHeight() / 2f, ColorUtils.alphaColor(statusVisibility, text.getTextColor()), this, statusVisibility == 1f ? R.id.theme_color_textLight : 0);
+        DrawAlgorithms.drawStatus(c, state, rtl ? viewWidth - getLeftPadding(chatListMode) : getLeftPadding(chatListMode), top + text.getLineHeight() / 2f, ColorUtils.alphaColor(statusVisibility, text.getTextColor()), this, statusVisibility == 1f ? ColorId.textLight : ColorId.NONE);
         int x = getLeftPadding(chatListMode);
         text.draw(c, x, (int) top, null, statusVisibility);
       }
@@ -667,7 +734,27 @@ public class ChatView extends BaseView implements TdlibSettingsManager.Preferenc
     }
     avatarReceiver.draw(c);
 
-    DrawAlgorithms.drawIcon(c, avatarReceiver, 315f, chat.getScheduleAnimator().getFloatValue(), Theme.fillingColor(), getSparseDrawable(R.drawable.baseline_watch_later_10, R.id.theme_color_badgeMuted), PorterDuffPaint.get(R.id.theme_color_badgeMuted, chat.getScheduleAnimator().getFloatValue()));
+    DrawAlgorithms.drawIcon(c, avatarReceiver, 315f, chat.getScheduleAnimator().getFloatValue(), Theme.fillingColor(), getSparseDrawable(R.drawable.baseline_watch_later_10, ColorId.badgeMuted), PorterDuffPaint.get(ColorId.badgeMuted, chat.getScheduleAnimator().getFloatValue()));
     DrawAlgorithms.drawSimplestCheckBox(c, avatarReceiver, isSelected.getFloatValue());
+  }
+
+  @Override
+  public boolean isMediaGroup () {
+    return chat != null && chat.isMediaGroup();
+  }
+
+  @Override
+  public List<TdApi.Message> getVisibleMediaGroup () {
+    return chat != null ? chat.getVisibleMediaGroup() : null;
+  }
+
+  @Override
+  public TdApi.Message getVisibleMessage () {
+    return chat != null ? chat.getVisibleMessage() : null;
+  }
+
+  @Override
+  public int getVisibleMessageFlags () {
+    return TdlibMessageViewer.Flags.NO_SENSITIVE_SCREENSHOT_NOTIFICATION | (chat != null && chat.needRefreshInteractionInfo() ? TdlibMessageViewer.Flags.REFRESH_INTERACTION_INFO : 0);
   }
 }

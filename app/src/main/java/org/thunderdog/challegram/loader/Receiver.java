@@ -21,20 +21,25 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.view.View;
 
+import androidx.annotation.ColorInt;
+
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
+import org.thunderdog.challegram.theme.ColorId;
+import org.thunderdog.challegram.theme.PorterDuffColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Views;
 
 import me.vkryl.core.ColorUtils;
+import tgx.td.data.StickerOutline;
 
 public interface Receiver extends TooltipOverlayView.LocationProvider {
   View getTargetView ();
   int getTargetWidth ();
   int getTargetHeight ();
 
-  void setUpdateListener (ReceiverUpdateListener listener);
+  <T extends Receiver> T setUpdateListener (ReceiverUpdateListener listener);
 
   int getLeft ();
   int getTop ();
@@ -70,8 +75,24 @@ public interface Receiver extends TooltipOverlayView.LocationProvider {
     rect.set(getLeft(), getTop(), getRight(), getBottom());
   }
 
-  default void setColorFilter (int colorFilter) { throw new UnsupportedOperationException(); }
-  default void disableColorFilter () { throw new UnsupportedOperationException(); }
+  default void setPorterDuffColorFilter (int colorOrColorId, float alpha, boolean colorIsId) {
+    throw new UnsupportedOperationException();
+  }
+  default void setThemedPorterDuffColorId (@PorterDuffColorId int colorId) {
+    setPorterDuffColorFilter(colorId, 1f, true);
+  }
+  default void setPorterDuffColorFilter (@ColorInt int color) {
+    setPorterDuffColorFilter(color, 1f, false);
+  }
+  default void disablePorterDuffColorFilter () {
+    setPorterDuffColorFilter(ColorId.NONE, 0f, true);
+  }
+
+  default void drawPlaceholderOutline (Canvas c, StickerOutline outline) {
+    if (outline != null && outline.hasPath()) {
+      drawPlaceholderContour(c, outline.getPath());
+    }
+  }
 
   default void drawPlaceholderContour (Canvas c, Path path) {
     drawPlaceholderContour(c, path, 1f);

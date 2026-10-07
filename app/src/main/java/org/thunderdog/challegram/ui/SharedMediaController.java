@@ -19,10 +19,11 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 
+import androidx.annotation.DrawableRes;
 import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.GridLayoutManager;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.attach.GridSpacingItemDecoration;
 import org.thunderdog.challegram.config.Config;
@@ -35,6 +36,7 @@ import org.thunderdog.challegram.mediaview.data.MediaItem;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibSender;
 import org.thunderdog.challegram.telegram.TdlibUi;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.unsorted.Settings;
@@ -49,6 +51,8 @@ import java.util.concurrent.TimeUnit;
 
 import me.vkryl.android.util.ClickHelper;
 import me.vkryl.core.collection.IntList;
+import tgx.td.Td;
+import tgx.td.data.MessageWithProperties;
 
 public class SharedMediaController extends SharedBaseController<MediaItem> implements ClickHelper.Delegate, ForceTouchView.ActionListener {
   public SharedMediaController (Context context, Tdlib tdlib) {
@@ -62,17 +66,6 @@ public class SharedMediaController extends SharedBaseController<MediaItem> imple
     this.filter = filter;
     return this;
   }
-
-  /*@Override
-  public int getIcon () {
-    switch (type) {
-      case TYPE_PHOTOS_AND_VIDEOS:
-        return R.drawable.baseline_image_20;
-      case TYPE_GIFS:
-        return R.drawable.baseline_gif_20;
-    }
-    return 0;
-  }*/
 
   @Override
   public CharSequence getName () {
@@ -89,6 +82,24 @@ public class SharedMediaController extends SharedBaseController<MediaItem> imple
         return Lang.getString(Settings.instance().needSeparateMediaTab() ? R.string.TabVideoMessagesLong : R.string.TabVideoMessages);
     }
     return "";
+  }
+
+  @DrawableRes
+  @Override
+  public int getIcon () {
+    switch (provideSearchFilter().getConstructor()) {
+      case TdApi.SearchMessagesFilterPhotoAndVideo.CONSTRUCTOR:
+        return R.drawable.baseline_image_24;
+      case TdApi.SearchMessagesFilterVideo.CONSTRUCTOR:
+        return R.drawable.baseline_videocam_24;
+      case TdApi.SearchMessagesFilterPhoto.CONSTRUCTOR:
+        return R.drawable.baseline_camera_alt_24;
+      case TdApi.SearchMessagesFilterAnimation.CONSTRUCTOR:
+        return R.drawable.deproko_baseline_gif_24;
+      case TdApi.SearchMessagesFilterVideoNote.CONSTRUCTOR:
+        return R.drawable.deproko_baseline_msg_video_24;
+    }
+    return 0;
   }
 
   @Override
@@ -139,7 +150,7 @@ public class SharedMediaController extends SharedBaseController<MediaItem> imple
     spanCount = calculateSpanCount(Screen.currentWidth(), Screen.currentHeight());
     decoration = new GridSpacingItemDecoration(spanCount, Screen.dp(3f), false, true, true);
     decoration.setNeedDraw(true, ListItem.TYPE_SMALL_MEDIA);
-    decoration.setDrawColorId(R.id.theme_color_filling);
+    decoration.setDrawColorId(ColorId.filling);
     decoration.setSpanSizeLookup(lookup);
     GridLayoutManager manager = new RtlGridLayoutManager(context, spanCount);
     manager.setSpanSizeLookup(lookup);
@@ -228,55 +239,11 @@ public class SharedMediaController extends SharedBaseController<MediaItem> imple
     }
 
     return scrollY;
-/*
-      int i = 0;
-
-    int skipCount = 0;
-    for (SettingItem item : adapter.getItems()) {
-      if (skipCount > 0) {
-        if (item.getViewType() == SettingItem.TYPE_SMALL_MEDIA) {
-          skipCount--;
-          i++;
-          if (i == position) {
-            break;
-          }
-        } else {
-          skipCount = 0;
-        }
-      }
-      switch (item.getViewType()) {
-        case SettingItem.TYPE_SMALL_MEDIA: {
-          int width = recyclerView.getMeasuredWidth();
-          int maxItemWidth = width / spanCount;
-
-          skipCount = spanCount - 1;
-
-          // int spacing = Screen.dp(3f);
-          scrollY += maxItemWidth;*//*
-          for (int column = 0; column < spanCount; column++) {
-            int left = column * spacing / spanCount;
-            int right = spacing - (column + 1) * spacing / spanCount;
-            int spacingWidth = (left + right) / 2 + (left + right) % 2;
-            maxItemWidth = Math.max(maxItemWidth - spacingWidth, maxItemWidth);
-          }
-          scrollY += maxItemWidth + spacing * 2;*//*
-          break;
-        }
-
-      }
-
-      i++;
-      if (i == position) {
-        break;
-      }
-    }
-
-    return scrollY;*/
   }
 
   @Override
-  protected boolean supportsMessageClearing () {
-    return false;
+  protected boolean supportsMessageClearing (MessageWithProperties message) {
+    return message.message.content.getConstructor() == TdApi.MessageVideo.CONSTRUCTOR;
   }
 
   // Data
@@ -293,7 +260,7 @@ public class SharedMediaController extends SharedBaseController<MediaItem> imple
   @Override
   protected MediaItem parseObject (TdApi.Object object) {
     TdApi.Message message = (TdApi.Message) object;
-    if (message.selfDestructTime > 0 && message.selfDestructTime <= 60) {
+    if (Td.isSecret(message.content)) {
       return null;
     }
     MediaItem item = MediaItem.valueOf(context(), tdlib, message);
@@ -450,7 +417,7 @@ public class SharedMediaController extends SharedBaseController<MediaItem> imple
     if (item != null && item.getViewType() == ListItem.TYPE_SMALL_MEDIA) {
       MediaItem mediaItem = (MediaItem) item.getData();
       TdApi.Message message = mediaItem.getMessage();
-      if (message == null || message.content.getConstructor() == TdApi.MessageVideoNote.CONSTRUCTOR) {
+      if (message == null || Td.isVideoNote(message.content)) {
         return super.onLongClick(v);
       }
 
@@ -471,7 +438,9 @@ public class SharedMediaController extends SharedBaseController<MediaItem> imple
       IntList icons = new IntList(3);
       StringList strings = new StringList(3);
 
-      if (message.canBeDeletedOnlyForSelf || message.canBeDeletedForAllUsers) {
+      TdApi.MessageProperties properties = tdlib.getMessagePropertiesSync(message);
+
+      if (properties.canBeDeletedOnlyForSelf || properties.canBeDeletedForAllUsers) {
         ids.append(R.id.btn_messageDelete);
         icons.append(R.drawable.baseline_delete_24);
         strings.append(R.string.Delete);
@@ -483,7 +452,7 @@ public class SharedMediaController extends SharedBaseController<MediaItem> imple
         strings.append(R.string.Select);
       }
 
-      if (message.canBeForwarded) {
+      if (properties.canBeForwarded) {
         ids.append(R.id.btn_messageShare);
         icons.append(R.drawable.baseline_forward_24);
         strings.append(R.string.Share);
@@ -531,26 +500,17 @@ public class SharedMediaController extends SharedBaseController<MediaItem> imple
 
   @Override
   public void onForceTouchAction (ForceTouchView.ForceTouchContext context, int actionId, Object arg) {
-    switch (actionId) {
-      case R.id.btn_messageDelete: {
-        tdlib.ui().showDeleteOptions(this, ((MediaItem) ((ListItem) arg).getData()).getMessage());
-        break;
-      }
-      case R.id.btn_messageSelect: {
-        toggleSelected((ListItem) arg);
-        break;
-      }
-      case R.id.btn_messageShare: {
-        ShareController c = new ShareController(this.context, tdlib);
-        c.setArguments(new ShareController.Args(((MediaItem) ((ListItem) arg).getData()).getMessage()).setAllowCopyLink(true));
-        c.show();
-        break;
-      }
-      case R.id.btn_showInChat: {
-        TdApi.Message message = ((MediaItem) ((ListItem) arg).getData()).getMessage();
-        tdlib.ui().openChat(this, message.chatId, new TdlibUi.ChatOpenParameters().highlightMessage(message).passcodeUnlocked());
-        break;
-      }
+    if (actionId == R.id.btn_messageDelete) {
+      tdlib.ui().showDeleteOptions(this, ((MediaItem) ((ListItem) arg).getData()).getMessage());
+    } else if (actionId == R.id.btn_messageSelect) {
+      toggleSelected((ListItem) arg);
+    } else if (actionId == R.id.btn_messageShare) {
+      ShareController c = new ShareController(this.context, tdlib);
+      c.setArguments(new ShareController.Args(((MediaItem) ((ListItem) arg).getData()).getMessage()).setAllowCopyLink(true));
+      c.show();
+    } else if (actionId == R.id.btn_showInChat) {
+      TdApi.Message message = ((MediaItem) ((ListItem) arg).getData()).getMessage();
+      tdlib.ui().openChat(this, message.chatId, new TdlibUi.ChatOpenParameters().highlightMessage(message).passcodeUnlocked());
     }
   }
 

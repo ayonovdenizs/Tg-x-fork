@@ -18,25 +18,28 @@ import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.media.audiofx.AcousticEchoCanceler;
+import android.media.audiofx.AudioEffect;
 import android.media.audiofx.AutomaticGainControl;
 import android.media.audiofx.NoiseSuppressor;
 import android.os.SystemClock;
+import android.text.TextUtils;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.N;
+import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.core.BaseThread;
-import org.thunderdog.challegram.data.TGRecord;
 import org.thunderdog.challegram.filegen.GenerationInfo;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.tool.UI;
-import org.thunderdog.challegram.voip.AudioRecordJNI;
+import org.thunderdog.challegram.voip.VoIPServerConfig;
 
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.regex.Pattern;
 
 import me.vkryl.core.lambda.CancellableRunnable;
 
@@ -55,8 +58,7 @@ public class Recorder implements Runnable {
 
   private static BaseThread recordThread, encodeThread;
   private Tdlib.Generation currentGeneration;
-  private Tdlib.Generation generationToRemove;
-  private boolean isRecording;
+  private boolean isRecording, isFinished;
   private long samplesCount;
   private short[] recordSamples = new short[1024];
 
@@ -76,10 +78,17 @@ public class Recorder implements Runnable {
   private void setRecording (final boolean isRecording) {
     synchronized (this) {
       this.isRecording = isRecording;
+      if (isRecording) {
+        this.isFinished = false;
+      }
     }
   }
 
   public void record (final Tdlib tdlib, final boolean isSecret, final Listener listener) {
+    record(tdlib, isSecret, listener, false);
+  }
+
+  private void record (final Tdlib tdlib, final boolean isSecret, final Listener listener, boolean isResume) {
     setRecording(true);
     encodeThread.post(() -> recordThread.post(startRunnable = new CancellableRunnable() {
       @Override
@@ -90,27 +99,42 @@ public class Recorder implements Runnable {
             return;
           }
         }
-        startRecording(tdlib, isSecret, listener);
+        startRecording(tdlib, isSecret, listener, isResume);
       }
     }, START_DELAY), 0);
   }
 
-  public void save () {
+  public void resume (final Tdlib tdlib, final boolean isSecret, final Listener listener) {
+    record(tdlib, isSecret, listener, true);
+  }
+
+  public void save (boolean allowResuming) {
     setRecording(false);
-    if (SystemClock.elapsedRealtime() - recordStart < 700l) {
+    if ((allowResuming ? recordTimeCount : 0) + (SystemClock.elapsedRealtime() - recordStart) < 700l) {
       cancel();
       return;
     }
-    stopRecording(false);
+    stopRecording(false, allowResuming);
   }
 
   public void cancel () {
     setRecording(false);
-    stopRecording(true);
+    stopRecording(true, false);
   }
 
-  public void delete (final TGRecord record) {
-    recordThread.post(() -> record.delete(), 0);
+  public void finish (boolean isCanceled) {
+    synchronized (this) {
+      isFinished = true;
+    }
+
+    encodeThread.post(() -> {
+      if (recorder == null) {
+        if (currentGeneration != null) {
+          tdlib.finishGeneration(currentGeneration, isCanceled ? new TdApi.Error(-1, "Canceled") : null);
+          currentGeneration = null;
+        }
+      }
+    }, 0);
   }
 
   // Internal
@@ -120,7 +144,7 @@ public class Recorder implements Runnable {
       tdlib.finishGeneration(currentGeneration, new TdApi.Error());
       currentGeneration = null;
     }
-    encodeThread.post(() -> cleanupRecording(true), 0);
+    encodeThread.post(() -> cleanupRecording(true, false), 0);
     UI.post(() -> listener.onFail());
   }
 
@@ -151,12 +175,13 @@ public class Recorder implements Runnable {
   private ByteBuffer fileBuffer;
   private int bufferSize;
 
-  private void startRecording (Tdlib tdlib, boolean isSecret, Recorder.Listener listener) {
+  private void startRecording (Tdlib tdlib, boolean isSecret, Recorder.Listener listener, boolean isResume) {
     this.tdlib = tdlib;
     this.listener = listener;
 
     final String id = "voice" + GenerationInfo.randomStamp();
-    Tdlib.Generation generation = tdlib.generateFile(id, new TdApi.FileTypeVoiceNote(), isSecret, 1, 5000);
+    Tdlib.Generation generation = isResume ? currentGeneration :
+      tdlib.generateFile(id, new TdApi.FileTypeVoiceNote(), isSecret, 1, 5000);
 
     if (generation == null) {
       dispatchError();
@@ -165,14 +190,22 @@ public class Recorder implements Runnable {
 
     currentGeneration = generation;
 
-    if (generationToRemove != null && new File(generationToRemove.destinationPath).delete()) {
-      generationToRemove = null;
-    }
-
     try {
-      if (N.startRecord(generation.destinationPath) == 0) {
-        dispatchError();
-        return;
+      if (isResume) {
+        if (resumeFile == null || !U.moveFile(resumeFile, new File(generation.destinationPath + ".resume"))) {
+          dispatchError();
+          return;
+        }
+
+        if (N.resumeRecord(generation.destinationPath, 48000) == 0) {
+          dispatchError();
+          return;
+        }
+      } else {
+        if (N.startRecord(generation.destinationPath, 48000) == 0) {
+          dispatchError();
+          return;
+        }
       }
 
       if (bufferSize == 0) {
@@ -208,11 +241,16 @@ public class Recorder implements Runnable {
 
     try {
       tryInitEnhancers();
-      recordStart = SystemClock.elapsedRealtime();
-      recordTimeCount = 0;
+      if (!isResume) {
+        recordStart = SystemClock.elapsedRealtime();
+        recordTimeCount = 0;
+      }
       removeFile = true;
+      allowResuming = false;
       recorder.startRecording();
-      initMaxAmplitude();
+      if (!isResume) {
+        initMaxAmplitude();
+      }
       dispatchRecord();
     } catch (Throwable t) {
       if (recorder != null) {
@@ -225,18 +263,30 @@ public class Recorder implements Runnable {
     }
   }
 
-  // private File fileToRemove;
+  private File resumeFile;
 
-  private void cleanupRecording (boolean removeFile) {
-    N.stopRecord();
+  private void cleanupRecording (boolean removeFile, boolean allowResuming) {
+    N.stopRecord(!removeFile && allowResuming);
     setRecording(false);
     if (currentGeneration != null) {
-      tdlib.finishGeneration(currentGeneration, removeFile ? new TdApi.Error(-1, "Canceled") : null);
-      if (removeFile) {
-        generationToRemove = currentGeneration;
-      } else if (listener != null) {
+      if (!removeFile && allowResuming) {
+        final File resumeSrc = new File(currentGeneration.destinationPath + ".resume");
+        if (resumeFile == null) {
+          resumeFile = new File(resumeSrc.getParent(), "voice.resume");
+        }
+        U.moveFile(resumeSrc, resumeFile);
+      }
+      if (!removeFile && listener != null) {
         listener.onSave(currentGeneration, Math.round((float) recordTimeCount / 1000f), getWaveform());
       }
+      if (removeFile || isFinished || !allowResuming) {
+        tdlib.finishGeneration(currentGeneration, removeFile ? new TdApi.Error(-1, "Canceled") : null);
+        currentGeneration = null;
+      }
+      /* else {
+        long size = new File(currentGeneration.destinationPath).length();
+        tdlib.client().send(new TdApi.SetFileGenerationProgress(currentGeneration.generationId, 0, size), tdlib.silentHandler());
+      }*/
     }
     if (recorder != null) {
       recorder.release();
@@ -270,7 +320,7 @@ public class Recorder implements Runnable {
 
     if (length <= 0) {
       buffers.add(buffer);
-      encodeThread.post(() -> cleanupRecording(removeFile), 0);
+      encodeThread.post(() -> cleanupRecording(removeFile, allowResuming), 0);
       return;
     }
 
@@ -296,6 +346,7 @@ public class Recorder implements Runnable {
       fileBuffer.put(buffer);
       if (fileBuffer.position() == fileBuffer.limit() || flush) {
         if (N.writeFrame(fileBuffer, !flush ? fileBuffer.limit() : buffer.position()) != 0) {
+          // tdlib.client().send(new TdApi.SetFileGenerationProgress(currentGeneration.generationId, 0, new File(currentGeneration.destinationPath).length()), tdlib.silentHandler());
           fileBuffer.rewind();
           recordTimeCount += fileBuffer.limit() / 3 / 2 / 16;
         }
@@ -308,8 +359,9 @@ public class Recorder implements Runnable {
   }
 
   private boolean removeFile;
+  private boolean allowResuming;
 
-  private void stopRecording (final boolean removeFile) {
+  private void stopRecording (final boolean removeFile, final boolean allowResuming) {
     encodeThread.post(() -> {
       final boolean started;
       if (startRunnable != null) {
@@ -322,6 +374,7 @@ public class Recorder implements Runnable {
       recordThread.post(() -> {
         if (started) {
           Recorder.this.removeFile = removeFile;
+          Recorder.this.allowResuming = allowResuming;
           if (recorder == null) {
             return;
           }
@@ -332,7 +385,7 @@ public class Recorder implements Runnable {
             Log.e("Cannot stop recorder", t);
           }
         } else {
-          cleanupRecording(removeFile);
+          cleanupRecording(removeFile, allowResuming);
         }
       }, 0);
     }, 0);
@@ -413,6 +466,46 @@ public class Recorder implements Runnable {
     return lastAmplitude;
   }
 
+  private static Pattern makeNonEmptyRegex(String configKey){
+    String r= VoIPServerConfig.getString(configKey, "");
+    if(TextUtils.isEmpty(r))
+      return null;
+    try{
+      return Pattern.compile(r);
+    }catch(Exception x){
+      Log.e(x);
+      return null;
+    }
+  }
+
+  public static boolean isGoodAudioEffect(AudioEffect effect){
+    Pattern globalImpl=makeNonEmptyRegex("adsp_good_impls"), globalName=makeNonEmptyRegex("adsp_good_names");
+    AudioEffect.Descriptor desc=effect.getDescriptor();
+    Log.d(effect.getClass().getSimpleName()+": implementor="+desc.implementor+", name="+desc.name);
+    if(globalImpl!=null && globalImpl.matcher(desc.implementor).find()){
+      return true;
+    }
+    if(globalName!=null && globalName.matcher(desc.name).find()){
+      return true;
+    }
+    if(effect instanceof AcousticEchoCanceler){
+      Pattern impl=makeNonEmptyRegex("aaec_good_impls"), name=makeNonEmptyRegex("aaec_good_names");
+      if(impl!=null && impl.matcher(desc.implementor).find())
+        return true;
+      if(name!=null && name.matcher(desc.name).find())
+        return true;
+    }
+    if(effect instanceof NoiseSuppressor){
+      Pattern impl=makeNonEmptyRegex("ans_good_impls"), name=makeNonEmptyRegex("ans_good_names");
+      if (impl!=null && impl.matcher(desc.implementor).find()) {
+        return true;
+      }
+
+      return name != null && name.matcher(desc.name).find();
+    }
+    return false;
+  }
+
   private void tryInitEnhancers () {
     try {
       if (AutomaticGainControl.isAvailable()) {
@@ -430,7 +523,7 @@ public class Recorder implements Runnable {
       if (NoiseSuppressor.isAvailable()) {
         ns = NoiseSuppressor.create(recorder.getAudioSessionId());
         if (ns != null)
-          ns.setEnabled(AudioRecordJNI.isGoodAudioEffect(ns));
+          ns.setEnabled(isGoodAudioEffect(ns));
       } else {
         Log.w(Log.TAG_VOICE, "NoiseSuppressor is not available on this device");
       }
@@ -442,7 +535,7 @@ public class Recorder implements Runnable {
       if (AcousticEchoCanceler.isAvailable()) {
         aec = AcousticEchoCanceler.create(recorder.getAudioSessionId());
         if (aec != null)
-          aec.setEnabled(AudioRecordJNI.isGoodAudioEffect(aec));
+          aec.setEnabled(isGoodAudioEffect(aec));
       } else {
         Log.w(Log.TAG_VOICE, "AcousticEchoCanceler is not available on this device");
       }

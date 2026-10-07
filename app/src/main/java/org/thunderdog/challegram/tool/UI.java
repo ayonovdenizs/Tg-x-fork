@@ -20,24 +20,31 @@ import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.content.res.Resources;
+import android.graphics.Color;
 import android.os.Build;
 import android.os.CancellationSignal;
 import android.os.Handler;
+import android.os.LocaleList;
 import android.os.Looper;
 import android.text.format.DateFormat;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
+import android.view.inputmethod.InputMethodSubtype;
 import android.widget.Toast;
 
+import androidx.activity.EdgeToEdge;
+import androidx.annotation.IntDef;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 import androidx.core.content.ContextCompat;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
+import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.config.Device;
 import org.thunderdog.challegram.core.Lang;
@@ -52,36 +59,44 @@ import org.thunderdog.challegram.service.NetworkListenerService;
 import org.thunderdog.challegram.telegram.TdlibDelegate;
 import org.thunderdog.challegram.telegram.TdlibManager;
 import org.thunderdog.challegram.theme.Theme;
-import org.thunderdog.challegram.unsorted.AppState;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.util.Unlockable;
 
 import java.io.File;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Set;
 
 import me.vkryl.android.DeviceUtils;
+import me.vkryl.android.LocaleUtils;
 import me.vkryl.android.SdkVersion;
 import me.vkryl.android.ViewUtils;
 import me.vkryl.android.util.InvalidateDelegate;
 import me.vkryl.android.util.LayoutDelegate;
+import me.vkryl.core.BitwiseUtils;
+import me.vkryl.core.ColorUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.reference.ReferenceList;
 
 public class UI {
-  public static final int STATE_UNKNOWN = -1;
-  public static final int STATE_RESUMED = 0;
-  public static final int STATE_PAUSED = 1;
-  public static final int STATE_DESTROYED = 2;
+  @Retention(RetentionPolicy.SOURCE)
+  @IntDef({
+    State.UNKNOWN, State.RESUMED, State.PAUSED, State.DESTROYED
+  })
+  public @interface State {
+    int UNKNOWN = -1, RESUMED = 0, PAUSED = 1, DESTROYED = 2;
+  }
 
-  private static Context appContext;
   private static WeakReference<BaseActivity> uiContext;
   private static UIHandler _appHandler;
   private static Handler _progressHandler;
-  private static int uiState = STATE_UNKNOWN;
+  private static int uiState = State.UNKNOWN;
 
   private static Boolean isTablet;
 
@@ -99,18 +114,10 @@ public class UI {
     return Looper.myLooper() == Looper.getMainLooper();
   }
 
-  public static void initApp (final Context context) {
-    if (appContext == null && context != null) {
-      synchronized (UI.class) {
-        if (appContext != null)
-          return;
-        appContext = context;
-      }
-      AppState.initApplication();
-      if (TEST_MODE != TEST_MODE_AUTO && DeviceUtils.isTestLabDevice(context)) {
-        TEST_MODE = TEST_MODE_AUTO;
-        TdlibManager.setTestLabConfig();
-      }
+  public static void prepareTestLab () {
+    if (TEST_MODE != TEST_MODE_AUTO && DeviceUtils.isTestLabDevice(AppContext.get())) {
+      TEST_MODE = TEST_MODE_AUTO;
+      TdlibManager.setTestLabConfig();
     }
   }
 
@@ -130,12 +137,7 @@ public class UI {
 
   public static void setContext (BaseActivity context) {
     uiContext = new WeakReference<>(context);
-    if (appContext == null) {
-      initApp(context.getApplicationContext());
-      if (appContext == null) {
-        initApp(context);
-      }
-    }
+    AppContext.init(context.getApplicationContext());
   }
 
   private static boolean startServiceImpl (Context context, Intent intent, boolean isForeground) {
@@ -197,7 +199,7 @@ public class UI {
 
   public static void startNotificationService () {
     if (Config.SERVICES_ENABLED) {
-      startService(new Intent(getAppContext(), NetworkListenerService.class), false, false, null);
+      startService(new Intent(AppContext.get(), NetworkListenerService.class), false, false, null);
     }
   }
 
@@ -205,7 +207,7 @@ public class UI {
     if (isTablet == null) {
       synchronized (UI.class) {
         if (isTablet == null) {
-          isTablet = appContext.getResources().getBoolean(R.bool.isTablet);
+          isTablet = getResources().getBoolean(R.bool.isTablet);
         }
       }
     }
@@ -230,7 +232,7 @@ public class UI {
 
   public static boolean setUiState (BaseActivity activity, int state) {
     WeakReference<BaseActivity> foundKey = null;
-    boolean foreground = state == UI.STATE_RESUMED;
+    boolean foreground = state == State.RESUMED;
     if (resumeStates == null) {
       if (foreground) {
         resumeStates = new HashMap<>();
@@ -259,12 +261,12 @@ public class UI {
         }
       }
     }
-    if (state == UI.STATE_DESTROYED) {
+    if (state == State.DESTROYED) {
       if (foundKey != null) {
         resumeStates.remove(foundKey);
       }
     } else {
-      Boolean value = state == UI.STATE_RESUMED;
+      Boolean value = state == State.RESUMED;
       if (foundKey != null) {
         resumeStates.put(foundKey, value);
       } else {
@@ -274,18 +276,18 @@ public class UI {
         resumeStates.put(new WeakReference<>(activity), value);
       }
     }
-    return setUiState(foreground ? UI.STATE_RESUMED : UI.STATE_PAUSED);
+    return setUiState(foreground ? State.RESUMED : State.PAUSED);
   }
 
   private static boolean setUiState (int state) {
     if (uiState != state) {
-      if ((state == STATE_PAUSED || state == STATE_DESTROYED) && uiState == STATE_RESUMED) {
+      if ((state == State.PAUSED || state == State.DESTROYED) && uiState == State.RESUMED) {
         lastResumeTime = System.currentTimeMillis();
       }
 
       boolean called = false;
-      if (uiState == STATE_RESUMED || state == STATE_RESUMED) {
-        called = TdlibManager.instance().watchDog().onBackgroundStateChanged(state != STATE_RESUMED);
+      if (uiState == State.RESUMED || state == State.RESUMED) {
+        called = TdlibManager.instance().watchDog().onBackgroundStateChanged(state != State.RESUMED);
       }
 
       uiState = state;
@@ -299,14 +301,14 @@ public class UI {
   }
 
   public static boolean wasResumedRecently (long resumeTimeLimitMs) {
-    return uiState == STATE_RESUMED || getResumeDiff() <= resumeTimeLimitMs;
+    return uiState == State.RESUMED || getResumeDiff() <= resumeTimeLimitMs;
   }
   
   public static UIHandler getAppHandler () {
     if (_appHandler == null) {
       synchronized (UIHandler.class) {
         if (_appHandler == null)
-          _appHandler = new UIHandler(appContext);
+          _appHandler = new UIHandler(AppContext.get());
       }
     }
     return _appHandler;
@@ -328,7 +330,7 @@ public class UI {
 
   public static boolean isValid (BaseActivity activity) {
     if (activity != null) {
-      if (activity.getActivityState() == STATE_DESTROYED) {
+      if (activity.getActivityState() == State.DESTROYED) {
         return false;
       }
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
@@ -348,22 +350,16 @@ public class UI {
 
   public static Context getContext () {
     final BaseActivity context = getUiContext();
-    return context != null ? context : appContext;
+    return context != null ? context : AppContext.get();
   }
 
   public static boolean needAmPm () {
-    if (appContext != null) {
-      try {
-        return !DateFormat.is24HourFormat(appContext);
-      } catch (Throwable t) {
-        Log.w(t);
-      }
+    try {
+      return !DateFormat.is24HourFormat(AppContext.get());
+    } catch (Throwable t) {
+      Log.w(t);
     }
     return false;
-  }
-
-  public static Context getAppContext () {
-    return appContext;
   }
 
   public static void startActivity (Intent intent) {
@@ -372,13 +368,15 @@ public class UI {
       context.startActivity(intent);
     } else {
       intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-      getAppContext().startActivity(intent);
+      AppContext.get().startActivity(intent);
     }
   }
 
+  @SuppressWarnings("deprecation")
   public static void startActivityForResult (Intent intent, int reqCode) {
     final BaseActivity context = getUiContext();
     if (context != null) {
+      // TODO: rework to Activity Result API
       context.startActivityForResult(intent, reqCode);
     }
   }
@@ -388,7 +386,7 @@ public class UI {
   }
 
   public static boolean isResumed () {
-    return uiState == STATE_RESUMED;
+    return uiState == State.RESUMED;
   }
 
   public static void forceVibrateError (View view) {
@@ -414,11 +412,7 @@ public class UI {
   }
 
   public static Resources getResources () {
-    return appContext.getResources();
-  }
-
-  public static Locale getConfigurationLocale () {
-    return getAppContext().getResources().getConfiguration().locale;
+    return AppContext.get().getResources();
   }
 
   public static void removePendingRunnable (Runnable runnable) {
@@ -459,14 +453,10 @@ public class UI {
     if (string != null) {
       Log.critical("TDLib Error: %s", Log.generateException(2), string);
       int errorCode = TD.errorCode(obj);
-      if (errorCode != 401 && !(errorCode == 500 && "Client is closed".equals(TD.errorText(obj)))) {
+      if (errorCode != 401 && errorCode != 406 && !(errorCode == 500 && "Client is closed".equals(TD.errorText(obj)))) {
         showToast(string, Toast.LENGTH_SHORT);
       }
     }
-  }
-
-  public static void showWeird (TdApi.Object response, Class<? extends TdApi.Function<?>> function, Class<?>... objects) {
-    Log.unexpectedTdlibResponse(response, function, objects);
   }
 
   public static void showApiLevelWarning (int apiLevel) {
@@ -572,87 +562,109 @@ public class UI {
     return navigation != null ? navigation.getStack().getCurrent() : null;
   }
 
-  @Deprecated
   public static ViewController<?> getCurrentStackItem (Context context) {
     return UI.getContext(context).navigation().getCurrentStackItem();
   }
 
   public static final int NAVIGATION_BAR_COLOR = false && Device.NEED_LIGHT_NAVIGATION_COLOR ? 0xfff0f0f0 : 0xff000000;
 
-  public static void clearActivity (BaseActivity a) {
-    a.requestWindowFeature(Window.FEATURE_NO_TITLE);
-    Window w = a.getWindow();
-    w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
-      w.setBackgroundDrawableResource(R.drawable.transparent);
-    } else {
-      int visibility = 0;
-      if (Config.USE_CUSTOM_NAVIGATION_COLOR) {
-        w.setNavigationBarColor(Theme.backgroundColor());
-        if (!Theme.isDark()) {
-          visibility |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+  @SuppressWarnings("deprecation")
+  public static void setLightSystemBars (Window w, boolean lightNavigationBar, boolean lightStatusBar, int newVisibility, boolean forceNewVisibility) {
+    if (Settings.instance().useEdgeToEdge() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      android.view.WindowInsetsController insetsController = w.getInsetsController();
+      if (insetsController != null) {
+        int flags =
+          android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS |
+          android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
+        int setFlags =
+          BitwiseUtils.optional(android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS, lightNavigationBar) |
+          BitwiseUtils.optional(android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS, lightStatusBar);
+        insetsController.setSystemBarsAppearance(setFlags, flags);
+      }
+    }
+    int visibility = forceNewVisibility ? newVisibility : w.getDecorView().getSystemUiVisibility();
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      visibility = BitwiseUtils.setFlag(visibility, View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR, lightNavigationBar);
+    }
+    visibility = BitwiseUtils.setFlag(visibility, View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR, lightStatusBar);
+    w.getDecorView().setSystemUiVisibility(visibility);
+  }
+
+  @SuppressWarnings("deprecation")
+  public static void setNavigationBarColor (Window w, int color, boolean isGestureNavigationEnabled) {
+    if (Config.USE_CUSTOM_NAVIGATION_COLOR) {
+      if (Settings.instance().useEdgeToEdge()) {
+        if (isGestureNavigationEnabled) {
+          w.setNavigationBarColor(Color.TRANSPARENT);
+        } else {
+          int transparentColor = Color.alpha(color) == 255 ? ColorUtils.alphaColor(.75f, color) : color;
+          w.setNavigationBarColor(transparentColor);
         }
       } else {
-        w.setNavigationBarColor(NAVIGATION_BAR_COLOR);
+        w.setNavigationBarColor(color);
       }
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-        if (Theme.needLightStatusBar()) {
-          visibility |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-        }
-      }
-      if (visibility != 0) {
-        w.getDecorView().setSystemUiVisibility(visibility);
-      }
-      RootDrawable d = new RootDrawable(a);
-      w.setBackgroundDrawable(d);
-      a.setRootDrawable(d);
-      if (Config.USE_FULLSCREEN_NAVIGATION) {
-        w.setStatusBarColor(0); // 0x4c000000
-      } else {
-        w.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        w.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
-        w.setStatusBarColor(HeaderView.defaultStatusColor());
-      }
-      /*if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-        WindowManager.LayoutParams params = w.getAttributes();
-        params.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-        w.setAttributes(params);
-      }*/
     }
   }
 
+  @SuppressWarnings("deprecation")
+  public static void clearActivity (BaseActivity a) {
+    a.requestWindowFeature(Window.FEATURE_NO_TITLE);
+    Window w = a.getWindow();
+    if (Settings.instance().useEdgeToEdge()) {
+      w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN);
+    } else {
+      w.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+    }
+    if (Settings.instance().useEdgeToEdge()) {
+      EdgeToEdge.enable(a);
+      if (Config.EDGE_TO_EDGE_CUSTOMIZABLE) {
+        w.setNavigationBarContrastEnforced(false);
+      }
+    }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+      w.setBackgroundDrawableResource(R.drawable.transparent);
+    } else {
+      if (Config.USE_CUSTOM_NAVIGATION_COLOR) {
+        setNavigationBarColor(w, Theme.backgroundColor(), Screen.isGesturalNavigationEnabled(getResources()));
+      } else {
+        w.setNavigationBarColor(NAVIGATION_BAR_COLOR);
+      }
+      setLightSystemBars(w, !Theme.isDark(), Theme.needLightStatusBar(), 0, false);
+      RootDrawable d = new RootDrawable(a);
+      w.setBackgroundDrawable(d);
+      a.setRootDrawable(d);
+      w.setStatusBarColor(0);
+    }
+  }
+
+  @SuppressWarnings("deprecation")
   public static void setFullscreenIfNeeded (View view) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && Config.USE_FULLSCREEN_NAVIGATION) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       view.setFitsSystemWindows(true);
+      // TODO: rework to WindowInsetsController
       view.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
     }
   }
 
-  public static void setNewStatusBarColor (int color) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && Config.USE_FULLSCREEN_NAVIGATION) {
-      final BaseActivity context = getUiContext();
-      if (context != null && context.getWindow() != null) {
-        context.getWindow().setStatusBarColor(color);
-      }
-    }
-  }
-
   public static void setStatusBarColor (int color) {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && !Config.USE_FULLSCREEN_NAVIGATION) {
+    /*if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && !Config.USE_FULLSCREEN_NAVIGATION) {
       final BaseActivity context = getUiContext();
       if (context != null && context.getWindow() != null) {
         context.getWindow().setStatusBarColor(color);
       }
-    }
+    }*/
   }
 
+  @SuppressWarnings("deprecation")
   public static int getStatusBarColor () {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       final BaseActivity context = getUiContext();
-      return context == null || context.getWindow() == null ? 0 : context.getWindow().getStatusBarColor();
-    } else {
-      return 0;
+      final Window window = context != null ? context.getWindow() : null;
+      if (window != null) {
+        return window.getStatusBarColor();
+      }
     }
+    return 0;
   }
 
   public static Window getWindow () {
@@ -661,15 +673,15 @@ public class UI {
   }
 
   public static int getOrientation () {
-    return appContext.getResources().getConfiguration().orientation;
+    return getResources().getConfiguration().orientation;
   }
 
   public static boolean isPortrait () {
-    return appContext.getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT;
+    return getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT;
   }
 
   public static boolean isLandscape () {
-    return appContext.getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
+    return getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
   }
 
   public static void setPlayProgress (TGAudio audio, float progress, int seconds) {
@@ -758,5 +770,103 @@ public class UI {
     if (context != null) {
       context.getWindow().setSoftInputMode(inputMode);
     }
+  }
+
+  // todo: move to other place?
+
+  @SuppressWarnings("deprecation")
+  private static String toLanguageCode (InputMethodSubtype ims) {
+    if (ims != null) {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+        String languageTag = ims.getLanguageTag();
+        if (!StringUtils.isEmpty(languageTag)) {
+          return languageTag;
+        }
+      }
+      String locale = ims.getLocale();
+      if (!StringUtils.isEmpty(locale)) {
+        Locale l = U.getDisplayLocaleOfSubtypeLocale(locale);
+        if (l != null) {
+          return LocaleUtils.toBcp47Language(l);
+        }
+      }
+    }
+    return null;
+  }
+
+  @Nullable
+  public static String[] getInputLanguages () {
+    final Set<String> inputLanguages = new LinkedHashSet<>();
+    InputMethodManager imm = (InputMethodManager) AppContext.get().getSystemService(Context.INPUT_METHOD_SERVICE);
+    if (imm != null) {
+      String inputLanguageCode = null;
+      try {
+        inputLanguageCode = toLanguageCode(imm.getCurrentInputMethodSubtype());
+      } catch (Throwable ignored) { }
+      if (StringUtils.isEmpty(inputLanguageCode)) {
+        try {
+          inputLanguageCode = toLanguageCode(imm.getLastInputMethodSubtype());
+        } catch (Throwable ignored) { }
+      }
+      if (!StringUtils.isEmpty(inputLanguageCode)) {
+        inputLanguages.add(inputLanguageCode);
+      }
+
+      /*if (Strings.isEmpty(inputLanguageCode)) {
+        try {
+          String id = android.provider.Settings.Secure.getString(
+            UI.getAppContext().getContentResolver(),
+            android.provider.Settings.Secure.DEFAULT_INPUT_METHOD
+          );
+          if (!Strings.isEmpty(id)) {
+            List<InputMethodInfo> list = imm.getInputMethodList();
+            lookup:
+            for (InputMethodInfo info : list) {
+              if (id.equals(info.getId())) {
+                List<InputMethodSubtype> subtypes = imm.getEnabledInputMethodSubtypeList(info, true);
+                for (InputMethodSubtype subtype : subtypes) {
+                  String languageCode = toLanguageCode(subtype);
+                  if (!Strings.isEmpty(languageCode)) {
+                    inputLanguageCode = languageCode;
+                    break lookup;
+                  }
+                }
+              }
+            }
+          }
+        } catch (Throwable ignored) { }
+      }
+      if (Strings.isEmpty(inputLanguageCode) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+        try {
+          LocaleList localeList = ((InputView) callback).getImeHintLocales();
+          if (localeList != null) {
+            for (int i = 0; i < localeList.size(); i++) {
+              inputLanguageCode = U.toBcp47Language(localeList.get(i));
+              if (!Strings.isEmpty(inputLanguageCode))
+                break;
+            }
+          }
+        } catch (Throwable ignored) { }
+      }*/
+    }
+    if (inputLanguages.isEmpty()) {
+      try {
+        Configuration configuration = Resources.getSystem().getConfiguration();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+          LocaleList locales = configuration.getLocales();
+          for (int i = 0; i < locales.size(); i++) {
+            String code = LocaleUtils.toBcp47Language(locales.get(i));
+            if (!StringUtils.isEmpty(code))
+              inputLanguages.add(code);
+          }
+        } else {
+          String code = LocaleUtils.toBcp47Language(Lang.getSystemLocale());
+          if (!StringUtils.isEmpty(code)) {
+            inputLanguages.add(code);
+          }
+        }
+      } catch (Throwable ignored) { }
+    }
+    return inputLanguages.isEmpty() ? null : inputLanguages.toArray(new String[0]);
   }
 }

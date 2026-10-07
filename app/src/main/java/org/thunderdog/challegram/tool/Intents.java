@@ -14,10 +14,10 @@
  */
 package org.thunderdog.challegram.tool;
 
-import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -32,6 +32,7 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.StringRes;
 import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.browser.customtabs.CustomTabsService;
@@ -49,7 +50,9 @@ import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.receiver.LiveLocationReceiver;
 import org.thunderdog.challegram.receiver.TGShareBroadcastReceiver;
 import org.thunderdog.challegram.telegram.TdlibNotificationChannelGroup;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.util.Permissions;
 
 import java.io.File;
@@ -77,7 +80,7 @@ public class Intents {
   public static final int ACTIVITY_RESULT_VIDEO_CAPTURE = 109;
   public static final int ACTIVITY_RESULT_MANAGE_STORAGE = 110;
 
-  private static final String PACKAGE_NAME = BuildConfig.APPLICATION_ID; // UI.getAppContext().getPackageName();
+  private static final String PACKAGE_NAME = BuildConfig.APPLICATION_ID; // AppContext.get().getPackageName();
 
   // "chat_id" -> long
   public static final String ACTION_OPEN_CHAT = PACKAGE_NAME + ".OPEN_CHAT";
@@ -100,6 +103,7 @@ public class Intents {
 
   public static final String ACTION_MESSAGE_REPLY = PACKAGE_NAME + ".ACTION_MESSAGE_REPLY";
   public static final String ACTION_MESSAGE_MUTE = PACKAGE_NAME + ".ACTION_MESSAGE_MUTE";
+  public static final String ACTION_MESSAGE_UNMUTE = PACKAGE_NAME + ".ACTION_MESSAGE_UNMUTE";
   public static final String ACTION_MESSAGE_READ = PACKAGE_NAME + ".ACTION_MESSAGE_READ";
   /// public static final String ACTION_MESSAGE_HIDE = PACKAGE_NAME + ".ACTION_MESSAGE_HIDE";
   public static final String ACTION_MESSAGE_HEARD = PACKAGE_NAME + ".ACTION_MESSAGE_HEARD"; // chat_id, last_message_id
@@ -113,9 +117,9 @@ public class Intents {
   public static final String ACTION_PLAYBACK_PAUSE = PACKAGE_NAME + ".ACTION_PLAY_PAUSE";
   public static final String CHANNEL_ID_PLAYBACK = "playback";
 
-  @TargetApi(Build.VERSION_CODES.O)
+  @RequiresApi(Build.VERSION_CODES.O)
   public static String newSimpleChannel (String channelId, @StringRes int channelName) {
-    NotificationManager m = (NotificationManager) UI.getAppContext().getSystemService(Context.NOTIFICATION_SERVICE);
+    NotificationManager m = (NotificationManager) AppContext.get().getSystemService(Context.NOTIFICATION_SERVICE);
     if (m != null) {
       android.app.NotificationChannel channel = new android.app.NotificationChannel(channelId, Lang.getString(channelName), NotificationManager.IMPORTANCE_LOW);
       channel.enableVibration(false);
@@ -148,6 +152,23 @@ public class Intents {
     return
       openUri("market://details?id=" + packageName) ||
       openUri("https://play.google.com/store/apps/details?id=" + packageName);
+  }
+
+  public static boolean openDate (int unixTime) {
+    Uri uri = TD.toDateUri(unixTime);
+    try {
+      Intent intent = new Intent(Intent.ACTION_VIEW)
+        .setData(uri)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+      final BaseActivity context = UI.getUiContext();
+      if (context != null) {
+        context.startActivity(intent);
+        return true;
+      }
+    } catch (Throwable t) {
+      Log.w("Cannot open uri: %s", t, uri);
+    }
+    return false;
   }
 
   public static boolean openSelfGooglePlay () {
@@ -183,7 +204,7 @@ public class Intents {
     try {
       intent.setData(Uri.parse("https://www.example.com/"));
 
-      PackageManager packageManager = UI.getAppContext().getPackageManager();
+      PackageManager packageManager = AppContext.get().getPackageManager();
       List<ResolveInfo> activities = packageManager.queryIntentActivities(intent, 0); // PackageManager.MATCH_ALL
       List<Intent> targetIntents = new ArrayList<>();
       String[] blackList = {BuildConfig.APPLICATION_ID, "org.telegram.messenger"};
@@ -259,23 +280,29 @@ public class Intents {
     }
   }
 
-  public static void openLink (String url) {
-    if (!StringUtils.isEmpty(url)) {
-      Uri uri = Strings.wrapHttps(url);
-      if (uri != null && !openLink(uri)) {
-        String scheme = uri.getScheme();
-        if (Strings.isValidLink(scheme) && scheme.contains("/")) {
-          openLink("http://" + uri);
-        }
-      }
+  public static boolean openLink (String url) {
+    if (StringUtils.isEmpty(url)) {
+      return false;
     }
+    Uri uri = Strings.wrapHttps(url);
+    if (uri == null) {
+      return false;
+    }
+    if (openLink(uri)) {
+      return true;
+    }
+    String scheme = uri.getScheme();
+    if (Strings.isValidLink(scheme) && scheme.contains("/")) {
+      return openLink("http://" + uri);
+    }
+    return false;
   }
 
   private static boolean openLink (Uri uri) {
     if (uri != null) {
       try {
         BaseActivity context = UI.getUiContext();
-        if (UI.getUiState() == UI.STATE_RESUMED && openInAppBrowser(context, uri, false)) {
+        if (UI.getUiState() == UI.State.RESUMED && openInAppBrowser(context, uri, false)) {
           return true;
         }
 
@@ -299,7 +326,7 @@ public class Intents {
   private static void revokeFileReadPermission (Uri uri) {
     if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.KITKAT) {
       try {
-        UI.getAppContext().revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        AppContext.get().revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
       } catch (Throwable e) {
         Log.e("Cannot revokeUriPermission", e);
       }
@@ -361,7 +388,7 @@ public class Intents {
         intent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
       }
 
-      PackageManager pm = UI.getAppContext().getPackageManager();
+      PackageManager pm = AppContext.get().getPackageManager();
 
       // Workaround for Android bug.
       // grantUriPermission also needed for KITKAT,
@@ -370,7 +397,7 @@ public class Intents {
         List<ResolveInfo> resInfoList = pm.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY);
         for (ResolveInfo resolveInfo : resInfoList) {
           String packageName = resolveInfo.activityInfo.packageName;
-          UI.getAppContext().grantUriPermission(packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+          AppContext.get().grantUriPermission(packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
         }
         synchronized (Intents.class) {
           if (openedFiles == null) {
@@ -481,7 +508,7 @@ public class Intents {
       intent = new Intent();
       intent.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
       intent.addCategory(Intent.CATEGORY_DEFAULT);
-      intent.setData(Uri.parse("package:" + UI.getAppContext().getPackageName()));
+      intent.setData(Uri.parse("package:" + AppContext.get().getPackageName()));
       intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
       intent.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY);
       intent.addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
@@ -650,7 +677,7 @@ public class Intents {
     if (allowStopped) {
       intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
     }
-    // intent.setClass(UI.getAppContext(), MainActivity.class);
+    // intent.setClass(AppContext.get(), MainActivity.class);
     return intent;
   }
 
@@ -694,6 +721,14 @@ public class Intents {
     return intent;
   }
 
+  public static String getIntentClassName (Intent intent) {
+    ComponentName componentName = intent.getComponent();
+    if (componentName != null) {
+      return componentName.getClassName();
+    }
+    return "";
+  }
+
   public static Intent valueOfMain (int accountId) {
     Intent intent = new Intent(UI.getContext(), MainActivity.class);
     secureIntent(intent, true);
@@ -708,14 +743,14 @@ public class Intents {
       return false;
     }
     try {
-      String scheme = uri.getScheme() != null ? uri.getScheme().toLowerCase() : "";
+      String scheme = uri.getScheme() != null ? uri.getScheme().toLowerCase(Locale.ROOT) : "";
       if (Config.IN_APP_BROWSER_AVAILABLE && (ignoreSetting || org.thunderdog.challegram.unsorted.Settings.instance().useInAppBrowser()) && !scheme.equals("tel")) {
         Intent share = new Intent(UI.getContext(), TGShareBroadcastReceiver.class);
         share.setAction(Intent.ACTION_SEND);
 
         CustomTabsIntent.Builder builder = new CustomTabsIntent.Builder();
-        builder.setToolbarColor(Theme.getColor(R.id.theme_color_headerBackground));
-        builder.setSecondaryToolbarColor(Theme.getColor(R.id.theme_color_headerText));
+        builder.setToolbarColor(Theme.getColor(ColorId.headerBackground));
+        builder.setSecondaryToolbarColor(Theme.getColor(ColorId.headerText));
         builder.setShowTitle(true);
         builder.setActionButton(Drawables.getBitmap(R.drawable.baseline_share_24), Lang.getString(R.string.Share), PendingIntent.getBroadcast(UI.getContext(), 0, share, Intents.mutabilityFlags(true)), true);
         CustomTabsIntent intent = builder.build();

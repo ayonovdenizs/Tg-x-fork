@@ -88,9 +88,17 @@ public abstract class CameraApi {
       mPreviewWidth = viewWidth;
       mPreviewHeight = viewHeight;
       onPreviewSizeChanged(viewWidth, viewHeight);
+      if (isCameraActive && !isCameraBusy()) {
+        setCameraActive(false);
+        setCameraActive(true);
+      }
     }
   }
   protected abstract void onPreviewSizeChanged (int newWidth, int newHeight);
+
+  private boolean isCameraBusy () {
+    return isVideoCapturing || (roundRecorder != null && roundRecorder.isCapturing());
+  }
 
   /**
    * Open camera preview
@@ -138,10 +146,15 @@ public abstract class CameraApi {
       }
       return;
     }
-    if (isCameraActive && cameraOpened) {
-      if (roundRecorder != null && !roundRecorder.canSwitchToNewCamera()) {
-        return;
+
+    if (roundRecorder != null) {
+      if (roundRecorder.canSwitchToNewCamera()) {
+        onNextCameraSourceRequested();
       }
+      return;
+    }
+
+    if (isCameraActive && cameraOpened) {
       onNextCameraSourceRequested();
     }
   }
@@ -245,15 +258,18 @@ public abstract class CameraApi {
         } else if (mFeatures.has(CameraFeatures.FEATURE_FACING_FRONT)) {
           return CameraFeatures.FEATURE_FLASH_FAKE;
         }
+        break;
       case CameraFeatures.FEATURE_FLASH_ON:
       case CameraFeatures.FEATURE_FLASH_FAKE:
         if (Config.CAMERA_AUTO_FLASH_ENABLED && mFeatures.has(CameraFeatures.FEATURE_FLASH_AUTO)) {
           return CameraFeatures.FEATURE_FLASH_AUTO;
         }
+        break;
       case CameraFeatures.FEATURE_FLASH_AUTO:
         if (mFeatures.canFlash(true)) {
           return CameraFeatures.FEATURE_FLASH_OFF;
         }
+        break;
     }
     return mFlashMode;
   }

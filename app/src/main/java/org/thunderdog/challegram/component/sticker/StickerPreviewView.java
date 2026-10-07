@@ -14,12 +14,12 @@
  */
 package org.thunderdog.challegram.component.sticker;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.text.TextPaint;
 import android.util.TypedValue;
@@ -32,13 +32,17 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import androidx.annotation.IdRes;
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.TGReaction;
+import org.thunderdog.challegram.emoji.Emoji;
 import org.thunderdog.challegram.loader.ImageReceiver;
 import org.thunderdog.challegram.loader.Receiver;
 import org.thunderdog.challegram.loader.gif.GifActor;
@@ -48,13 +52,17 @@ import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.support.RippleSupport;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.ColorState;
+import org.thunderdog.challegram.theme.PorterDuffColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeChangeListener;
 import org.thunderdog.challegram.theme.ThemeListenerList;
 import org.thunderdog.challegram.theme.ThemeManager;
+import org.thunderdog.challegram.tool.Drawables;
 import org.thunderdog.challegram.tool.Fonts;
 import org.thunderdog.challegram.tool.Paints;
+import org.thunderdog.challegram.tool.PorterDuffPaint;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.tool.Views;
@@ -62,12 +70,14 @@ import org.thunderdog.challegram.util.EmojiString;
 import org.thunderdog.challegram.widget.NoScrollTextView;
 import org.thunderdog.challegram.widget.PopupLayout;
 
+import java.util.ArrayList;
+
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.animator.FactorAnimator;
 import me.vkryl.android.widget.FrameLayoutFix;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.lambda.Destroyable;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
 public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator.Target, PopupLayout.AnimatedPopupProvider, BackListener, Destroyable, ThemeChangeListener {
   private static final OvershootInterpolator OVERSHOOT_INTERPOLATOR = new OvershootInterpolator(1f);
@@ -75,14 +85,15 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
   private static final int REVEAL_ANIMATOR = 0;
   private static final int REPLACE_ANIMATOR = 1;
 
-  private static final long REVEAL_DURATION = 268l;
-  private static final long HIDE_DURATION = 292l;
+  private static final long REVEAL_DURATION = 268L;
+  private static final long HIDE_DURATION = 292L;
 
   private final FactorAnimator animator;
 
   private final ImageReceiver imageReceiver;
   private final GifReceiver gifReceiver;
   private final ImageReceiver preview;
+  private Drawable defaultPremiumStarDrawable;
 
   private final ImageReceiver effectImageReceiver;
   private final GifReceiver effectGifReceiver;
@@ -102,7 +113,7 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
     this.stickerView = new StickerView(context);
     this.stickerView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     addView(stickerView);
-    ViewSupport.setThemedBackground(this, R.id.theme_color_previewBackground);
+    ViewSupport.setThemedBackground(this, ColorId.previewBackground);
     themeListenerList.addThemeInvalidateListener(this);
     setAlpha(0f);
     stickerView.setLayerType(LAYER_TYPE_HARDWARE, Views.getLayerPaint());
@@ -127,15 +138,27 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
     themeListenerList.onThemeColorsChanged(areTemp);
   }
 
-  private StickerSmallView controllerView;
+  private @Nullable PreviewCallback previewCallback;
+  private @Nullable View holderView;
+  private @Nullable StickerSmallView controllerView;
+  private @PorterDuffColorId int repaintingColorId = ColorId.iconActive;
+
+  public void setPreviewCallback (View holderView, PreviewCallback previewCallback) {
+    this.previewCallback = previewCallback;
+    this.holderView = holderView;
+    this.repaintingColorId =previewCallback != null ? previewCallback.getThemedColorId() : ColorId.iconActive;
+  }
 
   public void setControllerView (StickerSmallView stickerView) {
     this.controllerView = stickerView;
+    this.setPreviewCallback(stickerView, stickerView);
   }
 
   @Override
-  public boolean onBackPressed (boolean fromTop) {
-    closePreviewIfNeeded();
+  public boolean onBackPressed (boolean fromTop, boolean commit) {
+    if (commit) {
+      closePreviewIfNeeded();
+    }
     return true;
   }
 
@@ -321,6 +344,11 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
     preview.requestFile(sticker.getImage());
     imageReceiver.requestFile(sticker.getFullImage());
     gifReceiver.requestFile(sticker.getFullAnimation());
+    if (sticker.isDefaultPremiumStar()) {
+      defaultPremiumStarDrawable = Drawables.get(R.drawable.baseline_premium_star_28);
+    } else {
+      defaultPremiumStarDrawable = null;
+    }
 
     if (currentEffectSticker != null && currentEffectSticker.isAnimated()) {
       GifActor.addFreezeReason(currentEffectSticker.getFullAnimation(), false);
@@ -429,7 +457,7 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
       menu.setElevation(Screen.dp(1f));
       menu.setTranslationZ(Screen.dp(1f));
       menu.setOutlineProvider(new android.view.ViewOutlineProvider() {
-        @TargetApi(value = 21)
+        @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
         @Override
         public void getOutline (View view, android.graphics.Outline outline) {
           outline.setRoundRect(view.getPaddingLeft(), view.getPaddingTop(), view.getMeasuredWidth() - view.getPaddingRight(), view.getMeasuredHeight() - view.getPaddingBottom(), Screen.dp(2f));
@@ -445,65 +473,112 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
     FrameLayoutFix.LayoutParams params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, Screen.dp(48f) + menu.getPaddingTop() + menu.getPaddingBottom(), Gravity.CENTER_HORIZONTAL);
     params.topMargin = getStickerCenterY() + stickerHeight / 2 + Screen.dp(32f);
     menu.setLayoutParams(params);
-    View.OnClickListener onClickListener = v -> {
-      switch (v.getId()) {
-        case R.id.btn_favorite: {
-          final int stickerId = sticker.getId();
-          if (tdlib.isStickerFavorite(stickerId)) {
-            tdlib.client().send(new TdApi.RemoveFavoriteSticker(new TdApi.InputFileId(stickerId)), tdlib.okHandler());
-          } else {
-            tdlib.client().send(new TdApi.AddFavoriteSticker(new TdApi.InputFileId(stickerId)), tdlib.okHandler());
-          }
-          closePreviewIfNeeded();
-          break;
+
+    StickerPreviewView.MenuStickerPreviewCallback menuStickerPreviewCallback = previewCallback != null ?
+      previewCallback.getMenuStickerPreviewCallback() : null;
+
+    if (menuStickerPreviewCallback != null && sticker != null) {
+      ArrayList<MenuItem> menuItems = new ArrayList<>(5);
+      menuStickerPreviewCallback.buildMenuStickerPreview(menuItems, sticker);
+
+      View.OnClickListener onClickListener = view -> menuStickerPreviewCallback.onMenuStickerPreviewClick(view, findRoot(), sticker, controllerView);
+      View.OnLongClickListener onLongClickListener = view -> menuStickerPreviewCallback.onMenuStickerPreviewLongClick(view, findRoot(), sticker, controllerView);
+
+      for (int a = 0; a < menuItems.size(); a++) {
+        final MenuItem item = menuItems.get(a);
+        final View view;
+
+        if (item.type == MenuItem.MENU_ITEM_TEXT) {
+          view = makeMenuButtonText(getContext(), item, onClickListener, onLongClickListener, a == 0, a == menuItems.size() - 1, themeListenerList);
+        } else {
+          throw new IllegalArgumentException();
         }
-        case R.id.btn_send: {
-          if (controllerView != null && controllerView.onSendSticker(v, sticker, Td.newSendOptions())) {
+
+        if (Lang.rtl()) {
+          menu.addView(view, 0);
+        } else {
+          menu.addView(view);
+        }
+      }
+
+      menu.setAlpha(0f);
+      addView(menu);
+
+      applyMaximumMenuItemsWidth();
+
+      setMenuVisible(true, true);
+      return;
+    }
+
+
+    // Deprecated ???
+
+    View.OnClickListener onClickListener = v -> {
+      final int viewId = v.getId();
+      if (viewId == R.id.btn_favorite) {
+        final int stickerId = sticker.getId();
+        if (tdlib.isStickerFavorite(stickerId)) {
+          tdlib.send(new TdApi.RemoveFavoriteSticker(new TdApi.InputFileId(stickerId)), tdlib.typedOkHandler());
+        } else {
+          tdlib.send(new TdApi.AddFavoriteSticker(new TdApi.InputFileId(stickerId)), tdlib.typedOkHandler());
+        }
+        closePreviewIfNeeded();
+      } else if (viewId == R.id.btn_send) {
+        if (controllerView != null && controllerView.onSendSticker(v, sticker, Td.newSendOptions())) {
+          closePreviewIfNeeded();
+        }
+      } else if (viewId == R.id.btn_view) {
+        if (controllerView != null) {
+          ViewController<?> context = findRoot();
+          if (context != null) {
+            tdlib.ui().showStickerSet(context, sticker.getStickerSetId(), null);
             closePreviewIfNeeded();
           }
-          break;
         }
-        case R.id.btn_view: {
-          if (controllerView != null) {
-            ViewController<?> context = findRoot();
-            if (context != null) {
-              tdlib.ui().showStickerSet(context, sticker.getStickerSetId(), null);
-              closePreviewIfNeeded();
-            }
-          }
-          break;
+      } else if (viewId == R.id.btn_removeRecent) {
+        final int stickerId = sticker.getId();
+        if (sticker.isCustomEmoji()) {
+          Emoji.instance().removeRecentCustomEmoji(sticker.getCustomEmojiId());
+        } else {
+          tdlib.send(new TdApi.RemoveRecentSticker(false, new TdApi.InputFileId(stickerId)), tdlib.typedOkHandler());
         }
-        case R.id.btn_removeRecent: {
-          final int stickerId = sticker.getId();
-          tdlib.client().send(new TdApi.RemoveRecentSticker(false, new TdApi.InputFileId(stickerId)), tdlib.okHandler());
-          closePreviewIfNeeded();
-          break;
-        }
-        default: {
-          closePreviewIfNeeded();
-          break;
-        }
+        closePreviewIfNeeded();
+      } else {
+        closePreviewIfNeeded();
       }
     };
     themeListenerList.addThemeInvalidateListener(menu);
+    makeMenuForSticker(sticker, onClickListener);
+    menu.setAlpha(0f);
+    addView(menu);
 
+    applyMaximumMenuItemsWidth();
+
+    setMenuVisible(true, true);
+  }
+
+  @Deprecated
+  private void makeMenuForSticker (final TGStickerObj sticker, final View.OnClickListener onClickListener) {
     boolean isFavorite = tdlib.isStickerFavorite(sticker.getId());
+    boolean isEmoji = sticker.isCustomEmoji();
 
-    ImageView imageView = new ImageView(getContext());
-    imageView.setId(R.id.btn_favorite);
-    imageView.setScaleType(ImageView.ScaleType.CENTER);
-    imageView.setOnClickListener(onClickListener);
-    imageView.setImageResource(isFavorite ? R.drawable.baseline_star_24 : R.drawable.baseline_star_border_24);
-    imageView.setColorFilter(Theme.getColor(R.id.theme_color_textNeutral));
-    themeListenerList.addThemeFilterListener(imageView, R.id.theme_color_textNeutral);
-    imageView.setLayoutParams(new ViewGroup.LayoutParams(Screen.dp(48f), ViewGroup.LayoutParams.MATCH_PARENT));
-    imageView.setPadding(Lang.rtl() ? 0 : Screen.dp(8f), 0, Lang.rtl() ? Screen.dp(8f) : 0, 0);
-    RippleSupport.setTransparentBlackSelector(imageView);
-    Views.setClickable(imageView);
-    if (Lang.rtl())
-      menu.addView(imageView, 0);
-    else
-      menu.addView(imageView);
+    if (!isEmoji) {
+      ImageView imageView = new ImageView(getContext());
+      imageView.setId(R.id.btn_favorite);
+      imageView.setScaleType(ImageView.ScaleType.CENTER);
+      imageView.setOnClickListener(onClickListener);
+      imageView.setImageResource(isFavorite ? R.drawable.baseline_star_24 : R.drawable.baseline_star_border_24);
+      imageView.setColorFilter(Theme.getColor(ColorId.textNeutral));
+      themeListenerList.addThemeFilterListener(imageView, ColorId.textNeutral);
+      imageView.setLayoutParams(new ViewGroup.LayoutParams(Screen.dp(48f), ViewGroup.LayoutParams.MATCH_PARENT));
+      imageView.setPadding(Lang.rtl() ? 0 : Screen.dp(8f), 0, Lang.rtl() ? Screen.dp(8f) : 0, 0);
+      RippleSupport.setTransparentBlackSelector(imageView);
+      Views.setClickable(imageView);
+      if (Lang.rtl())
+        menu.addView(imageView, 0);
+      else
+        menu.addView(imageView);
+    }
 
     boolean needViewPackButton = sticker.needViewPackButton();
 
@@ -511,9 +586,9 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
     sendView.setId(R.id.btn_send);
     sendView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15f);
     sendView.setTypeface(Fonts.getRobotoMedium());
-    sendView.setTextColor(Theme.getColor(R.id.theme_color_textNeutral));
-    themeListenerList.addThemeColorListener(sendView, R.id.theme_color_textNeutral);
-    Views.setMediumText(sendView, Lang.getString(R.string.SendSticker).toUpperCase());
+    sendView.setTextColor(Theme.getColor(ColorId.textNeutral));
+    themeListenerList.addThemeColorListener(sendView, ColorId.textNeutral);
+    Views.setMediumText(sendView, Lang.uppercase(Lang.getString(isEmoji ? R.string.PasteCustomEmoji : R.string.SendSticker)));
     sendView.setOnClickListener(onClickListener);
     RippleSupport.setTransparentBlackSelector(sendView);
     int paddingLeft = Screen.dp(12f);
@@ -541,9 +616,9 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
       viewView.setId(R.id.btn_view);
       viewView.setTypeface(Fonts.getRobotoMedium());
       viewView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15f);
-      viewView.setTextColor(Theme.getColor(R.id.theme_color_textNeutral));
-      Views.setMediumText(viewView, Lang.getString(R.string.ViewPackPreview).toUpperCase());
-      themeListenerList.addThemeColorListener(viewView, R.id.theme_color_textNeutral);
+      viewView.setTextColor(Theme.getColor(ColorId.textNeutral));
+      Views.setMediumText(viewView, Lang.uppercase(Lang.getString(R.string.ViewPackPreview)));
+      themeListenerList.addThemeColorListener(viewView, ColorId.textNeutral);
       viewView.setOnClickListener(onClickListener);
       RippleSupport.setTransparentBlackSelector(viewView);
       viewView.setPadding(Screen.dp(Lang.rtl() ? 16f : 12f), 0, Screen.dp(Lang.rtl() ? 12f : 16f), 0);
@@ -561,8 +636,8 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
       removeRecentView.setScaleType(ImageView.ScaleType.CENTER);
       removeRecentView.setOnClickListener(onClickListener);
       removeRecentView.setImageResource(R.drawable.baseline_auto_delete_24);
-      removeRecentView.setColorFilter(Theme.getColor(R.id.theme_color_textNegative));
-      themeListenerList.addThemeFilterListener(removeRecentView, R.id.theme_color_textNegative);
+      removeRecentView.setColorFilter(Theme.getColor(ColorId.textNegative));
+      themeListenerList.addThemeFilterListener(removeRecentView, ColorId.textNegative);
       removeRecentView.setLayoutParams(new ViewGroup.LayoutParams(Screen.dp(48f), ViewGroup.LayoutParams.MATCH_PARENT));
       removeRecentView.setPadding(Lang.rtl() ? Screen.dp(8f) : 0, 0, Lang.rtl() ? 0 : Screen.dp(8f), 0);
       RippleSupport.setTransparentBlackSelector(removeRecentView);
@@ -572,17 +647,10 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
       else
         menu.addView(removeRecentView);
     }
-
-    menu.setAlpha(0f);
-    addView(menu);
-
-    applyMaximumMenuItemsWidth();
-
-    setMenuVisible(true, true);
   }
 
   private ViewController<?> findRoot () {
-    ViewController<?> context = ViewController.findRoot(controllerView);
+    ViewController<?> context = ViewController.findRoot(holderView);
     if (context == null) {
       context = UI.getCurrentStackItem(getContext());
     }
@@ -700,6 +768,7 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
 
     @Override
     protected void onDraw (Canvas c) {
+      final boolean needThemedColorFilter = currentSticker != null && currentSticker.needThemedColorFilter();
       final boolean savedAppear = appearFactor != 1f;
       if (savedAppear) {
         final float fromScale = (float) fromWidth / (float) stickerWidth;
@@ -715,6 +784,14 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
 
       boolean animated = currentSticker != null && currentSticker.isAnimated();
       Receiver receiver = animated ? gifReceiver : imageReceiver;
+
+      if (needThemedColorFilter) {
+        preview.setThemedPorterDuffColorId(repaintingColorId);
+        receiver.setThemedPorterDuffColorId(repaintingColorId);
+      } else {
+        preview.disablePorterDuffColorFilter();
+        receiver.disablePorterDuffColorFilter();
+      }
 
       if (emojiString != null) {
         int textX = receiver.centerX() - emojiString.getWidth() / 2;
@@ -736,7 +813,13 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
         c.save();
         c.scale(scale, scale, receiver.centerX(), receiver.centerY());
       }
-      if (animated) {
+      if (defaultPremiumStarDrawable != null) {
+        float s = ((float) receiver.getWidth()) / Screen.dp(30);
+        c.save();
+        c.scale(s, s, receiver.centerX(), receiver.centerY());
+        Drawables.drawCentered(c, defaultPremiumStarDrawable, receiver.centerX(), receiver.centerY(), PorterDuffPaint.get(repaintingColorId));
+        c.restore();
+      } else if (animated) {
         if (receiver.needPlaceholder()) {
           if (preview.needPlaceholder()) {
             preview.drawPlaceholderContour(c, contour);
@@ -760,11 +843,13 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
       }
 
       if (currentEffectSticker != null) {
-        if (effectGifReceiver.needPlaceholder()) {
-          effectPreview.draw(c);
+        Receiver target = effectGifReceiver.needPlaceholder() ? effectPreview : effectGifReceiver;
+        if (needThemedColorFilter) {
+          target.setThemedPorterDuffColorId(repaintingColorId);
         } else {
-          effectGifReceiver.draw(c);
+          target.disablePorterDuffColorFilter();
         }
+        target.draw(c);
       }
 
       if (savedReplace) {
@@ -778,8 +863,8 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
   }
 
   private void closePreviewIfNeeded () {
-    if (controllerView != null) {
-      controllerView.closePreviewIfNeeded();
+    if (previewCallback != null) {
+      previewCallback.closePreviewIfNeeded();
     }
   }
 
@@ -856,5 +941,59 @@ public class StickerPreviewView extends FrameLayoutFix implements FactorAnimator
       closePreviewIfNeeded();
     }
     return true;
+  }
+
+  public interface MenuStickerPreviewCallback {
+    void buildMenuStickerPreview (ArrayList<MenuItem> menuItems, @NonNull TGStickerObj sticker);
+    void onMenuStickerPreviewClick (View v, ViewController<?> context, @NonNull TGStickerObj sticker, @Nullable StickerSmallView stickerSmallView);
+    default boolean onMenuStickerPreviewLongClick (View v, ViewController<?> context, @NonNull TGStickerObj sticker, @Nullable StickerSmallView stickerSmallView) { return false; }
+  }
+
+  public interface PreviewCallback {
+    StickerPreviewView.MenuStickerPreviewCallback getMenuStickerPreviewCallback ();
+    @PorterDuffColorId int getThemedColorId ();
+    void closePreviewIfNeeded ();
+  }
+
+  public static class MenuItem {
+    public final static int MENU_ITEM_TEXT = 0;
+    public final static int MENU_ITEM_IMAGE = 1;  // todo
+
+    public final int type;
+    public final String title;
+    public final @IdRes int viewId;
+    public final @ColorId int colorId;
+
+    public MenuItem (int type, String title, @IdRes int viewId, @ColorId int colorId) {
+      this.type = type;
+      this.title = title;
+      this.viewId = viewId;
+      this.colorId = colorId;
+    }
+  }
+
+  private static TextView makeMenuButtonText (Context context, MenuItem item,
+          View.OnClickListener onClickListener, View.OnLongClickListener onLongClickListener,
+          boolean isFirst, boolean isLast, ThemeListenerList themeListenerList) {
+
+    TextView buttonView = new NoScrollTextView(context);
+    buttonView.setId(item.viewId);
+    buttonView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15f);
+    buttonView.setTypeface(Fonts.getRobotoMedium());
+    buttonView.setTextColor(Theme.getColor(item.colorId));
+    buttonView.setGravity(Gravity.CENTER);
+    buttonView.setOnClickListener(onClickListener);
+    buttonView.setOnLongClickListener(onLongClickListener);
+    buttonView.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+    int paddingLeft = Screen.dp(isFirst ? 16f: 12f);
+    int paddingRight = Screen.dp(isLast ? 16f : 12f);
+    buttonView.setPadding(Lang.rtl() ? paddingRight : paddingLeft, 0, Lang.rtl() ? paddingLeft : paddingRight, 0);
+
+    themeListenerList.addThemeColorListener(buttonView, item.colorId);
+    Views.setMediumText(buttonView, item.title);
+    RippleSupport.setTransparentBlackSelector(buttonView);
+
+    return buttonView;
   }
 }

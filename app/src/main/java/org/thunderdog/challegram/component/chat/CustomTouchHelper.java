@@ -43,6 +43,8 @@ import androidx.recyclerview.widget.RecyclerView.OnItemTouchListener;
 import androidx.recyclerview.widget.RecyclerView.ViewHolder;
 
 import org.thunderdog.challegram.Log;
+import org.thunderdog.challegram.tool.Views;
+import org.thunderdog.challegram.widget.RootFrameLayout;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -426,11 +428,15 @@ public class CustomTouchHelper extends RecyclerView.ItemDecoration
     mCallback = callback;
   }
 
-  private static boolean hitTest(View child, float x, float y, float left, float top) {
-    return x >= left &&
+  private static boolean hitTest(View child, MotionEvent event, float x, float y, float left, float top) {
+    if (x >= left &&
       x <= left + child.getWidth() &&
       y >= top &&
-      y <= top + child.getHeight();
+      y <= top + child.getHeight()) {
+      RootFrameLayout rootView = Views.findAncestor(child, RootFrameLayout.class, true);
+      return (rootView == null || !rootView.isWithinSystemGesturesArea(child, event));
+    }
+    return false;
   }
 
   /**
@@ -662,7 +668,7 @@ public class CustomTouchHelper extends RecyclerView.ItemDecoration
       public void run() {
         if (mRecyclerView != null && mRecyclerView.isAttachedToWindow() &&
           !anim.mOverridden &&
-          anim.mViewHolder.getAdapterPosition() != RecyclerView.NO_POSITION) {
+          anim.mViewHolder.getBindingAdapterPosition() != RecyclerView.NO_POSITION) {
           final RecyclerView.ItemAnimator animator = mRecyclerView.getItemAnimator();
           // if animator is running or we have other active recover animations, we try
           // not to call onSwiped because DefaultItemAnimator is not good at merging
@@ -833,8 +839,8 @@ public class CustomTouchHelper extends RecyclerView.ItemDecoration
       mDistances.clear();
       return;
     }
-    final int toPosition = target.getAdapterPosition();
-    final int fromPosition = viewHolder.getAdapterPosition();
+    final int toPosition = target.getBindingAdapterPosition();
+    final int fromPosition = viewHolder.getBindingAdapterPosition();
     if (mCallback.onMove(mRecyclerView, viewHolder, target)) {
       // keep target visible
       mCallback.onMoved(mRecyclerView, viewHolder, fromPosition,
@@ -995,14 +1001,14 @@ public class CustomTouchHelper extends RecyclerView.ItemDecoration
     final float y = event.getY();
     if (mSelected != null) {
       final View selectedView = mSelected.itemView;
-      if (hitTest(selectedView, x, y, mSelectedStartX + mDx, mSelectedStartY + mDy)) {
+      if (hitTest(selectedView, event, x, y, mSelectedStartX + mDx, mSelectedStartY + mDy)) {
         return selectedView;
       }
     }
     for (int i = mRecoverAnimations.size() - 1; i >= 0; i--) {
       final RecoverAnimation anim = mRecoverAnimations.get(i);
       final View view = anim.mViewHolder.itemView;
-      if (hitTest(view, x, y, anim.mX, anim.mY)) {
+      if (hitTest(view, event, x, y, anim.mX, anim.mY)) {
         return view;
       }
     }
@@ -1575,7 +1581,7 @@ public class CustomTouchHelper extends RecyclerView.ItemDecoration
      * <p>
      * If this method returns true, ItemTouchHelper assumes {@code viewHolder} has been moved
      * to the adapter position of {@code target} ViewHolder
-     * ({@link ViewHolder#getAdapterPosition()
+     * ({@link ViewHolder#getBindingAdapterPosition()
      * ViewHolder#getAdapterPosition()}).
      * <p>
      * If you don't support drag & drop, this method will never be called.

@@ -14,45 +14,73 @@
  */
 package org.thunderdog.challegram.filegen;
 
-import android.media.MediaFormat;
-import android.net.Uri;
+import static tgx.flavor.VideoTransformer.getVideoFrameRate;
+import static tgx.flavor.VideoTransformer.legacyConvertVideoComplex;
+
+import android.media.MediaMetadataRetriever;
+import android.os.Build;
 import android.os.Message;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.WorkerThread;
+import androidx.media3.common.C;
+import androidx.media3.common.Effect;
+import androidx.media3.common.MediaItem;
+import androidx.media3.common.MimeTypes;
+import androidx.media3.effect.FrameDropEffect;
+import androidx.media3.effect.Presentation;
+import androidx.media3.transformer.Composition;
+import androidx.media3.transformer.DefaultEncoderFactory;
+import androidx.media3.transformer.EditedMediaItem;
+import androidx.media3.transformer.Effects;
+import androidx.media3.transformer.ExportException;
+import androidx.media3.transformer.ExportResult;
+import androidx.media3.transformer.ProgressHolder;
+import androidx.media3.transformer.Transformer;
+import androidx.media3.transformer.VideoEncoderSettings;
 
-import com.otaliastudios.transcoder.Transcoder;
-import com.otaliastudios.transcoder.TranscoderListener;
-import com.otaliastudios.transcoder.common.TrackType;
-import com.otaliastudios.transcoder.source.DataSource;
-import com.otaliastudios.transcoder.source.FilePathDataSource;
-import com.otaliastudios.transcoder.source.TrimDataSource;
-import com.otaliastudios.transcoder.source.UriDataSource;
-import com.otaliastudios.transcoder.strategy.DefaultAudioStrategy;
-import com.otaliastudios.transcoder.strategy.DefaultVideoStrategy;
-import com.otaliastudios.transcoder.strategy.PassThroughTrackStrategy;
-import com.otaliastudios.transcoder.strategy.RemoveTrackStrategy;
-import com.otaliastudios.transcoder.strategy.TrackStrategy;
+import com.googlecode.mp4parser.BasicContainer;
+import com.googlecode.mp4parser.authoring.Movie;
+import com.googlecode.mp4parser.authoring.Track;
+import com.googlecode.mp4parser.authoring.builder.DefaultMp4Builder;
+import com.googlecode.mp4parser.authoring.container.mp4.MovieCreator;
+import com.googlecode.mp4parser.authoring.tracks.AppendTrack;
+import com.googlecode.mp4parser.authoring.tracks.CroppedTrack;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
+import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.BaseThread;
 import org.thunderdog.challegram.core.Lang;
+import org.thunderdog.challegram.mediaview.crop.CropEffectFactory;
+import org.thunderdog.challegram.mediaview.crop.CropState;
 import org.thunderdog.challegram.telegram.Tdlib;
-import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.RandomAccessFile;
+import java.nio.channels.FileChannel;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import kotlin.collections.ArrayDeque;
+import me.vkryl.core.MathUtils;
+import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.RunnableData;
 import me.vkryl.core.lambda.RunnableLong;
 import me.vkryl.core.unit.ByteUnit;
@@ -89,10 +117,16 @@ public class VideoGen {
     private long readyBytes;
     private long reportedBytesCount, reportedExpectedBytesCount;
 
+    private int inputVideoRotation;
+
     private final VideoGen context;
     private final long generationId;
     private Future<Void> task;
-    // private String liTrRequestId;
+    private Transformer transformer;
+
+    public void setTask (Future<Void> task) {
+      this.task = task;
+    }
 
     private Entry (VideoGen context, long generationId) {
       this.context = context;
@@ -132,12 +166,12 @@ public class VideoGen {
     }
 
     public void cancel () {
-      if (task != null) {
+      if (task != null && !task.isDone()) {
         task.cancel(true);
       }
-      /*if (!Strings.isEmpty(liTrRequestId) && context.mediaTransformer != null) {
-        context.mediaTransformer.cancel(liTrRequestId);
-      }*/
+      if (transformer != null) {
+        transformer.cancel();
+      }
     }
   }
 
@@ -171,7 +205,7 @@ public class VideoGen {
     return 0;
   }
 
-  private interface ProgressCallback {
+  public interface ProgressCallback {
     void onTranscodeProgress (double progress, long expectedSize);
     void onReadyToUpload (long bytesCount, long expectedSize);
   }
@@ -188,7 +222,7 @@ public class VideoGen {
     final String sourcePath = info.getOriginalPath();
     final String destinationPath = info.getDestinationPath();
 
-    boolean canUseSimplePath = info.canTakeSimplePath();
+    boolean sendOriginalInCaseFileSizeGrows = !Config.MODERN_VIDEO_TRANSCODING_ENABLED && info.canTakeSimplePath() && (entry.inputVideoRotation == 0 || !Config.TRANSCODE_ROTATED_VIDEOS_FOR_IOS_CLIENT);
 
     long sourceSize = getBytesCount(sourcePath, true);
     ProgressCallback onProgress = new ProgressCallback() {
@@ -198,7 +232,7 @@ public class VideoGen {
           if (entry.transcodeFinished.get() || entry.sendOriginal.get() || progress <= 0) {
             return;
           }
-          if (sourceSize != 0 && expectedSize > sourceSize && canUseSimplePath) {
+          if (sourceSize != 0 && expectedSize > sourceSize && sendOriginalInCaseFileSizeGrows) {
             if (!entry.sendOriginal.getAndSet(true)) {
               entry.cancel();
             }
@@ -214,7 +248,7 @@ public class VideoGen {
           if (entry.transcodeFinished.get() || entry.sendOriginal.get() || bytesCount <= 0) {
             return;
           }
-          if (sourceSize != 0 && bytesCount > sourceSize && canUseSimplePath) {
+          if (sourceSize != 0 && bytesCount > sourceSize && sendOriginalInCaseFileSizeGrows) {
             if (!entry.sendOriginal.getAndSet(true)) {
               entry.cancel();
             }
@@ -232,13 +266,21 @@ public class VideoGen {
         }
       }
     };
-    Runnable onCancel = () -> {
+    RunnableData<String> onCancel = message -> {
       synchronized (entry) {
         if (!entry.transcodeFinished.getAndSet(true)) {
           if (!entry.canceled.get() && entry.sendOriginal.get()) {
             sendOriginal(info, entry);
           } else {
-            tdlib.filegen().failGeneration(info, -1, "Video conversion has been cancelled");
+            StringBuilder b = new StringBuilder("Video conversion has been cancelled");
+            if (entry.canceled.get()) {
+              b.append(" by TDLib");
+            }
+            if (!StringUtils.isEmpty(message)) {
+              b.append(": ").append(message);
+            }
+            String error = b.toString();
+            tdlib.filegen().failGeneration(info, -1, error);
             entries.remove(destinationPath);
           }
         }
@@ -251,10 +293,8 @@ public class VideoGen {
         entries.remove(destinationPath);
       }
       try {
-        if (entry.task != null && !entry.task.isDone()) {
-          Log.i("Cancelling video generation");
-          entry.task.cancel(true);
-        }
+        Log.i("Cancelling video generation");
+        entry.cancel();
       } catch (Throwable t) {
         Log.i(t);
       }
@@ -267,7 +307,7 @@ public class VideoGen {
           } else {
             Log.i("No need to transcode video: %s", sourcePath);
           }
-          if (!entry.canceled.get() && canUseSimplePath) {
+          if (!entry.canceled.get() && sendOriginalInCaseFileSizeGrows) {
             sendOriginal(info, entry);
           } else {
             tdlib.filegen().failGeneration(info, -1, Lang.getString(R.string.SendVideoError));
@@ -277,126 +317,221 @@ public class VideoGen {
       }
     };
 
-    if (info.disableTranscoding() && canUseSimplePath) {
+    if (!Config.MODERN_VIDEO_TRANSCODING_ENABLED && info.disableTranscoding()) {
+      // Send original file only in case Transformer isn't used.
       sendOriginal(info, entry);
       return;
     }
 
+    awaitOrConvertVideo(sourcePath, destinationPath, info, entry, onProgress, onComplete, onCancel, onFailure);
+  }
+
+  private final AtomicInteger runningVideoGenerations = new AtomicInteger();
+  private final ArrayDeque<Runnable> pendingVideoGenerations = new ArrayDeque<>();
+
+  private int maxParallelVideoGenerations () {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+      return MathUtils.clamp(Runtime.getRuntime().availableProcessors(), 1, 8);
+    } else {
+      return 1;
+    }
+  }
+
+  private void awaitOrConvertVideo (String sourcePath, String destinationPath, VideoGenerationInfo info, Entry entry, ProgressCallback onProgress, Runnable onComplete, RunnableData<String> onCancel, RunnableData<Throwable> onFailure) {
+    Runnable act = () -> {
+      runningVideoGenerations.incrementAndGet();
+      convertVideo(sourcePath, destinationPath, info, entry, onProgress, onComplete, onCancel, onFailure, () -> {
+        runningVideoGenerations.decrementAndGet();
+        queue.post(this::checkPostponedVideoGenerations, 0);
+      });
+    };
+    pendingVideoGenerations.add(act);
+    checkPostponedVideoGenerations();
+  }
+
+  private void checkPostponedVideoGenerations () {
+    int maxParallelOps = maxParallelVideoGenerations();
+    while (!pendingVideoGenerations.isEmpty() && runningVideoGenerations.get() < maxParallelOps) {
+      Runnable act = pendingVideoGenerations.removeFirst();
+      act.run();
+    }
+  }
+
+  private void convertVideo (String sourcePath, String destinationPath, VideoGenerationInfo info, Entry entry, ProgressCallback onProgress, Runnable onComplete, RunnableData<String> onCancel, RunnableData<Throwable> onFailure, Runnable after) {
     try {
-      convertVideoComplex(sourcePath, destinationPath, info, entry, onProgress, onComplete, onCancel, onFailure);
+      if (Config.MODERN_VIDEO_TRANSCODING_ENABLED) {
+        convertVideoComplexV2(sourcePath, destinationPath, info, entry, onProgress, onComplete, onCancel, onFailure, after);
+      } else if (Config.LEGACY_VIDEO_TRANSCODING_ENABLED) {
+        legacyConvertVideoComplex(this, AppContext.get(), sourcePath, destinationPath, info, entry, onProgress, onComplete, onCancel, onFailure, after);
+      } else {
+        onFailure.runWithData(new RuntimeException());
+      }
     } catch (Throwable t) {
       Log.e(t);
       onFailure.runWithData(t);
     }
   }
 
-  private void convertVideoComplex (String sourcePath, String destinationPath, VideoGenerationInfo info, Entry entry, ProgressCallback onProgress, Runnable onComplete, Runnable onCancel, RunnableData<Throwable> onFailure) {
-    DataSource dataSource;
-    if (sourcePath.startsWith("content://")) {
-      dataSource = new UriDataSource(UI.getAppContext(), Uri.parse(sourcePath));
-    } else {
-      dataSource = new FilePathDataSource(sourcePath);
-      dataSource.initialize();
-    }
+  @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+  private void convertVideoComplexV2 (String sourcePath, String destinationPath, VideoGenerationInfo info, Entry entry, ProgressCallback onProgress, Runnable onComplete, RunnableData<String> onCancel, RunnableData<Throwable> onFailure, Runnable after) throws FileNotFoundException {
+    MediaMetadataRetriever retriever = U.openRetriever(sourcePath);
+    if (retriever == null)
+      throw new NullPointerException();
 
+    int inputVideoWidth = StringUtils.parseInt(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH));
+    int inputVideoHeight = StringUtils.parseInt(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
+    int inputVideoRotation;
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+      inputVideoRotation = StringUtils.parseInt(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION));
+    } else {
+      inputVideoRotation = 0;
+    }
+    entry.inputVideoRotation = inputVideoRotation;
+    long inputVideoBitrate = StringUtils.parseInt(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE));
+    U.closeRetriever(retriever);
+
+    Settings.VideoLimit videoLimit = info.getVideoLimit();
+    if (videoLimit == null)
+      videoLimit = new Settings.VideoLimit();
+
+    int inputVideoFrameRate = getVideoFrameRate(AppContext.get(), sourcePath);
+    int outputVideoFrameRate = videoLimit.getOutputFrameRate(inputVideoFrameRate);
+
+    int outputVideoSquare;
+    int outputHeightLimit;
+    if (!info.disableTranscoding() && !videoLimit.size.isUnlimited() && (inputVideoWidth * inputVideoHeight) > (videoLimit.size.majorSize * videoLimit.size.minorSize)) {
+      if (U.isRotated(inputVideoRotation)) {
+        outputHeightLimit = inputVideoWidth > inputVideoHeight ? videoLimit.size.majorSize : videoLimit.size.minorSize;
+      } else {
+        outputHeightLimit = inputVideoHeight > inputVideoWidth ? videoLimit.size.majorSize : videoLimit.size.minorSize;
+      }
+      outputVideoSquare = videoLimit.size.majorSize * videoLimit.size.minorSize;
+    } else {
+      outputHeightLimit = 0;
+      outputVideoSquare = inputVideoWidth * inputVideoHeight;
+    }
+    long outputVideoBitrate = Math.min(
+      (videoLimit.bitrate != Settings.VideoLimit.BITRATE_UNKNOWN ? videoLimit.bitrate :
+      (int) Math.round(outputVideoSquare * outputVideoFrameRate * Settings.VideoLimit.BITRATE_SCALE)),
+      inputVideoBitrate
+    );
+
+    MediaItem.Builder mediaItemBuilder = new MediaItem.Builder()
+      .setUri(sourcePath);
     if (info.needTrim()) {
-      long trimEnd = dataSource.getDurationUs() - info.getEndTimeUs();
-      dataSource = new TrimDataSource(dataSource, info.getStartTimeUs(), trimEnd < 1000 ? 0 : trimEnd);
+      mediaItemBuilder.setClippingConfiguration(new MediaItem.ClippingConfiguration.Builder()
+        .setStartPositionMs(TimeUnit.MICROSECONDS.toMillis(info.getStartTimeUs()))
+        .setEndPositionMs(info.getEndTimeUs() == -1 ? C.TIME_END_OF_SOURCE : TimeUnit.MICROSECONDS.toMillis(info.getEndTimeUs()))
+        .build()
+      );
+    }
+    MediaItem mediaItem = mediaItemBuilder.build();
+
+    EditedMediaItem.Builder editedMediaItemBuilder = new EditedMediaItem.Builder(mediaItem)
+      .setRemoveAudio(info.needMute());
+
+    List<Effect> videoEffects = new ArrayList<>();
+    if (outputVideoFrameRate != inputVideoFrameRate) {
+      videoEffects.add(FrameDropEffect.createDefaultFrameDropEffect(outputVideoFrameRate));
+    }
+    if (outputHeightLimit > 0) {
+      videoEffects.add(Presentation.createForHeight(outputHeightLimit));
+    }
+    CropState cropState = info.getCrop();
+    if (CropEffectFactory.needScaleAndRotateEffect(cropState, info.getRotate())) {
+      videoEffects.add(CropEffectFactory.createScaleAndRotateEffect(cropState, info.getRotate()));
+    }
+    if (CropEffectFactory.needCropRegionEffect(cropState)) {
+      videoEffects.add(CropEffectFactory.createCropRegionEffect(cropState));
     }
 
-    TrackStrategy videoTrackStrategy;
-    if (info.disableTranscoding()) {
-      videoTrackStrategy = new PassThroughTrackStrategy();
-    } else {
-      Settings.VideoLimit videoLimit = info.getVideoLimit();
-      if (videoLimit == null)
-        videoLimit = new Settings.VideoLimit();
-      long outputBitrate = videoLimit.bitrate;
-      int outputFrameRate = videoLimit.fps != 0 ? videoLimit.fps : Settings.DEFAULT_FRAME_RATE;
-      int maxTextureSize = U.getMaxTextureSize();
-      if (maxTextureSize > 0 && videoLimit.size.majorSize > maxTextureSize) {
-        float scale = (float) maxTextureSize / (float) videoLimit.size.majorSize;
-        int majorSize = (int) ((float) videoLimit.size.majorSize * scale);
-        majorSize -= majorSize % 2;
-        int minorSize = (int) ((float) videoLimit.size.minorSize * scale);
-        minorSize -= majorSize % 2;
-        videoLimit = videoLimit.changeSize(new Settings.VideoSize(majorSize, minorSize));
-      }
-      if (outputBitrate == DefaultVideoStrategy.BITRATE_UNKNOWN) {
-        MediaFormat format = dataSource.getTrackFormat(TrackType.VIDEO);
-        if (format != null) {
-          Settings.VideoSize outputSize = videoLimit.getOutputSize(
-            format.getInteger(MediaFormat.KEY_WIDTH),
-            format.getInteger(MediaFormat.KEY_HEIGHT)
-          );
-          outputFrameRate = videoLimit.getOutputFrameRate(format.getInteger(MediaFormat.KEY_FRAME_RATE));
-          outputBitrate = videoLimit.getOutputBitrate(outputSize, outputFrameRate, videoLimit.bitrate);
-        }
-      }
-      videoTrackStrategy = DefaultVideoStrategy
-        .atMost(videoLimit.size.minorSize, videoLimit.size.majorSize)
-        .frameRate(outputFrameRate)
-        .bitRate(outputBitrate)
-        .build();
+    if (!videoEffects.isEmpty()) {
+      editedMediaItemBuilder.setEffects(new Effects(
+        Collections.emptyList(),
+        videoEffects
+      ));
+    } else if (Config.TRANSCODE_ROTATED_VIDEOS_FOR_IOS_CLIENT && inputVideoRotation != 0) {
+      editedMediaItemBuilder.setEffects(new Effects(
+        Collections.emptyList(),
+        Collections.emptyList()
+      ));
     }
 
-    int rotation = info.getRotate();
+    EditedMediaItem editedMediaItem = editedMediaItemBuilder.build();
 
-    File outFile = new File(destinationPath);
-
-    entry.task = Transcoder
-      .into(destinationPath)
-      .addDataSource(dataSource)
-      .setVideoTrackStrategy(videoTrackStrategy)
-      .setAudioTrackStrategy(
-        info.needMute() ? new RemoveTrackStrategy() :
-        info.disableTranscoding() || Settings.instance().getNewSetting(Settings.SETTING_FLAG_NO_AUDIO_COMPRESSION) ? new PassThroughTrackStrategy() :
-          new DefaultAudioStrategy.Builder()
-            .sampleRate(44100)
-            .bitRate(62000)
-            .channels(2)
-            .build()
-      )
-      .setVideoRotation(rotation)
-      .setListener(new TranscoderListener() {
+    // Transformer
+    final AtomicBoolean transformFinished = new AtomicBoolean();
+    Transformer.Builder transformerBuilder = new Transformer.Builder(AppContext.get())
+      .setVideoMimeType(MimeTypes.VIDEO_H264)
+      .addListener(new Transformer.Listener() {
         @Override
-        public void onTranscodeProgress (double progress) {
-          onProgress.onTranscodeProgress(progress, outFile.exists() ? outFile.length() : 0);
-        }
-
-        @Override
-        public void onTranscodeCompleted (int successCode) {
-          switch (successCode) {
-            case Transcoder.SUCCESS_TRANSCODED:
-              onComplete.run();
-              break;
-            case Transcoder.SUCCESS_NOT_NEEDED:
-              sendOriginal(info, entry);
-              break;
+        public void onCompleted (@NonNull Composition composition, @NonNull ExportResult exportResult) {
+          synchronized (transformFinished) {
+            transformFinished.set(true);
+            onComplete.run();
           }
+          U.run(after);
         }
 
         @Override
-        public void onTranscodeCanceled () {
-          onCancel.run();
+        public void onError (@NonNull Composition composition, @NonNull ExportResult exportResult,
+                             @NonNull ExportException exportException) {
+          synchronized (transformFinished) {
+            transformFinished.set(true);
+            onFailure.runWithData(exportException);
+          }
+          U.run(after);
         }
+      });
+    if (!editedMediaItem.removeAudio) {
+      transformerBuilder.setAudioMimeType(MimeTypes.AUDIO_AAC);
+    }
+    if (inputVideoBitrate > outputVideoBitrate) {
+      VideoEncoderSettings videoEncoderSettings = new VideoEncoderSettings.Builder()
+        .setBitrate((int) outputVideoBitrate)
+        .build();
+      transformerBuilder.setEncoderFactory(new DefaultEncoderFactory.Builder(AppContext.get())
+        .setRequestedVideoEncoderSettings(videoEncoderSettings)
+        .build());
+    }
 
-        @Override
-        public void onTranscodeFailed (@NonNull Throwable exception) {
-          onFailure.runWithData(exception);
+    entry.transformer = transformerBuilder.build();
+
+    ProgressHolder progressHolder = new ProgressHolder();
+    File outFile = new File(destinationPath);
+    Runnable progressRunner = new Runnable() {
+      @Override
+      public void run () {
+        if (entry.transcodeFinished.get() || entry.canceled.get()) {
+          return;
         }
-      })
-      .transcode();
+        synchronized (transformFinished) {
+          if (transformFinished.get()) {
+            return;
+          }
+          @Transformer.ProgressState int progressState = entry.transformer.getProgress(progressHolder);
+          if (progressState == Transformer.PROGRESS_STATE_AVAILABLE) {
+            double progress = (double) progressHolder.progress / 100.0;
+            long fileSize = outFile.length();
+            onProgress.onTranscodeProgress(progress, fileSize);
+          }
+          queue.post(this, 500L);
+        }
+      }
+    };
+
+    entry.transformer.start(editedMediaItem, destinationPath);
+    progressRunner.run();
   }
 
-  private void sendOriginal (VideoGenerationInfo info, Entry entry) {
+  public void sendOriginal (VideoGenerationInfo info, Entry entry) {
     final long generationId = info.getGenerationId();
     final String sourcePath = info.getOriginalPath();
     final String destinationPath = info.getDestinationPath();
 
     entry.transcodeFinished.set(false);
 
-    if (info.needTrim() || info.needMute() || info.getRotate() != 0) {
+    if (info.needTrim() || info.needMute() || info.getRotate() != 0 || info.hasCrop()) {
       entry.resetProgress(0);
       boolean success = false;
       try {
@@ -448,9 +583,80 @@ public class VideoGen {
   }
 
   private boolean convertVideoSimple (String sourcePath, String destinationPath, VideoGenerationInfo info, @Nullable AtomicBoolean isCancelled, RunnableLong onProgress) throws Throwable {
+    if (info.hasCrop()) {
+      return false;
+    }
     VideoData videoData = new VideoData(sourcePath);
     return info.needTrim() ?
-        videoData.editMovie(destinationPath, info.needMute(), info.getRotate(), (double) info.getStartTimeUs() / 1_000_000.0, (double) info.getEndTimeUs() / 1_000_000.0, onProgress, isCancelled) :
+        videoData.editMovie(destinationPath, info.needMute(), info.getRotate(), (double) info.getStartTimeUs() / 1_000_000.0, info.getEndTimeUs() == -1 ? -1 : (double) info.getEndTimeUs() / 1_000_000.0, onProgress, isCancelled) :
         videoData.editMovie(destinationPath, info.needMute(), info.getRotate(), onProgress, isCancelled);
+  }
+
+  public static void appendTwoVideos(String firstVideoPath, String secondVideoPath, String output, boolean needTrimFirstVideo, double startTime, double endTime) throws IOException {
+    Movie[] inMovies = new Movie[2];
+
+    inMovies[0] = MovieCreator.build(firstVideoPath);
+    inMovies[1] = MovieCreator.build(secondVideoPath);
+
+    List<Track> videoTracks = new LinkedList<>();
+    List<Track> audioTracks = new LinkedList<>();
+
+    for (int a = 0; a < 2; a++) {
+      final Movie m = inMovies[a];
+      for (Track track : m.getTracks()) {
+        final Track outputTrack;
+        if (needTrimFirstVideo && a == 0 && startTime != -1 && endTime != -1) {
+          long currentSample = 0;
+          double currentTime = 0;
+          double lastTime = -1;
+          long startSample = -1;
+          long endSample = -1;
+          long timescale = track.getTrackMetaData().getTimescale();
+          for (long delta : track.getSampleDurations()) {
+            if (currentTime > lastTime && currentTime <= startTime) {
+              // current sample is still before the new starttime
+              startSample = currentSample;
+            }
+            if (currentTime > lastTime && currentTime <= endTime) {
+              // current sample is after the new start time and still before the new endtime
+              endSample = currentSample;
+            }
+            lastTime = currentTime;
+            currentTime += (double) delta / (double) timescale;
+            currentSample++;
+          }
+          if (startSample != -1 && endSample == -1) {
+            endSample = startSample + 1;
+          }
+          if (startSample == -1 || endSample == -1)
+            throw new IllegalArgumentException();
+          outputTrack = new CroppedTrack(track, startSample, endSample);
+        } else {
+          outputTrack =track;
+        }
+
+        if (track.getHandler().equals("soun")) {
+          audioTracks.add(outputTrack);
+        }
+        if (track.getHandler().equals("vide")) {
+          videoTracks.add(outputTrack);
+        }
+      }
+    }
+
+    Movie result = new Movie();
+    if (!audioTracks.isEmpty()) {
+      result.addTrack(new AppendTrack(audioTracks.toArray(new Track[audioTracks.size()])));
+    }
+    if (!videoTracks.isEmpty()) {
+      result.addTrack(new AppendTrack(videoTracks.toArray(new Track[videoTracks.size()])));
+    }
+
+    BasicContainer out = (BasicContainer) new DefaultMp4Builder().build(result);
+    try (RandomAccessFile f = new RandomAccessFile(output, "rw")) {
+      try (FileChannel fc = f.getChannel()) {
+        out.writeContainer(fc);
+      }
+    }
   }
 }

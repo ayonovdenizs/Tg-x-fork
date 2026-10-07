@@ -22,7 +22,7 @@ import android.view.ViewParent;
 
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.chat.MessageView;
 import org.thunderdog.challegram.component.chat.MessagesAdapter;
@@ -35,7 +35,7 @@ import org.thunderdog.challegram.util.text.Text;
 import org.thunderdog.challegram.util.text.TextEntity;
 import org.thunderdog.challegram.util.text.TextWrapper;
 
-import me.vkryl.td.ChatId;
+import tgx.td.ChatId;
 
 public class TGMessageBotInfo extends TGMessage {
   private TextWrapper titleWrapper;
@@ -49,7 +49,7 @@ public class TGMessageBotInfo extends TGMessage {
   }
 
   private TGMessageBotInfo (MessagesManager context, long chatId, TdApi.FormattedText description) {
-    super(context, TD.newFakeMessage(chatId, context.controller().tdlib().sender(chatId), new TdApi.MessageText(description, null)));
+    super(context, TD.newFakeMessage(chatId, context.controller().tdlib().sender(chatId), new TdApi.MessageText(description, null, null)));
 
     if (!tdlib().isRepliesChat(ChatId.fromUserId(getSender().getUserId()))) {
       String text = Lang.getString(R.string.WhatThisBotCanDo);

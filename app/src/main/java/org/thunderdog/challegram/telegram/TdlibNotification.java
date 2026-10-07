@@ -28,16 +28,18 @@ import androidx.annotation.Nullable;
 import androidx.collection.LongSparseArray;
 import androidx.collection.SparseArrayCompat;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.TDLib;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
+import org.thunderdog.challegram.data.ContentPreview;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.loader.ImageFile;
 import org.thunderdog.challegram.loader.ImageReader;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Screen;
-import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -48,8 +50,8 @@ import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.collection.LongSet;
 import me.vkryl.core.lambda.Filter;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.Td;
+import tgx.td.ChatId;
+import tgx.td.Td;
 
 public class TdlibNotification implements Comparable<TdlibNotification> {
   private static final int FLAG_EDITED = 1;
@@ -139,8 +141,11 @@ public class TdlibNotification implements Comparable<TdlibNotification> {
       case TdApi.NotificationTypeNewCall.CONSTRUCTOR:
       case TdApi.NotificationTypeNewSecretChat.CONSTRUCTOR:
         return false;
+      default: {
+        Td.assertNotificationType_dd6d967f();
+        throw Td.unsupported(notification.type);
+      }
     }
-    throw new UnsupportedOperationException(notification.type.toString());
   }
 
   public boolean isVisuallySilent () { // Display bell icon
@@ -163,7 +168,7 @@ public class TdlibNotification implements Comparable<TdlibNotification> {
   public boolean isPinnedMessage () {
     switch (notification.type.getConstructor()) {
       case TdApi.NotificationTypeNewMessage.CONSTRUCTOR:
-        return ((TdApi.NotificationTypeNewMessage) notification.type).message.content.getConstructor() == TdApi.MessagePinMessage.CONSTRUCTOR;
+        return Td.isPinned(((TdApi.NotificationTypeNewMessage) notification.type).message.content);
       case TdApi.NotificationTypeNewPushMessage.CONSTRUCTOR:
         return Td.isPinned(((TdApi.NotificationTypeNewPushMessage) notification.type).content);
       case TdApi.NotificationTypeNewCall.CONSTRUCTOR:
@@ -177,7 +182,7 @@ public class TdlibNotification implements Comparable<TdlibNotification> {
     switch (notification.type.getConstructor()) {
       case TdApi.NotificationTypeNewMessage.CONSTRUCTOR: {
         TdApi.Message message = ((TdApi.NotificationTypeNewMessage) notification.type).message;
-        return !TD.isSecret(message) && ((TdApi.NotificationTypeNewMessage) notification.type).message.selfDestructTime == 0;
+        return !Td.isSecret(message.content) && ((TdApi.NotificationTypeNewMessage) notification.type).message.selfDestructType == null;
       }
       case TdApi.NotificationTypeNewPushMessage.CONSTRUCTOR: {
         TdApi.PushMessageContent push = ((TdApi.NotificationTypeNewPushMessage) notification.type).content;
@@ -273,9 +278,9 @@ public class TdlibNotification implements Comparable<TdlibNotification> {
   public boolean isStickerContent () {
     switch (notification.type.getConstructor()) {
       case TdApi.NotificationTypeNewMessage.CONSTRUCTOR:
-        return ((TdApi.NotificationTypeNewMessage) notification.type).message.content.getConstructor() == TdApi.MessageSticker.CONSTRUCTOR;
+        return Td.isSticker(((TdApi.NotificationTypeNewMessage) notification.type).message.content);
       case TdApi.NotificationTypeNewPushMessage.CONSTRUCTOR:
-        return ((TdApi.NotificationTypeNewPushMessage) notification.type).content.getConstructor() == TdApi.PushMessageContentSticker.CONSTRUCTOR;
+        return Td.isSticker(((TdApi.NotificationTypeNewPushMessage) notification.type).content);
       case TdApi.NotificationTypeNewCall.CONSTRUCTOR:
       case TdApi.NotificationTypeNewSecretChat.CONSTRUCTOR:
         break;
@@ -316,7 +321,7 @@ public class TdlibNotification implements Comparable<TdlibNotification> {
     boolean isForward = false;
     for (TdlibNotification notification : mergedList) {
       TdApi.Message message = notification.findMessage();
-      if (ChatId.isSecret(group.getChatId()) && message.selfDestructTime != 0) {
+      if (ChatId.isSecret(group.getChatId()) && message.selfDestructType != null) {
         return Lang.plural(R.string.xNewMessages, mergedList.size());
       }
       if (message.forwardInfo != null) {
@@ -324,12 +329,12 @@ public class TdlibNotification implements Comparable<TdlibNotification> {
       }
       messages.add(message);
     }
-    TD.ContentPreview content;
+    ContentPreview content;
     if (isForward) {
-      content = new TD.ContentPreview(TD.EMOJI_FORWARD, 0, Lang.plural(R.string.xForwards, mergedList.size()), true);
+      content = new ContentPreview(ContentPreview.EMOJI_FORWARD, 0, Lang.plural(R.string.xForwards, mergedList.size()), true);
     } else {
       Tdlib.Album album = new Tdlib.Album(messages);
-      content = TD.getAlbumPreview(tdlib, messages.get(0), album, allowContent);
+      content = ContentPreview.getAlbumPreview(tdlib, messages.get(0), album, allowContent);
     }
     if (hasCustomText != null && !content.isTranslatable) {
       hasCustomText[0] = true;
@@ -342,26 +347,23 @@ public class TdlibNotification implements Comparable<TdlibNotification> {
       case TdApi.NotificationTypeNewMessage.CONSTRUCTOR: {
         TdApi.Message message = ((TdApi.NotificationTypeNewMessage) notification.type).message;
 
-        if (ChatId.isSecret(group.getChatId()) && message.selfDestructTime != 0) {
+        if (ChatId.isSecret(group.getChatId()) && message.selfDestructType != null) {
           return Lang.getString(R.string.YouHaveNewMessage);
         }
 
         // TODO move this to TD.getNotificationPreview?
-        switch (message.content.getConstructor()) {
-          case TdApi.MessagePinMessage.CONSTRUCTOR: {
-            long messageId = ((TdApi.MessagePinMessage) message.content).messageId;
-            TdApi.Message pinnedMessage = messageId != 0 ? tdlib.getMessageLocally(message.chatId, messageId) : null;
-            if (onlyPinned) {
-              if (pinnedMessage != null)
-                message = pinnedMessage;
-            } else {
-              return wrapEdited(Lang.getPinnedMessageText(tdlib, message.senderId, pinnedMessage, false));
-            }
-            break;
+        if (Td.isPinned(message.content)) {
+          long messageId = ((TdApi.MessagePinMessage) message.content).messageId;
+          TdApi.Message pinnedMessage = messageId != 0 ? tdlib.getMessageLocally(message.chatId, messageId) : null;
+          if (onlyPinned) {
+            if (pinnedMessage != null)
+              message = pinnedMessage;
+          } else {
+            return wrapEdited(Lang.getPinnedMessageText(tdlib, message.senderId, pinnedMessage, false));
           }
         }
 
-        TD.ContentPreview content = TD.getNotificationPreview(tdlib, getChatId(), message, allowContent);
+        ContentPreview content = ContentPreview.getNotificationPreview(tdlib, getChatId(), message, allowContent);
         if (hasCustomText != null && !content.isTranslatable) {
           hasCustomText[0] = true;
         }
@@ -372,9 +374,7 @@ public class TdlibNotification implements Comparable<TdlibNotification> {
       }
       case TdApi.NotificationTypeNewPushMessage.CONSTRUCTOR: {
         TdApi.NotificationTypeNewPushMessage push = (TdApi.NotificationTypeNewPushMessage) notification.type;
-        TD.ContentPreview content = TD.getNotificationPreview(tdlib, getChatId(), push, allowContent);
-        if (content == null)
-          throw new UnsupportedOperationException(Integer.toString(push.content.getConstructor()));
+        ContentPreview content = ContentPreview.getNotificationPreview(tdlib, getChatId(), push, allowContent);
         if (hasCustomText != null && !content.isTranslatable) {
           hasCustomText[0] = true;
         }
@@ -384,9 +384,9 @@ public class TdlibNotification implements Comparable<TdlibNotification> {
     return null;
   }
 
-  private CharSequence getPreview (TD.ContentPreview content) {
+  private CharSequence getPreview (ContentPreview content) {
     TdApi.FormattedText formattedText = content.buildFormattedText(false);
-    CharSequence text = TD.toCharSequence(formattedText, false, false);
+    CharSequence text = TD.toCharSequence(formattedText, TD.TextEntityOption.NONE, false);
     if (text instanceof Spanned) {
       Spanned spanned = (Spanned) text;
       URLSpan[] spans = spanned.getSpans(0, text.length(), URLSpan.class);
@@ -400,7 +400,7 @@ public class TdlibNotification implements Comparable<TdlibNotification> {
             if (b == null) {
               b = new SpannableStringBuilder(text);
             }
-            ForegroundColorSpan colorSpan = new ForegroundColorSpan(tdlib.getColor(R.id.theme_color_notificationLink));
+            ForegroundColorSpan colorSpan = new ForegroundColorSpan(tdlib.getColor(ColorId.notificationLink));
             b.setSpan(colorSpan, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
           }
         }
@@ -529,7 +529,7 @@ public class TdlibNotification implements Comparable<TdlibNotification> {
     CountDownLatch downloadLatch = new CountDownLatch(files.size());
     for (int i = 0; i < files.size(); i++) {
       TdApi.File file = files.valueAt(i).getFile();
-      tdlib.client().send(new TdApi.DownloadFile(file.id, 32, 0, 0, true), result -> {
+      tdlib.client().send(new TdApi.DownloadFile(file.id, TdlibFilesManager.PRIORITY_NOTIFICATION_MEDIA, 0, 0, true), result -> {
         switch (result.getConstructor()) {
           case TdApi.File.CONSTRUCTOR:
             synchronized (file) {
@@ -581,7 +581,7 @@ public class TdlibNotification implements Comparable<TdlibNotification> {
                 b = new SpannableStringBuilder(text);
               }
               ImageSpan imageSpan = new ImageSpan(
-                UI.getAppContext(),
+                AppContext.get(),
                 bitmap,
                 ImageSpan.ALIGN_BASELINE
               );

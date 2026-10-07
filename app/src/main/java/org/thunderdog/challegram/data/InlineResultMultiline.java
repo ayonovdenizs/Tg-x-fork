@@ -21,7 +21,7 @@ import android.view.View;
 
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.chat.MediaPreview;
@@ -29,14 +29,13 @@ import org.thunderdog.challegram.component.inline.CustomResultView;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.loader.ComplexReceiver;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.telegram.TdlibAccentColor;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
-import org.thunderdog.challegram.tool.Strings;
 import org.thunderdog.challegram.util.text.Text;
 import org.thunderdog.challegram.util.text.TextColorSets;
 import org.thunderdog.challegram.util.text.TextEntity;
-import org.thunderdog.challegram.util.text.TextMedia;
 import org.thunderdog.challegram.util.text.TextWrapper;
 import org.thunderdog.challegram.widget.SimplestCheckBox;
 
@@ -44,13 +43,15 @@ import java.net.URLDecoder;
 
 import me.vkryl.core.ColorUtils;
 import me.vkryl.core.StringUtils;
-import me.vkryl.td.Td;
+import tgx.td.Td;
+import tgx.td.TdExt;
 
-public class InlineResultMultiline extends InlineResult<TdApi.InlineQueryResult> {
+public class InlineResultMultiline extends InlineResult<TdApi.InlineQueryResult> implements Text.ClickCallback {
   private String title, description;
   private TdApi.TextEntity[] descriptionEntities;
   private boolean isEmail;
   private String url;
+  private TdApi.LinkPreview linkPreview;
 
   private final AvatarPlaceholder avatarPlaceholder;
 
@@ -61,10 +62,10 @@ public class InlineResultMultiline extends InlineResult<TdApi.InlineQueryResult>
 
     this.title = article.title;
     this.description = article.description;
-    this.url = article.hideUrl || article.url.isEmpty() ? null : article.url; // ? null : article.url;
+    this.url = StringUtils.isEmpty(article.url) ? null : article.url; // ? null : article.url;
 
-    int placeholderColorId = TD.getColorIdForString(article.url.isEmpty() ? article.id : article.url);
-    avatarPlaceholder = new AvatarPlaceholder(AVATAR_PLACEHOLDER_RADIUS, new AvatarPlaceholder.Metadata(placeholderColorId, TD.getLetters(title)), null);
+    TdlibAccentColor accentColor = tdlib.accentColorForString(article.url.isEmpty() ? article.id : article.url);
+    avatarPlaceholder = new AvatarPlaceholder(AVATAR_PLACEHOLDER_RADIUS, new AvatarPlaceholder.Metadata(accentColor, TD.getLetters(title)), null);
 
     setMediaPreview(MediaPreview.valueOf(tdlib, article.thumbnail, null, Screen.dp(50f), Screen.dp(3f)));
     layoutInternal(Screen.currentWidth());
@@ -76,8 +77,8 @@ public class InlineResultMultiline extends InlineResult<TdApi.InlineQueryResult>
     this.title = game.game.title;
     this.description = game.game.description;
 
-    int placeholderColorId = TD.getColorIdForString(game.game.shortName);
-    avatarPlaceholder = new AvatarPlaceholder(AVATAR_PLACEHOLDER_RADIUS, new AvatarPlaceholder.Metadata(placeholderColorId, TD.getLetters(title)), null);
+    TdlibAccentColor accentColor = tdlib.accentColorForString(game.game.shortName);
+    avatarPlaceholder = new AvatarPlaceholder(AVATAR_PLACEHOLDER_RADIUS, new AvatarPlaceholder.Metadata(accentColor, TD.getLetters(title)), null);
 
     setMediaPreview(MediaPreview.valueOf(tdlib, game.game, Screen.dp(50f), Screen.dp(3f)));
 
@@ -90,17 +91,19 @@ public class InlineResultMultiline extends InlineResult<TdApi.InlineQueryResult>
     setMessage(message);
 
     TdApi.FormattedText text = Td.textOrCaption(message.content);
-    TdApi.WebPage webPage = message.content.getConstructor() == TdApi.MessageText.CONSTRUCTOR ? ((TdApi.MessageText) message.content).webPage : null;
+    TdApi.LinkPreview linkPreview = Td.isText(message.content) ? ((TdApi.MessageText) message.content).linkPreview : null;
 
-    if (webPage != null) {
-      this.title = Strings.any(webPage.title, webPage.document != null ? webPage.document.fileName : null, webPage.audio != null ? webPage.audio.title : null, webPage.siteName);
-      this.description = webPage.description.text;
-      this.descriptionEntities = webPage.description.entities;
-      String urlInText = Td.findUrl(text, webPage.url, true);
-      this.url = !StringUtils.isEmpty(urlInText) ? urlInText : webPage.url;
+    if (linkPreview != null) {
+      this.title = TdExt.getContentTitle(linkPreview);
+      this.description = linkPreview.description.text;
+      this.descriptionEntities = linkPreview.description.entities;
+      this.linkPreview = linkPreview;
+      String urlInText = Td.findUrl(text, linkPreview.url, true);
+      this.url = !StringUtils.isEmpty(urlInText) ? urlInText : linkPreview.url;
     } else if (text != null) {
       TdApi.TextEntity effectiveEntity = null;
       main: for (TdApi.TextEntity entity : text.entities) {
+        //noinspection SwitchIntDef
         switch (entity.type.getConstructor()) {
           case TdApi.TextEntityTypeTextUrl.CONSTRUCTOR: {
             if (effectiveEntity == null) {
@@ -137,7 +140,7 @@ public class InlineResultMultiline extends InlineResult<TdApi.InlineQueryResult>
         }
       }
       if (effectiveEntity != null) {
-        if (effectiveEntity.type.getConstructor() == TdApi.TextEntityTypeUrl.CONSTRUCTOR) {
+        if (Td.isUrl(effectiveEntity.type)) {
           TdApi.FormattedText part1 = effectiveEntity.offset > 0 ? Td.substring(text, 0, effectiveEntity.offset) : null;
           TdApi.FormattedText part2 = effectiveEntity.offset + effectiveEntity.length < text.text.length() ? Td.substring(text, effectiveEntity.offset + effectiveEntity.length) : null;
           TdApi.FormattedText finalText = Td.trim(part1 != null && part2 != null ? Td.concat(part1, new TdApi.FormattedText("…", new TdApi.TextEntity[]{new TdApi.TextEntity(0, 1, new TdApi.TextEntityTypeTextUrl(url))}), part2) : part1 != null ? part1 : part2);
@@ -163,8 +166,8 @@ public class InlineResultMultiline extends InlineResult<TdApi.InlineQueryResult>
       this.url = "";
     }
 
-    int placeholderColorId = TD.getColorIdForString(url);
-    avatarPlaceholder = new AvatarPlaceholder(AVATAR_PLACEHOLDER_RADIUS, new AvatarPlaceholder.Metadata(placeholderColorId, TD.getLetters(title)), null);
+    TdlibAccentColor accentColor = tdlib.accentColorForString(url);
+    avatarPlaceholder = new AvatarPlaceholder(AVATAR_PLACEHOLDER_RADIUS, new AvatarPlaceholder.Metadata(accentColor, TD.getLetters(title)), null);
 
     layoutInternal(Screen.currentWidth());
   }
@@ -253,6 +256,9 @@ public class InlineResultMultiline extends InlineResult<TdApi.InlineQueryResult>
       urlWrap = new TextWrapper(displayUrl, TGMessage.simpleTextStyleProvider(), TextColorSets.Regular.NORMAL)
         .setEntities(TextEntity.valueOf(tdlib, displayUrl, new TdApi.TextEntity[] { new TdApi.TextEntity(0, displayUrl.length(), isEmail ? new TdApi.TextEntityTypeEmailAddress() : new TdApi.TextEntityTypeUrl() )}, null), null);
       urlWrap.setMaxLines(2);
+      if (linkPreview != null) {
+        urlWrap.setClickCallback(this);
+      }
       urlWrap.setViewProvider(currentViews);
       urlWrap.addTextFlags(Text.FLAG_CUSTOM_LONG_PRESS);
     }
@@ -269,6 +275,14 @@ public class InlineResultMultiline extends InlineResult<TdApi.InlineQueryResult>
   }
 
   @Override
+  public TdApi.LinkPreview findLinkPreview (String link) {
+    if (TGWebPage.isPreviewOf(linkPreview.url, link)) {
+      return linkPreview;
+    }
+    return null;
+  }
+
+  @Override
   public boolean onTouchEvent (View view, MotionEvent e) {
     return (titleWrap != null && titleWrap.onTouchEvent(view, e)) || (descWrap != null && descWrap.onTouchEvent(view, e)) || (urlWrap != null && urlWrap.onTouchEvent(view, e));
   }
@@ -280,7 +294,7 @@ public class InlineResultMultiline extends InlineResult<TdApi.InlineQueryResult>
     } else if (avatarPlaceholder != null) {
       RectF rectF = Paints.getRectF();
       rectF.set(Screen.dp(11f), Screen.dp(11f), Screen.dp(11f) + Screen.dp(50f), Screen.dp(11f) + Screen.dp(50f));
-      c.drawRoundRect(rectF, Screen.dp(3f), Screen.dp(3f), Paints.fillingPaint(Theme.getColor(avatarPlaceholder.metadata.colorId)));
+      c.drawRoundRect(rectF, Screen.dp(3f), Screen.dp(3f), Paints.fillingPaint(avatarPlaceholder.metadata.accentColor.getPrimaryColor()));
       avatarPlaceholder.draw(c, rectF.centerX(), rectF.centerY(), 1f, avatarPlaceholder.getRadius(), false);
     }
 

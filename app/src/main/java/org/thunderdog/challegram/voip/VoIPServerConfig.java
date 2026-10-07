@@ -8,7 +8,6 @@ import org.thunderdog.challegram.Log;
  * Created by grishka on 01.03.17.
  */
 
-@Deprecated
 public class VoIPServerConfig{
 
 	private static JSONObject config;
@@ -16,7 +15,6 @@ public class VoIPServerConfig{
 	public static void setConfig(String json){
 		try{
 			config=new JSONObject(json);
-			nativeSetConfig(json);
 		}catch(JSONException x){
 			Log.e(Log.TAG_VOIP, "Error parsing VoIP config", x);
 		}
@@ -37,6 +35,4 @@ public class VoIPServerConfig{
 	public static boolean getBoolean(String key, boolean fallback){
 		return config != null ? config.optBoolean(key, fallback) : fallback;
 	}
-
-	private static native void nativeSetConfig(String json);
 }

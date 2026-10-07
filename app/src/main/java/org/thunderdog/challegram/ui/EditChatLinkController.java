@@ -20,11 +20,12 @@ import android.view.ViewGroup;
 import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.base.SettingView;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.util.OptionDelegate;
@@ -41,7 +42,7 @@ import me.vkryl.android.widget.FrameLayoutFix;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.collection.IntList;
 import me.vkryl.core.lambda.RunnableLong;
-import me.vkryl.td.TdConstants;
+import tgx.td.TdConstants;
 
 public class EditChatLinkController extends EditBaseController<EditChatLinkController.Args> implements View.OnClickListener, SettingsAdapter.TextChangeListener {
   private static final int[] EXPIRE_DATE_PRESETS = new int[]{3600, 3600 * 24, 3600 * 24 * 7};
@@ -122,13 +123,15 @@ public class EditChatLinkController extends EditBaseController<EditChatLinkContr
   }
 
   @Override
-  public boolean onBackPressed (boolean fromTop) {
+  public boolean performOnBackPressed (boolean fromTop, boolean commit) {
     if (!isCreation && hasAnyChanges()) {
-      showUnsavedChangesPromptBeforeLeaving(null);
+      if (commit) {
+        showUnsavedChangesPromptBeforeLeaving(null);
+      }
       return true;
     }
 
-    return false;
+    return super.performOnBackPressed(fromTop, commit);
   }
 
   @Override
@@ -151,7 +154,7 @@ public class EditChatLinkController extends EditBaseController<EditChatLinkContr
   }
 
   @Override
-  public void onTextChanged (int id, ListItem item, MaterialEditTextGroup v, String text) {
+  public void onTextChanged (int id, ListItem item, MaterialEditTextGroup v) {
     if (id == R.id.btn_inviteLinkName) {
       linkName = v.getText().toString();
       checkDoneButton();
@@ -214,25 +217,19 @@ public class EditChatLinkController extends EditBaseController<EditChatLinkContr
         @Override
         public boolean onOptionItemPressed (View optionItemView, int id) {
           long millis;
-          switch (id) {
-            case R.id.btn_sendScheduledCustom: {
-              showDateTimePicker(Lang.getString(R.string.InviteLinkExpireTitle), R.string.InviteLinkExpireToday, R.string.InviteLinkExpireTomorrow, R.string.InviteLinkExpireFuture, (currentMillis) -> act.runWithLong(currentMillis - tdlib.currentTimeMillis()), null);
-              return true;
-            }
-            case R.id.btn_expireIn12h:
-              millis = TimeUnit.HOURS.toMillis(12);
-              break;
-            case R.id.btn_expireIn2d:
-              millis = TimeUnit.DAYS.toMillis(2);
-              break;
-            case R.id.btn_expireIn1w:
-              millis = TimeUnit.DAYS.toMillis(7);
-              break;
-            case R.id.btn_expireIn2w:
-              millis = TimeUnit.DAYS.toMillis(14);
-              break;
-            default:
-              return false;
+          if (id == R.id.btn_sendScheduledCustom) {
+            showDateTimePicker(Lang.getString(R.string.InviteLinkExpireTitle), R.string.InviteLinkExpireToday, R.string.InviteLinkExpireTomorrow, R.string.InviteLinkExpireFuture, (currentMillis) -> act.runWithLong(currentMillis - tdlib.currentTimeMillis()), null);
+            return true;
+          } else if (id == R.id.btn_expireIn12h) {
+            millis = TimeUnit.HOURS.toMillis(12);
+          } else if (id == R.id.btn_expireIn2d) {
+            millis = TimeUnit.DAYS.toMillis(2);
+          } else if (id == R.id.btn_expireIn1w) {
+            millis = TimeUnit.DAYS.toMillis(7);
+          } else if (id == R.id.btn_expireIn2w) {
+            millis = TimeUnit.DAYS.toMillis(14);
+          } else {
+            return false;
           }
           act.runWithLong(millis);
           return true;
@@ -431,6 +428,6 @@ public class EditChatLinkController extends EditBaseController<EditChatLinkContr
 
   @Override
   protected int getRecyclerBackgroundColorId () {
-    return R.id.theme_color_background;
+    return ColorId.background;
   }
 }

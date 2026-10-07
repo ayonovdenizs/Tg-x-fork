@@ -19,12 +19,14 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.chat.MessagesManager;
 import org.thunderdog.challegram.core.Lang;
+import org.thunderdog.challegram.telegram.TdlibAccentColor;
 import org.thunderdog.challegram.telegram.TdlibSender;
 import org.thunderdog.challegram.telegram.TdlibUi;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Strings;
 import org.thunderdog.challegram.ui.MapController;
@@ -39,8 +41,9 @@ import java.util.concurrent.TimeUnit;
 import me.vkryl.core.ColorUtils;
 import me.vkryl.core.CurrencyUtils;
 import me.vkryl.core.StringUtils;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.Td;
+import tgx.td.ChatId;
+import tgx.td.MediaType;
+import tgx.td.Td;
 
 public final class TGMessageService extends TGMessageServiceImpl {
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageContactRegistered contactRegistered) {
@@ -69,29 +72,147 @@ public final class TGMessageService extends TGMessageServiceImpl {
 
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageGiftedPremium giftedPremium) {
     super(context, msg);
+    String amount = CurrencyUtils.buildAmount(giftedPremium.currency, giftedPremium.amount);
     setTextCreator(() -> {
-      if (msg.isOutgoing) {
+      boolean months = giftedPremium.monthCount != 0;
+      int monthsOrDays = months ? giftedPremium.monthCount : giftedPremium.dayCount;
+      if (giftedPremium.receiverUserId != 0) {
+        if (msg.chatId == ChatId.fromUserId(giftedPremium.receiverUserId)) {
+          return getPlural(
+            months ? R.string.YouGiftedPremium : R.string.YouGiftedPremiumDays,
+            monthsOrDays,
+            new BoldArgument(amount)
+          );
+        } else {
+          return getPlural(
+            months ? R.string.YouGiftedPremiumTo : R.string.YouGiftedPremiumDaysTo,
+            monthsOrDays,
+            new BoldArgument(amount),
+            new SenderArgument(new TdlibSender(tdlib, msg.chatId, new TdApi.MessageSenderUser(giftedPremium.receiverUserId)))
+          );
+        }
+      } else if (giftedPremium.gifterUserId != 0) {
         return getPlural(
-          R.string.YouGiftedPremium,
-          giftedPremium.monthCount,
-          new BoldArgument(CurrencyUtils.buildAmount(giftedPremium.currency, giftedPremium.amount))
+          months ? R.string.GiftedPremium : R.string.GiftedPremiumDays,
+          monthsOrDays,
+          new SenderArgument(new TdlibSender(tdlib, msg.chatId, new TdApi.MessageSenderUser(giftedPremium.gifterUserId)), isUserChat()),
+          new BoldArgument(amount)
         );
       } else {
         return getPlural(
-          R.string.GiftedPremium,
-          giftedPremium.monthCount,
-          new SenderArgument(sender, isUserChat()),
-          new BoldArgument(CurrencyUtils.buildAmount(giftedPremium.currency, giftedPremium.amount))
+          months ? R.string.AnonymousGiftedPremium : R.string.AnonymousGiftedPremiumDays,
+          monthsOrDays,
+          new BoldArgument(amount)
         );
       }
     });
-    // TODO design for giftedPremium.sticker
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessagePremiumGiftCode premiumGiftCode) {
+    super(context, msg);
+    setTextCreator(() -> {
+      boolean months = premiumGiftCode.monthCount != 0;
+      int monthsOrDays = months ? premiumGiftCode.monthCount : premiumGiftCode.dayCount;
+      if (msg.isOutgoing) {
+        return getPlural(
+          months ? R.string.YouGiftedPremiumCode : R.string.YouGiftedPremiumCodeDays,
+          monthsOrDays
+        );
+      } else if (premiumGiftCode.creatorId != null) {
+        return getPlural(
+          months ? R.string.GiftedPremiumCode : R.string.GiftedPremiumCodeDays,
+          monthsOrDays,
+          new SenderArgument(new TdlibSender(tdlib, msg.chatId, premiumGiftCode.creatorId), isUserChat())
+        );
+      } else {
+        return getPlural(
+          months ? R.string.AnonymousGiftedPremiumCode : R.string.AnonymousGiftedPremiumCodeDays,
+          monthsOrDays
+        );
+      }
+    });
+    // TODO design for premiumGiftCode.sticker
+    // TODO show details of the gift code
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageGiftedStars giftedStars) {
+    super(context, msg);
+    String amount = CurrencyUtils.buildAmount(giftedStars.currency, giftedStars.amount);
+    setTextCreator(() -> {
+      if (giftedStars.receiverUserId == 0 || tdlib.isSelfUserId(giftedStars.receiverUserId)) {
+        return getPlural(
+          R.string.YouReceivedXStars,
+          giftedStars.starCount,
+          new BoldArgument(amount)
+        );
+      } else {
+        return getPlural(
+          R.string.ReceivedXStars,
+          giftedStars.starCount,
+          new BoldArgument(amount),
+          new SenderArgument(new TdlibSender(tdlib, msg.chatId, new TdApi.MessageSenderUser(giftedStars.receiverUserId)))
+        );
+      }
+    });
+    // TODO design for giftedStars.sticker
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageGiveawayCreated giveawayCreated) {
+    super(context, msg);
+    setTextCreator(() ->
+      getText(
+        R.string.BoostingGiveawayJustStarted,
+        new SenderArgument(sender)
+      )
+    );
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageGiveawayCompleted giveawayCompleted) {
+    super(context, msg);
+    setTextCreator(() ->
+      getPlural(
+        R.string.BoostingGiveawayServiceWinnersSelected,
+        giveawayCompleted.winnerCount
+      )
+    );
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChatBoost chatBoost) {
+    super(context, msg);
+    setTextCreator(() -> {
+      if (msg.isOutgoing) {
+        if (chatBoost.boostCount > 1) {
+          return getPlural(
+            R.string.ChatBoostedXTimes_outgoing,
+            chatBoost.boostCount
+          );
+        } else {
+          return getText(
+            R.string.ChatBoosted_outgoing
+          );
+        }
+      } else {
+        if (chatBoost.boostCount > 1) {
+          return getPlural(
+            R.string.ChatBoostedXTimes,
+            chatBoost.boostCount,
+            new SenderArgument(sender)
+          );
+        } else {
+          return getText(
+            R.string.ChatBoosted,
+            new SenderArgument(sender)
+          );
+        }
+      }
+    });
   }
 
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChatSetTheme setTheme) {
     super(context, msg);
     setTextCreator(() -> {
-      if (StringUtils.isEmpty(setTheme.themeName)) {
+      String themeName = Td.themeName(setTheme.theme);
+      if (StringUtils.isEmpty(themeName)) {
         if (msg.isOutgoing) {
           return getText(
             R.string.ChatThemeDisabled_outgoing
@@ -106,13 +227,13 @@ public final class TGMessageService extends TGMessageServiceImpl {
         if (msg.isOutgoing) {
           return getText(
             R.string.ChatThemeSet_outgoing,
-            new BoldArgument(setTheme.themeName)
+            new BoldArgument(themeName)
           );
         } else {
           return getText(
             R.string.ChatThemeSet,
             new SenderArgument(sender, isUserChat()),
-            new BoldArgument(setTheme.themeName)
+            new BoldArgument(themeName)
           );
         }
       }
@@ -130,6 +251,20 @@ public final class TGMessageService extends TGMessageServiceImpl {
     super(context, msg);
     setTextCreator(() ->
       getText(R.string.AttachVideoExpired)
+    );
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageExpiredVoiceNote expiredVoiceNote) {
+    super(context, msg);
+    setTextCreator(() ->
+      getText(R.string.AttachVoiceNoteExpired)
+    );
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageExpiredVideoNote expiredVideoNote) {
+    super(context, msg);
+    setTextCreator(() ->
+      getText(R.string.AttachVideoNoteExpired)
     );
   }
 
@@ -197,6 +332,7 @@ public final class TGMessageService extends TGMessageServiceImpl {
               new MessageArgument(message, Td.ellipsize(formattedText, MAX_PINNED_MESSAGE_PREVIEW_LENGTH))
             );
           }
+          String format = null;
           @StringRes int staticResId;
           switch (message.content.getConstructor()) {
             case TdApi.MessageGame.CONSTRUCTOR:
@@ -238,7 +374,12 @@ public final class TGMessageService extends TGMessageServiceImpl {
               staticResId = R.string.ActionPinnedVideo;
               break;
             case TdApi.MessageVoiceNote.CONSTRUCTOR:
+            case TdApi.MessageExpiredVoiceNote.CONSTRUCTOR:
               staticResId = R.string.ActionPinnedVoice;
+              break;
+            case TdApi.MessageVideoNote.CONSTRUCTOR:
+            case TdApi.MessageExpiredVideoNote.CONSTRUCTOR:
+              staticResId = R.string.ActionPinnedRound;
               break;
             case TdApi.MessageSticker.CONSTRUCTOR:
               staticResId = R.string.ActionPinnedSticker;
@@ -248,47 +389,88 @@ public final class TGMessageService extends TGMessageServiceImpl {
                 R.string.ActionPinnedQuiz :
                 R.string.ActionPinnedPoll;
               break;
+            case TdApi.MessageChecklist.CONSTRUCTOR:
+              staticResId = R.string.ActionPinnedChecklist;
+              break;
             case TdApi.MessageLocation.CONSTRUCTOR:
-              staticResId = ((TdApi.MessageLocation) message.content).livePeriod > 0 ?
-                R.string.ActionPinnedGeoLive :
-                R.string.ActionPinnedGeo;
+              staticResId = R.string.ActionPinnedGeo;
+              break;
+            case TdApi.MessageLiveLocation.CONSTRUCTOR:
+              staticResId = R.string.ActionPinnedGeoLive;
               break;
             case TdApi.MessageVenue.CONSTRUCTOR:
               staticResId = R.string.ActionPinnedGeo;
               break;
-            case TdApi.MessageVideoNote.CONSTRUCTOR:
-              staticResId = R.string.ActionPinnedRound;
-              break;
             case TdApi.MessageContact.CONSTRUCTOR:
               staticResId = R.string.ActionPinnedContact;
               break;
+            case TdApi.MessageStory.CONSTRUCTOR:
+              staticResId = R.string.ActionPinnedStory;
+              break;
+            case TdApi.MessagePaidMedia.CONSTRUCTOR: {
+              TdApi.MessagePaidMedia paidMedia = (TdApi.MessagePaidMedia) message.content;
+              MediaType type = MediaType.valueOf(paidMedia);
+              if (paidMedia.media.length == 1) {
+                switch (type) {
+                  case PHOTOS: staticResId = R.string.ActionPinnedPaidPhoto; break;
+                  case VIDEOS: staticResId = R.string.ActionPinnedPaidVideo; break;
+                  case MIXED: staticResId = isChannel() ? R.string.ActionPinnedPaidPost : R.string.ActionPinnedPaidContent; break;
+                  default: throw new UnsupportedOperationException();
+                }
+              } else {
+                int pluralRes;
+                switch (type) {
+                  case PHOTOS: pluralRes = R.string.ActionPinnedXPaidPhotos; break;
+                  case VIDEOS: pluralRes = R.string.ActionPinnedXPaidVideos; break;
+                  case MIXED: pluralRes = R.string.ActionPinnedXPaidMedia; break;
+                  default: throw new UnsupportedOperationException();
+                }
+                format = Lang.plural(pluralRes, paidMedia.media.length);
+                staticResId = 0;
+              }
+              break;
+            }
             case TdApi.MessageDice.CONSTRUCTOR: // TODO?
               // unreachable
             case TdApi.MessageAnimatedEmoji.CONSTRUCTOR:
             case TdApi.MessageText.CONSTRUCTOR:
+            case TdApi.MessageRichMessage.CONSTRUCTOR:
               // cannot be pinned
             case TdApi.MessageBasicGroupChatCreate.CONSTRUCTOR:
             case TdApi.MessageCall.CONSTRUCTOR:
+            case TdApi.MessageGroupCall.CONSTRUCTOR:
             case TdApi.MessageChatAddMembers.CONSTRUCTOR:
             case TdApi.MessageChatChangePhoto.CONSTRUCTOR:
             case TdApi.MessageChatChangeTitle.CONSTRUCTOR:
             case TdApi.MessageChatDeleteMember.CONSTRUCTOR:
             case TdApi.MessageChatDeletePhoto.CONSTRUCTOR:
             case TdApi.MessageChatJoinByLink.CONSTRUCTOR:
+            case TdApi.MessageChatJoinFromCommunity.CONSTRUCTOR:
             case TdApi.MessageChatJoinByRequest.CONSTRUCTOR:
             case TdApi.MessageChatSetTheme.CONSTRUCTOR:
+            case TdApi.MessageChatSetBackground.CONSTRUCTOR:
             case TdApi.MessageChatSetMessageAutoDeleteTime.CONSTRUCTOR:
             case TdApi.MessageChatUpgradeFrom.CONSTRUCTOR:
             case TdApi.MessageChatUpgradeTo.CONSTRUCTOR:
             case TdApi.MessageContactRegistered.CONSTRUCTOR:
             case TdApi.MessageGameScore.CONSTRUCTOR:
             case TdApi.MessageGiftedPremium.CONSTRUCTOR:
+            case TdApi.MessageGiftedStars.CONSTRUCTOR:
+            case TdApi.MessageGiftedGrams.CONSTRUCTOR:
+            case TdApi.MessagePremiumGiftCode.CONSTRUCTOR:
+            case TdApi.MessageGiveawayCreated.CONSTRUCTOR:
+            case TdApi.MessageGiveawayCompleted.CONSTRUCTOR:
+            case TdApi.MessageGiveawayWinners.CONSTRUCTOR:
+            case TdApi.MessageGiveaway.CONSTRUCTOR:
             case TdApi.MessageInviteVideoChatParticipants.CONSTRUCTOR:
             case TdApi.MessagePassportDataReceived.CONSTRUCTOR:
             case TdApi.MessagePassportDataSent.CONSTRUCTOR:
             case TdApi.MessagePaymentSuccessful.CONSTRUCTOR:
+            case TdApi.MessagePaymentRefunded.CONSTRUCTOR:
             case TdApi.MessagePaymentSuccessfulBot.CONSTRUCTOR:
             case TdApi.MessagePinMessage.CONSTRUCTOR:
+            case TdApi.MessagePaidMessagePriceChanged.CONSTRUCTOR:
+            case TdApi.MessagePaidMessagesRefunded.CONSTRUCTOR:
             case TdApi.MessageProximityAlertTriggered.CONSTRUCTOR:
             case TdApi.MessageScreenshotTaken.CONSTRUCTOR:
             case TdApi.MessageSupergroupChatCreate.CONSTRUCTOR:
@@ -298,13 +480,49 @@ public final class TGMessageService extends TGMessageServiceImpl {
             case TdApi.MessageVideoChatStarted.CONSTRUCTOR:
             case TdApi.MessageWebAppDataReceived.CONSTRUCTOR:
             case TdApi.MessageWebAppDataSent.CONSTRUCTOR:
-            case TdApi.MessageWebsiteConnected.CONSTRUCTOR:
+            case TdApi.MessageForumTopicCreated.CONSTRUCTOR:
+            case TdApi.MessageForumTopicEdited.CONSTRUCTOR:
+            case TdApi.MessageForumTopicIsClosedToggled.CONSTRUCTOR:
+            case TdApi.MessageForumTopicIsHiddenToggled.CONSTRUCTOR:
+            case TdApi.MessageSuggestProfilePhoto.CONSTRUCTOR:
+            case TdApi.MessageSuggestBirthdate.CONSTRUCTOR:
+            case TdApi.MessageUsersShared.CONSTRUCTOR:
+            case TdApi.MessageChatShared.CONSTRUCTOR:
+            case TdApi.MessageBotWriteAccessAllowed.CONSTRUCTOR:
+            case TdApi.MessageChatBoost.CONSTRUCTOR:
+            case TdApi.MessageGiveawayPrizeStars.CONSTRUCTOR:
+            case TdApi.MessageGift.CONSTRUCTOR:
+            case TdApi.MessageUpgradedGift.CONSTRUCTOR:
+            case TdApi.MessageUpgradedGiftPurchaseOffer.CONSTRUCTOR:
+            case TdApi.MessageUpgradedGiftPurchaseOfferRejected.CONSTRUCTOR:
+            case TdApi.MessageStakeDice.CONSTRUCTOR:
+            case TdApi.MessageRefundedUpgradedGift.CONSTRUCTOR:
+            case TdApi.MessageChecklistTasksAdded.CONSTRUCTOR:
+            case TdApi.MessageChecklistTasksDone.CONSTRUCTOR:
+            case TdApi.MessageDirectMessagePriceChanged.CONSTRUCTOR:
+            case TdApi.MessageSuggestedPostApprovalFailed.CONSTRUCTOR:
+            case TdApi.MessageSuggestedPostApproved.CONSTRUCTOR:
+            case TdApi.MessageSuggestedPostDeclined.CONSTRUCTOR:
+            case TdApi.MessageSuggestedPostPaid.CONSTRUCTOR:
+            case TdApi.MessageSuggestedPostRefunded.CONSTRUCTOR:
+            case TdApi.MessageChatHasProtectedContentDisableRequested.CONSTRUCTOR:
+            case TdApi.MessageChatHasProtectedContentToggled.CONSTRUCTOR:
+            case TdApi.MessageChatOwnerChanged.CONSTRUCTOR:
+            case TdApi.MessageChatOwnerLeft.CONSTRUCTOR:
+            case TdApi.MessageManagedBotCreated.CONSTRUCTOR:
+            case TdApi.MessagePollOptionAdded.CONSTRUCTOR:
+            case TdApi.MessagePollOptionDeleted.CONSTRUCTOR:
+            case TdApi.MessageChatAddedToCommunity.CONSTRUCTOR:
+            case TdApi.MessageChatRemovedFromCommunity.CONSTRUCTOR:
               staticResId = R.string.ActionPinnedNoText;
               break;
             default:
-              throw new UnsupportedOperationException(message.content.toString());
+              Td.assertMessageContent_af730a78();
+              throw Td.unsupported(message.content);
           }
-          String format = Lang.getString(staticResId);
+          if (format == null) {
+            format = Lang.getString(staticResId);
+          }
           int startIndex = format.indexOf("**");
           int endIndex = startIndex != -1 ? format.indexOf("**", startIndex + 2) : -1;
           if (startIndex != -1 && endIndex != -1) {
@@ -359,7 +577,12 @@ public final class TGMessageService extends TGMessageServiceImpl {
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageSupergroupChatCreate supergroupCreate) {
     super(context, msg);
     setTextCreator(() -> {
-      if (msg.isChannelPost) {
+      TdApi.Supergroup supergroup = tdlib().chatToSupergroup(msg.chatId);
+      if (supergroup != null && supergroup.isDirectMessagesGroup) {
+        return getText(
+          R.string.direct_messages_enabled
+        );
+      } else if (msg.isChannelPost) {
         return getText(
           R.string.channel_create_somebody,
           new BoldArgument(supergroupCreate.title)
@@ -374,6 +597,29 @@ public final class TGMessageService extends TGMessageServiceImpl {
           R.string.group_created,
           new SenderArgument(sender),
           new BoldArgument(supergroupCreate.title)
+        );
+      }
+    });
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageDirectMessagePriceChanged directMessagePriceChanged) {
+    super(context, msg);
+    setTextCreator(() -> {
+      if (!directMessagePriceChanged.isEnabled) {
+        return getText(
+          R.string.channel_disable_dm,
+          new SenderArgument(sender)
+        );
+      } else if (directMessagePriceChanged.paidMessageStarCount == 0) {
+        return getText(
+          R.string.channel_enable_dm,
+          new SenderArgument(sender)
+        );
+      } else {
+        return getPlural(
+          R.string.channel_enable_dm_paid,
+          directMessagePriceChanged.paidMessageStarCount,
+          new SenderArgument(sender)
         );
       }
     });
@@ -487,6 +733,39 @@ public final class TGMessageService extends TGMessageServiceImpl {
     });
   }
 
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChatJoinFromCommunity joinFromCommunity) {
+    super(context, msg);
+    TdApi.Community community = tdlib.cache().community(joinFromCommunity.communityId);
+    if (community != null) {
+      setTextCreator(() -> {
+        if (msg.isOutgoing) {
+          return getText(
+            R.string.group_user_join_from_community_name_self
+          );
+        } else {
+          return getText(
+            R.string.group_user_join_from_community_name,
+            new SenderArgument(sender),
+            new BoldArgument(community.name)
+          );
+        }
+      });
+    } else {
+      setTextCreator(() -> {
+        if (msg.isOutgoing) {
+          return getText(
+            R.string.group_user_join_from_community_self
+          );
+        } else {
+          return getText(
+            R.string.group_user_join_from_community,
+            new SenderArgument(sender)
+          );
+        }
+      });
+    }
+  }
+
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChatJoinByRequest joinByRequest) {
     super(context, msg);
     setTextCreator(() -> {
@@ -597,14 +876,107 @@ public final class TGMessageService extends TGMessageServiceImpl {
     });
   }
 
-  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageWebsiteConnected websiteConnected) {
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChatHasProtectedContentDisableRequested chatHasProtectedContentDisableRequested) {
     super(context, msg);
-    setTextCreator(() ->
-      getText(
-        R.string.BotWebsiteAllowed,
-        new BoldArgument(websiteConnected.domainName)
-      )
-    );
+    setTextCreator(() -> {
+      if (chatHasProtectedContentDisableRequested.isExpired) {
+        return getText(
+          R.string.ActionSharingRequestExpired
+        );
+      } else if (msg.isOutgoing) {
+        return getText(
+          R.string.ActionSharingRequestOut
+        );
+      } else {
+        return getText(
+          R.string.ActionSharingRequest,
+          new SenderArgument(sender)
+        );
+      }
+    });
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChatHasProtectedContentToggled chatHasProtectedContentToggled) {
+    super(context, msg);
+    setTextCreator(() -> {
+      if (chatHasProtectedContentToggled.oldHasProtectedContent != chatHasProtectedContentToggled.newHasProtectedContent) {
+        if (msg.isOutgoing) {
+          return getText(
+            chatHasProtectedContentToggled.newHasProtectedContent ?
+              R.string.ActionSharingDisabledOut :
+              R.string.ActionSharingEnabledOut
+          );
+        } else {
+          return getText(
+            chatHasProtectedContentToggled.newHasProtectedContent ?
+              R.string.ActionSharingDisabled :
+              R.string.ActionSharingEnabled,
+            new SenderArgument(sender)
+          );
+        }
+      } else {
+        return getText(
+          chatHasProtectedContentToggled.newHasProtectedContent ?
+            R.string.ActionSharingStillDisabled :
+            R.string.ActionSharingStillEnabled
+        );
+      }
+    });
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageManagedBotCreated botCreated) {
+    super(context, msg);
+    setTextCreator(() -> {
+      TdlibSender createdId = new TdlibSender(tdlib, msg.chatId, new TdApi.MessageSenderUser(botCreated.botUserId));
+      TdlibSender ownerId = new TdlibSender(tdlib, msg.chatId, getChatSenderId());
+      return getText(
+        R.string.ActionCreatedManagedBot,
+        new SenderArgument(createdId),
+        new SenderArgument(ownerId)
+      );
+    });
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageBotWriteAccessAllowed botWriteAccessAllowed) {
+    super(context, msg);
+    switch (botWriteAccessAllowed.reason.getConstructor()) {
+      case TdApi.BotWriteAccessAllowReasonConnectedWebsite.CONSTRUCTOR: {
+        TdApi.BotWriteAccessAllowReasonConnectedWebsite connectedWebsite = (TdApi.BotWriteAccessAllowReasonConnectedWebsite) botWriteAccessAllowed.reason;
+        setTextCreator(() ->
+          getText(
+            R.string.BotWebsiteAllowed,
+            new BoldArgument(connectedWebsite.domainName)
+          )
+        );
+        break;
+      }
+      case TdApi.BotWriteAccessAllowReasonAddedToAttachmentMenu.CONSTRUCTOR: {
+        setTextCreator(() ->
+          getText(R.string.BotAttachAllowed)
+        );
+        break;
+      }
+      case TdApi.BotWriteAccessAllowReasonLaunchedWebApp.CONSTRUCTOR: {
+        TdApi.BotWriteAccessAllowReasonLaunchedWebApp launchedWebApp = (TdApi.BotWriteAccessAllowReasonLaunchedWebApp) botWriteAccessAllowed.reason;
+        setTextCreator(() ->
+          getText(
+            R.string.BotAppAllowed,
+            new BoldArgument(launchedWebApp.webApp.title)
+          )
+        );
+        break;
+      }
+      case TdApi.BotWriteAccessAllowReasonAcceptedRequest.CONSTRUCTOR: {
+        setTextCreator(() ->
+          getText(R.string.BotWebappAllowed)
+        );
+        break;
+      }
+      default: {
+        Td.assertBotWriteAccessAllowReason_d7597302();
+        throw Td.unsupported(botWriteAccessAllowed.reason);
+      }
+    }
   }
 
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChatSetMessageAutoDeleteTime setMessageAutoDeleteTime) {
@@ -616,6 +988,8 @@ public final class TGMessageService extends TGMessageServiceImpl {
           return getText(
             isUserChat ?
               R.string.YouDisabledTimer :
+            msg.isChannelPost ?
+              R.string.YouDisabledAutoDeletePosts :
               R.string.YouDisabledAutoDelete
           );
         } else {
@@ -689,7 +1063,7 @@ public final class TGMessageService extends TGMessageServiceImpl {
     });
     if (gameScore.gameMessageId != 0) {
       setDisplayMessage(msg.chatId, gameScore.gameMessageId, (message) -> {
-        if (message.content.getConstructor() != TdApi.MessageGame.CONSTRUCTOR) {
+        if (!Td.isGame(message.content)) {
           return false;
         }
         setTextCreator(() -> {
@@ -730,7 +1104,7 @@ public final class TGMessageService extends TGMessageServiceImpl {
         paymentSuccessful.invoiceChatId,
         paymentSuccessful.invoiceMessageId,
         message -> {
-          if (message.content.getConstructor() != TdApi.MessageInvoice.CONSTRUCTOR) {
+          if (!Td.isInvoice(message.content)) {
             return false;
           }
           setTextCreator(() ->
@@ -745,6 +1119,20 @@ public final class TGMessageService extends TGMessageServiceImpl {
         }
       );
     }
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessagePaymentRefunded paymentRefunded) {
+    super(context, msg);
+    // TODO (?) more info on click
+    String amount = CurrencyUtils.buildAmount(paymentRefunded.currency, paymentRefunded.totalAmount);
+    TdlibSender targetSender = new TdlibSender(tdlib, msg.chatId, paymentRefunded.ownerId);
+    setTextCreator(() ->
+      getText(
+        R.string.PaymentRefunded,
+        new SenderArgument(targetSender),
+        new BoldArgument(amount)
+      )
+    );
   }
 
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageWebAppDataSent webAppDataSent) {
@@ -866,24 +1254,9 @@ public final class TGMessageService extends TGMessageServiceImpl {
     });
   }
 
-  // Forum Topics
+  // Unsupported service message (any)
 
-  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageForumTopicCreated forumTopicCreated) {
-    super(context, msg);
-    setUnsupportedTextCreator();
-  }
-
-  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageForumTopicEdited forumTopicEdited) {
-    super(context, msg);
-    setUnsupportedTextCreator();
-  }
-
-  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageForumTopicIsClosedToggled forumTopicIsClosedToggled) {
-    super(context, msg);
-    setUnsupportedTextCreator();
-  }
-
-  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageForumTopicIsHiddenToggled forumTopicIsHiddenToggled) {
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageUnsupported unsupported) {
     super(context, msg);
     setUnsupportedTextCreator();
   }
@@ -891,6 +1264,441 @@ public final class TGMessageService extends TGMessageServiceImpl {
   private void setUnsupportedTextCreator () {
     setTextCreator(() ->
       getText(R.string.UnsupportedMessage)
+    );
+  }
+
+  // Chat owner changes
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChatOwnerChanged chatOwnerChanged) {
+    super(context, msg);
+    setTextCreator(() -> {
+      TdlibSender targetSender = new TdlibSender(tdlib, msg.chatId, new TdApi.MessageSenderUser(chatOwnerChanged.newOwnerUserId));
+      return getText(
+        R.string.ActionChatOwnerChanged,
+        new SenderArgument(targetSender)
+      );
+    });
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChatOwnerLeft chatOwnerLeft) {
+    super(context, msg);
+    setTextCreator(() -> {
+      if (chatOwnerLeft.newOwnerUserId != 0) {
+        TdlibSender targetSender = new TdlibSender(tdlib, msg.chatId, new TdApi.MessageSenderUser(chatOwnerLeft.newOwnerUserId));
+        return getText(
+          R.string.ActionChatOwnerLeftTo,
+          new SenderArgument(targetSender)
+        );
+      } else {
+        return getText(
+          R.string.ActionChatOwnerLeft
+        );
+      }
+    });
+  }
+
+  // Paid messages
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessagePaidMessagesRefunded paidMessagesRefunded) {
+    super(context, msg);
+    setTextCreator(() -> {
+      if (msg.isOutgoing) {
+        return getPlural(
+          R.string.ActionPaidMessagesRefundedOut,
+          paidMessagesRefunded.messageCount,
+          new BoldArgument(Lang.plural(R.string.format_refundedStars, paidMessagesRefunded.starCount))
+        );
+      } else {
+        return getPlural(
+          R.string.ActionPaidMessagesRefunded,
+          paidMessagesRefunded.messageCount,
+          new SenderArgument(sender),
+          new BoldArgument(Lang.plural(R.string.format_refundedStars, paidMessagesRefunded.starCount))
+        );
+      }
+    });
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessagePaidMessagePriceChanged paidMessagePriceChanged) {
+    super(context, msg);
+    setTextCreator(() -> {
+      if (msg.isOutgoing) {
+        return getPlural(
+          R.string.ActionPriceChangedOut,
+          paidMessagePriceChanged.paidMessageStarCount
+        );
+      } else {
+        return getPlural(
+          R.string.ActionPriceChanged,
+          paidMessagePriceChanged.paidMessageStarCount,
+          new SenderArgument(sender)
+        );
+      }
+    });
+  }
+
+  // Forum Topics
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageForumTopicCreated forumTopicCreated) {
+    super(context, msg);
+    setTextCreator(() -> {
+      boolean needName = !sender.isBot() && sender.isUser();
+      if (forumTopicCreated.icon.customEmojiId != 0) {
+        return getText(
+          needName ? (
+            msg.isOutgoing ?
+              R.string.ActionTopicCreateIconOut :
+              R.string.ActionTopicCreateIcon
+          ) :
+            R.string.ActionTopicCreatedIcon,
+          new CustomEmojiArgument(tdlib, forumTopicCreated.icon.customEmojiId, null),
+          new BoldArgument(forumTopicCreated.name),
+          new SenderArgument(sender)
+        );
+      } else {
+        return getText(
+          needName ? (
+            msg.isOutgoing ?
+              R.string.ActionTopicCreateOut :
+              R.string.ActionTopicCreate
+            ) :
+            R.string.ActionTopicCreated,
+          new BoldArgument(forumTopicCreated.name),
+          new SenderArgument(sender)
+        );
+      }
+    });
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageForumTopicEdited forumTopicEdited) {
+    super(context, msg);
+    setTextCreator(() -> {
+      if (forumTopicEdited.editIconCustomEmojiId) {
+        if (StringUtils.isEmpty(forumTopicEdited.name)) {
+          return getText(
+            (msg.isOutgoing ?
+              R.string.ActionTopicChangedIconOut :
+              R.string.ActionTopicChangedIcon
+            ),
+            new CustomEmojiArgument(tdlib, forumTopicEdited.iconCustomEmojiId, null),
+            new SenderArgument(sender)
+          );
+        } else {
+          return getText(
+            (msg.isOutgoing ?
+              R.string.ActionTopicChangedIconNameOut :
+              R.string.ActionTopicChangedIconName
+            ),
+            new CustomEmojiArgument(tdlib, forumTopicEdited.iconCustomEmojiId, null),
+            new BoldArgument(forumTopicEdited.name),
+            new SenderArgument(sender)
+          );
+        }
+      } else {
+        return getText(
+          msg.isOutgoing ?
+            R.string.ActionTopicRenamedOut :
+            R.string.ActionTopicRenamed,
+          new BoldArgument(forumTopicEdited.name),
+          new SenderArgument(sender)
+        );
+      }
+    });
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageForumTopicIsClosedToggled forumTopicIsClosedToggled) {
+    super(context, msg);
+    setTextCreator(() ->
+      getText(
+        forumTopicIsClosedToggled.isClosed ?
+          (msg.isOutgoing ? R.string.ActionUnknownTopicClosedOut : R.string.ActionUnknownTopicClosed) :
+          (msg.isOutgoing ? R.string.ActionUnknownTopicReopenedOut : R.string.ActionUnknownTopicReopened),
+        new SenderArgument(sender)
+      )
+    );
+    withTopicInfo(inPlace -> {
+      setTextCreator(() -> {
+        TdApi.ForumTopicInfo topicInfo = topicInfo();
+        if (topicInfo.isGeneral) {
+          return getText(
+            forumTopicIsClosedToggled.isClosed ?
+              (msg.isOutgoing ? R.string.ActionGeneralTopicClosedOut : R.string.ActionGeneralTopicClosed) :
+              (msg.isOutgoing ? R.string.ActionGeneralTopicReopenedOut : R.string.ActionGeneralTopicReopened),
+            new SenderArgument(sender)
+          );
+        } else {
+          return getText(
+            forumTopicIsClosedToggled.isClosed ?
+              (msg.isOutgoing ? R.string.ActionTopicClosedOut : R.string.ActionTopicClosed) :
+              (msg.isOutgoing ? R.string.ActionTopicReopenedOut : R.string.ActionTopicReopened),
+            new CustomEmojiArgument(tdlib, topicInfo.icon.customEmojiId, null),
+            new BoldArgument(topicInfo.name),
+            new SenderArgument(sender)
+          );
+        }
+      });
+      if (!inPlace) {
+        runOnUiThreadOptional(this::updateServiceMessage);
+      }
+    });
+  }
+
+  @Override
+  protected void onTopicInfoUpdated () {
+    if (msg.content.getConstructor() == TdApi.MessageForumTopicIsClosedToggled.CONSTRUCTOR) {
+      runOnUiThreadOptional(this::updateServiceMessage);
+    }
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageForumTopicIsHiddenToggled forumTopicIsHiddenToggled) {
+    super(context, msg);
+    setTextCreator(() -> {
+      if (msg.isOutgoing) {
+        return getText(
+          forumTopicIsHiddenToggled.isHidden ?
+            R.string.ActionTopicHiddenOut :
+            R.string.ActionTopicUnhiddenOut
+        );
+      } else {
+        return getText(
+          forumTopicIsHiddenToggled.isHidden ?
+            R.string.ActionTopicHidden :
+            R.string.ActionTopicUnhidden,
+          new SenderArgument(sender)
+        );
+      }
+    });
+  }
+
+  // Poll
+  
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessagePollOptionAdded pollOptionAdded) {
+    super(context, msg);
+    setPollOptionAddDeleteTextCreator(false, pollOptionAdded.text, pollOptionAdded.pollMessageId);
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessagePollOptionDeleted pollOptionDeleted) {
+    super(context, msg);
+    setPollOptionAddDeleteTextCreator(true, pollOptionDeleted.text, pollOptionDeleted.pollMessageId);
+  }
+
+  private void setPollOptionAddDeleteTextCreator (boolean isDelete, TdApi.FormattedText text, long pollMessageId) {
+    setTextCreator(() -> {
+      if (msg.isOutgoing) {
+        return getText(isDelete ? R.string.ActionDeletedPollOutOption : R.string.ActionAddedPollOutOption,
+          new FormattedTextArgument(text)
+        );
+      } else {
+        return getText(isDelete ? R.string.ActionDeletedPollOption : R.string.ActionAddedPollOption,
+          new SenderArgument(sender),
+          new FormattedTextArgument(text)
+        );
+      }
+    });
+    setDisplayMessage(msg.chatId, pollMessageId, message -> {
+      if (!Td.isPoll(message.content)) {
+        return false;
+      }
+      setTextCreator(() -> {
+        if (msg.isOutgoing) {
+          return getText(isDelete ? R.string.ActionDeletedPollOutOptionMsg : R.string.ActionAddedPollOutOptionMsg,
+            new FormattedTextArgument(text),
+            new MessageArgument(message, ((TdApi.MessagePoll) message.content).poll.question)
+          );
+        } else {
+          return getText(isDelete ? R.string.ActionDeletedPollOptionMsg : R.string.ActionAddedPollOptionMsg,
+            new SenderArgument(sender),
+            new FormattedTextArgument(text),
+            new MessageArgument(message, ((TdApi.MessagePoll) message.content).poll.question)
+          );
+        }
+      });
+      return true;
+    });
+  }
+
+  // Checklist
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChecklistTasksAdded checklistTasksAdded) {
+    super(context, msg);
+    setTextCreator(() -> {
+      TdApi.FormattedText tasksList = buildChecklistTasksList(checklistTasksAdded.tasks, null);
+      if (msg.isOutgoing) {
+        return getText(
+          R.string.ActionChecklistAdd,
+          new FormattedTextArgument(tasksList)
+        );
+      } else {
+        return getText(
+          R.string.ActionChecklistAdd,
+          new SenderArgument(sender),
+          new FormattedTextArgument(tasksList)
+        );
+      }
+    });
+    setDisplayMessage(msg.chatId, checklistTasksAdded.checklistMessageId, message -> {
+      if (!Td.isChecklist(message.content)) {
+        return false;
+      }
+      setTextCreator(() -> {
+        TdApi.FormattedText tasksList = buildChecklistTasksList(checklistTasksAdded.tasks, null);
+        if (msg.isOutgoing) {
+          return getText(
+            R.string.ActionChecklistAddOutMsg,
+            new FormattedTextArgument(tasksList),
+            new MessageArgument(message, ((TdApi.MessageChecklist) message.content).list.title)
+          );
+        } else {
+          return getText(
+            R.string.ActionChecklistAddMsg,
+            new SenderArgument(sender),
+            new FormattedTextArgument(tasksList),
+            new MessageArgument(message, ((TdApi.MessageChecklist) message.content).list.title)
+          );
+        }
+      });
+      return true;
+    });
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChecklistTasksDone checklistTasksDone) {
+    super(context, msg);
+    setTextCreator(() -> {
+      int doneTasksCount = checklistTasksDone.markedAsDoneTaskIds.length;
+      int notDoneTasksCount = checklistTasksDone.markedAsNotDoneTaskIds.length;
+      if (msg.isOutgoing) {
+        if (doneTasksCount == 0 || notDoneTasksCount == 0) {
+          return getPlural(
+            notDoneTasksCount == 0 ?
+              R.string.ActionChecklistMarkDoneTasksOut :
+              R.string.ActionChecklistMarkNotDoneTasksOut,
+            doneTasksCount
+          );
+        } else {
+          return getText(
+            R.string.format_ActionChecklistMarkTasksOut,
+            new PlainArgument(Lang.plural(R.string.format_ActionChecklistMarkTasksOutDone, doneTasksCount)),
+            new PlainArgument(Lang.plural(R.string.format_ActionChecklistMarkTasksOutNotDone, notDoneTasksCount))
+          );
+        }
+      } else {
+        if (doneTasksCount == 0 || notDoneTasksCount == 0) {
+          return getPlural(
+            notDoneTasksCount == 0 ?
+              R.string.ActionChecklistMarkDoneTasks :
+              R.string.ActionChecklistMarkNotDoneTasks,
+            doneTasksCount,
+            new SenderArgument(sender)
+          );
+        } else {
+          return getText(
+            R.string.format_ActionChecklistMarkTasksOut,
+            new SenderArgument(sender),
+            new PlainArgument(Lang.plural(R.string.format_ActionChecklistMarkTasksDone, doneTasksCount)),
+            new PlainArgument(Lang.plural(R.string.format_ActionChecklistMarkTasksNotDone, notDoneTasksCount))
+          );
+        }
+      }
+    });
+    setDisplayMessage(msg.chatId, checklistTasksDone.checklistMessageId, message -> {
+      if (!Td.isChecklist(message.content)) {
+        return false;
+      }
+      setTextCreator(() -> {
+        TdApi.Checklist checklist = ((TdApi.MessageChecklist) message.content).list;
+        TdApi.FormattedText doneItems = buildChecklistTasksList(checklist.tasks, checklistTasksDone.markedAsDoneTaskIds);
+        TdApi.FormattedText undoneItems = buildChecklistTasksList(checklist.tasks, checklistTasksDone.markedAsNotDoneTaskIds);
+        if (msg.isOutgoing) {
+          if (undoneItems == null || doneItems == null) {
+            return getText(undoneItems == null ?
+                R.string.ActionChecklistMarkDoneOut :
+                R.string.ActionChecklistMarkNotDoneOut,
+              new FormattedTextArgument(undoneItems == null ? doneItems : undoneItems)
+            );
+          } else {
+            return getText(
+              R.string.ActionChecklistMarkOut,
+              new FormattedTextArgument(doneItems),
+              new FormattedTextArgument(undoneItems)
+            );
+          }
+        } else {
+          if (undoneItems == null || doneItems == null) {
+            return getText(undoneItems == null ?
+                R.string.ActionChecklistMarkDone :
+                R.string.ActionChecklistMarkNotDone,
+              new SenderArgument(sender),
+              new FormattedTextArgument(undoneItems == null ? doneItems : undoneItems)
+            );
+          } else {
+            return getText(
+              R.string.ActionChecklistMark,
+              new SenderArgument(sender),
+              new FormattedTextArgument(doneItems),
+              new FormattedTextArgument(undoneItems)
+            );
+          }
+        }
+      });
+      return true;
+    });
+  }
+
+  private static TdApi.FormattedText buildChecklistTasksList (TdApi.ChecklistTask[] tasks, int[] taskIds) {
+    int tasksCount = taskIds != null ? taskIds.length : tasks.length;
+    if (tasksCount == 0) {
+      return null;
+    }
+    TdApi.FormattedText formattedText = Td.emptyFormattedText();
+    for (int i = 0; i < tasksCount; i++) {
+      int taskId = taskIds != null ? taskIds[i] : tasks[i].id;
+      boolean isLast = i + 1 == tasksCount;
+      if (i > 0) {
+        String separator = Lang.getString(
+          isLast ?
+            R.string.format_ActionChecklistItemSeparatorLast :
+            R.string.format_ActionChecklistItemSeparator
+        );
+        formattedText = Td.concat(
+          formattedText,
+          new TdApi.FormattedText(separator, new TdApi.TextEntity[0])
+        );
+      }
+      TdApi.ChecklistTask item = taskIds != null ? TD.findTask(tasks, taskId) : tasks[i];
+      TdApi.FormattedText text = TD.format(
+        Lang.getString(R.string.format_ActionChecklistItem),
+        item != null ? item.text : new TdApi.FormattedText("?", new TdApi.TextEntity[0])
+      );
+      if (Td.isEmpty(formattedText)) {
+        formattedText = text;
+      } else {
+        formattedText = Td.concat(
+          formattedText,
+          text
+        );
+      }
+    }
+    return formattedText;
+  }
+
+  // Community
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChatAddedToCommunity chatAddedToCommunity) {
+    super(context, msg);
+    setTextCreator(() -> {
+      TdApi.Community community = tdlib().cache().community(chatAddedToCommunity.communityId);
+      if (community != null) {
+        return getText(R.string.ActionChatAddedToCommunity, new BoldArgument(community.name));
+      } else {
+        return getText(R.string.ActionChatAddedToCommunityUnknown);
+      }
+    });
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.MessageChatRemovedFromCommunity chatRemovedFromCommunity) {
+    super(context, msg);
+    setTextCreator(() ->
+      getText(R.string.ActionChatRemovedFromCommunity)
     );
   }
 
@@ -918,8 +1726,8 @@ public final class TGMessageService extends TGMessageServiceImpl {
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventMessageEdited messageEdited) {
     super(context, msg);
     setTextCreator(() -> {
-      if (messageEdited.newMessage.content.getConstructor() == TdApi.MessageText.CONSTRUCTOR ||
-          messageEdited.newMessage.content.getConstructor() == TdApi.MessageAnimatedEmoji.CONSTRUCTOR) {
+      if (Td.isText(messageEdited.newMessage.content) ||
+          Td.isAnimatedEmoji(messageEdited.newMessage.content)) {
         return getText(R.string.EventLogEditedMessages, new SenderArgument(sender));
       } else if (Td.isEmpty(Td.textOrCaption(messageEdited.newMessage.content))) {
         return getText(R.string.EventLogRemovedCaption, new SenderArgument(sender));
@@ -933,7 +1741,7 @@ public final class TGMessageService extends TGMessageServiceImpl {
     super(context, msg);
     setTextCreator(() -> {
       final boolean isQuiz =
-        pollStopped.message.content.getConstructor() == TdApi.MessagePoll.CONSTRUCTOR &&
+        Td.isPoll(pollStopped.message.content) &&
         ((TdApi.MessagePoll) pollStopped.message.content).poll.type.getConstructor() == TdApi.PollTypeQuiz.CONSTRUCTOR;
       return getText(
         isQuiz ?
@@ -973,6 +1781,18 @@ public final class TGMessageService extends TGMessageServiceImpl {
         signMessagesToggled.signMessages ?
           R.string.EventLogToggledSignaturesOn :
           R.string.EventLogToggledSignaturesOff,
+        new SenderArgument(sender)
+      )
+    );
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventShowMessageSenderToggled showMessageSenderToggled) {
+    super(context, msg);
+    setTextCreator(() ->
+      getText(
+        showMessageSenderToggled.showMessageSender ?
+          R.string.EventLogToggledShowSenderOn :
+          R.string.EventLogToggledShowSenderOff,
         new SenderArgument(sender)
       )
     );
@@ -1201,6 +2021,64 @@ public final class TGMessageService extends TGMessageServiceImpl {
     });
   }
 
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventAutomaticTranslationToggled automaticTranslationToggled) {
+    super(context, msg);
+    setTextCreator(() -> {
+      if (msg.isOutgoing) {
+        return getText(
+          automaticTranslationToggled.hasAutomaticTranslation ?
+            R.string.EventLogTranslationOnYou :
+            R.string.EventLogTranslationOffYou
+        );
+      } else {
+        return getText(
+          automaticTranslationToggled.hasAutomaticTranslation ?
+            R.string.EventLogTranslationOn :
+            R.string.EventLogTranslationOff
+        );
+      }
+    });
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventMemberTagChanged memberTagChanged) {
+    super(context, msg);
+    TdlibSender targetSender = new TdlibSender(tdlib, msg.chatId, new TdApi.MessageSenderUser(memberTagChanged.userId));
+    setTextCreator(() -> {
+      boolean isRemoval = StringUtils.isEmpty(memberTagChanged.newTag);
+      final FormattedArgument tag = new BoldArgument(
+        isRemoval ?
+          memberTagChanged.oldTag :
+          memberTagChanged.newTag
+      );
+      if (msg.isOutgoing) {
+        return getText(
+          isRemoval ?
+            R.string.EventLogTagYouRemoved :
+            R.string.EventLogTagYouSet,
+          tag,
+          new SenderArgument(targetSender)
+        );
+      } else if (targetSender.isSelf()) {
+        return getText(
+          isRemoval ?
+            R.string.EventLogTagRemovedYour :
+            R.string.EventLogTagSetYour,
+          tag,
+          new SenderArgument(sender)
+        );
+      } else {
+        return getText(
+          isRemoval ?
+            R.string.EventLogTagRemoved :
+            R.string.EventLogTagSet,
+          tag,
+          new SenderArgument(sender),
+          new SenderArgument(targetSender)
+        );
+      }
+    });
+  }
+
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventForumTopicCreated forumTopicCreated) {
     this(context, msg, forumTopicCreated.topicInfo, R.string.EventLogForumTopicCreated, R.string.EventLogForumTopicCreatedYou);
   }
@@ -1252,25 +2130,6 @@ public final class TGMessageService extends TGMessageServiceImpl {
         );
       }
     });
-    if (forumTopicInfo != null) {
-      setDisplayMessage(msg.chatId, forumTopicInfo.messageThreadId, message -> {
-        setTextCreator(() -> {
-          if (msg.isOutgoing) {
-            return getText(
-              topicTextOutgoingResId,
-              new MessageArgument(message, new TdApi.FormattedText(topicName, null))
-            );
-          } else {
-            return getText(
-              topicTextResId,
-              new SenderArgument(sender),
-              new MessageArgument(message, new TdApi.FormattedText(topicName, null))
-            );
-          }
-        });
-        return true;
-      });
-    }
   }
 
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventForumTopicEdited forumTopicEdited) {
@@ -1383,6 +2242,26 @@ public final class TGMessageService extends TGMessageServiceImpl {
     }
   }
 
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventCustomEmojiStickerSetChanged customEmojiStickerSetChanged) {
+    super(context, msg);
+    setTextCreator(() ->
+      getText(
+        customEmojiStickerSetChanged.newStickerSetId != 0 ?
+          R.string.XChangedGroupEmojiSet :
+          R.string.XRemovedGroupStickerSet,
+        new SenderArgument(sender)
+      )
+    );
+    long stickerSetId = customEmojiStickerSetChanged.newStickerSetId != 0 ?
+      customEmojiStickerSetChanged.newStickerSetId :
+      customEmojiStickerSetChanged.oldStickerSetId;
+    if (stickerSetId != 0) {
+      setOnClickListener(() ->
+        tdlib.ui().showStickerSet(controller(), stickerSetId, openParameters())
+      );
+    }
+  }
+
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventLinkedChatChanged linkedChatChanged) {
     super(context, msg);
     TdlibSender linkedChat = new TdlibSender(tdlib, msg.chatId, new TdApi.MessageSenderChat(
@@ -1445,7 +2324,7 @@ public final class TGMessageService extends TGMessageServiceImpl {
         tdlib.ui().openMap(this, new MapController.Args(
             chatLocation.location.latitude,
             chatLocation.location.longitude
-          ).setChatId(msg.chatId, messagesController().getMessageThreadId())
+          ).setChatId(msg.chatId, messagesController().getMessageTopicId())
             .setLocationOwnerChatId(msg.chatId)
             .setIsFaded(locationChanged.newLocation == null)
         )
@@ -1480,6 +2359,219 @@ public final class TGMessageService extends TGMessageServiceImpl {
     if (chatPhoto != null) {
       setDisplayChatPhoto(chatPhoto);
     }
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventBackgroundChanged backgroundChanged) {
+    super(context, msg);
+    setTextCreator(() -> {
+      if (backgroundChanged.newBackground != null) {
+        if (msg.isOutgoing) {
+          return getText(
+            msg.isChannelPost ? R.string.EventLogChannelBackgroundChangedYou : R.string.EventLogChatBackgroundChangedYou
+          );
+        } else {
+          return getText(
+            msg.isChannelPost ? R.string.EventLogChannelBackgroundChanged : R.string.EventLogChatBackgroundChanged,
+            new SenderArgument(sender)
+          );
+        }
+      } else {
+        if (msg.isOutgoing) {
+          return getText(
+            msg.isChannelPost ? R.string.EventLogChannelBackgroundUnsetYou : R.string.EventLogChatBackgroundUnsetYou
+          );
+        } else {
+          return getText(
+            msg.isChannelPost ? R.string.EventLogChannelBackgroundUnset : R.string.EventLogChatBackgroundUnset,
+            new SenderArgument(sender)
+          );
+        }
+      }
+    });
+  }
+
+  private void setBackgroundTextCreator (int oldAccentColorId, int newAccentColorId,
+                                         long oldBackgroundCustomEmojiId, long newBackgroundCustomEmojiId,
+                                         boolean isProfile) {
+    setTextCreator(() -> {
+      if (oldBackgroundCustomEmojiId == newBackgroundCustomEmojiId) {
+        // Only accent color changed
+        if (isProfile && (oldAccentColorId == -1 || newAccentColorId == -1)) {
+          boolean isUnset = newAccentColorId == -1;
+          int accentColorId = isUnset ?
+            oldAccentColorId :
+            newAccentColorId;
+          if (msg.isOutgoing) {
+            return getText(
+              isUnset ? R.string.EventLogProfileColorUnsetYou : R.string.EventLogProfileColorSetYou,
+              new AccentColorArgument(tdlib.accentColor(accentColorId))
+            );
+          } else {
+            return getText(
+              isUnset ? R.string.EventLogProfileColorUnset : R.string.EventLogProfileColorSet,
+              new SenderArgument(sender),
+              new AccentColorArgument(tdlib.accentColor(accentColorId))
+            );
+          }
+        } else {
+          if (msg.isOutgoing) {
+            return getText(
+              isProfile ? R.string.EventLogProfileColorChangedYou : R.string.EventLogAccentColorChangedYou,
+              new AccentColorArgument(tdlib.accentColor(oldAccentColorId)),
+              new AccentColorArgument(tdlib.accentColor(newAccentColorId))
+            );
+          } else {
+            return getText(
+              isProfile ? R.string.EventLogProfileColorChanged : R.string.EventLogAccentColorChanged,
+              new SenderArgument(sender),
+              new AccentColorArgument(tdlib.accentColor(oldAccentColorId)),
+              new AccentColorArgument(tdlib.accentColor(newAccentColorId))
+            );
+          }
+        }
+      } else if (oldAccentColorId == newAccentColorId) {
+        // Only background changed
+        TdlibAccentColor repaintAccentColor = newAccentColorId != -1 ? tdlib.accentColor(newAccentColorId) : null;
+        if (newBackgroundCustomEmojiId == 0 || oldBackgroundCustomEmojiId == 0) {
+          boolean isUnset = newBackgroundCustomEmojiId == 0;
+          long backgroundCustomEmojiId = isUnset ?
+            oldBackgroundCustomEmojiId :
+            newBackgroundCustomEmojiId;
+          if (msg.isOutgoing) {
+            return getText(
+              isProfile ?
+                (isUnset ? R.string.EventLogProfileEmojiUnsetYou : R.string.EventLogProfileEmojiSetYou) :
+                (isUnset ? R.string.EventLogEmojiUnsetYou : R.string.EventLogEmojiSetYou),
+              new CustomEmojiArgument(tdlib, backgroundCustomEmojiId, repaintAccentColor)
+            );
+          } else {
+            return getText(
+              isProfile ?
+                (isUnset ? R.string.EventLogProfileEmojiUnset : R.string.EventLogProfileEmojiSet) :
+                (isUnset ? R.string.EventLogEmojiUnset : R.string.EventLogEmojiSet),
+              new SenderArgument(sender),
+              new CustomEmojiArgument(tdlib, backgroundCustomEmojiId, repaintAccentColor)
+            );
+          }
+        } else {
+          if (msg.isOutgoing) {
+            return getText(
+              isProfile ? R.string.EventLogProfileEmojiChangedYou : R.string.EventLogEmojiChangedYou,
+              new CustomEmojiArgument(tdlib, oldBackgroundCustomEmojiId, repaintAccentColor),
+              new CustomEmojiArgument(tdlib, newBackgroundCustomEmojiId, repaintAccentColor)
+            );
+          } else {
+            return getText(
+              isProfile ? R.string.EventLogProfileEmojiChanged : R.string.EventLogEmojiChanged,
+              new SenderArgument(sender),
+              new CustomEmojiArgument(tdlib, oldBackgroundCustomEmojiId, repaintAccentColor),
+              new CustomEmojiArgument(tdlib, newBackgroundCustomEmojiId, repaintAccentColor)
+            );
+          }
+        }
+      } else {
+        // Both color and emoji changed
+
+        boolean hadIconOrColor = oldAccentColorId != -1 || oldBackgroundCustomEmojiId != 0;
+        boolean hasIconOrColor = newAccentColorId != -1 || newBackgroundCustomEmojiId != 0;
+
+        if (!hadIconOrColor || !hasIconOrColor) {
+          boolean isUnset = !hasIconOrColor;
+          int accentColorId = isUnset ?
+            oldAccentColorId :
+            newAccentColorId;
+          long backgroundCustomEmojiId = isUnset ?
+            oldBackgroundCustomEmojiId :
+            newBackgroundCustomEmojiId;
+          if (msg.isOutgoing) {
+            return getText(
+              isUnset ? R.string.EventLogProfileColorIconUnsetYou : R.string.EventLogProfileColorIconSetYou,
+              new AccentColorArgument(accentColorId != -1 ? tdlib.accentColor(accentColorId) : null, backgroundCustomEmojiId)
+            );
+          } else {
+            return getText(
+              isUnset ? R.string.EventLogProfileColorIconUnset : R.string.EventLogProfileColorIconSet,
+              new SenderArgument(sender),
+              new AccentColorArgument(accentColorId != -1 ? tdlib.accentColor(accentColorId) : null, backgroundCustomEmojiId)
+            );
+          }
+        } else {
+          if (msg.isOutgoing) {
+            return getText(
+              R.string.EventLogProfileColorIconChangedYou,
+              new AccentColorArgument(oldAccentColorId != -1 ? tdlib.accentColor(oldAccentColorId) : null, oldBackgroundCustomEmojiId),
+              new AccentColorArgument(newAccentColorId != -1 ? tdlib.accentColor(newAccentColorId) : null, newBackgroundCustomEmojiId)
+            );
+          } else {
+            return getText(
+              R.string.EventLogProfileColorIconChanged,
+              new SenderArgument(sender),
+              new AccentColorArgument(oldAccentColorId != -1 ? tdlib.accentColor(oldAccentColorId) : null, oldBackgroundCustomEmojiId),
+              new AccentColorArgument(newAccentColorId != -1 ? tdlib.accentColor(newAccentColorId) : null, newBackgroundCustomEmojiId)
+            );
+          }
+        }
+      }
+    });
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventAccentColorChanged accentColorChanged) {
+    super(context, msg);
+    setBackgroundTextCreator(
+      accentColorChanged.oldAccentColorId, accentColorChanged.newAccentColorId,
+      accentColorChanged.oldBackgroundCustomEmojiId, accentColorChanged.newBackgroundCustomEmojiId,
+      false
+    );
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventProfileAccentColorChanged profileAccentColorChanged) {
+    super(context, msg);
+    setBackgroundTextCreator(
+      profileAccentColorChanged.oldProfileAccentColorId, profileAccentColorChanged.newProfileAccentColorId,
+      profileAccentColorChanged.oldProfileBackgroundCustomEmojiId, profileAccentColorChanged.newProfileBackgroundCustomEmojiId,
+      true
+    );
+  }
+
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventEmojiStatusChanged emojiStatusChanged) {
+    super(context, msg);
+    setTextCreator(() -> {
+      if (emojiStatusChanged.oldEmojiStatus == null || emojiStatusChanged.newEmojiStatus == null) {
+        boolean isUnset = emojiStatusChanged.newEmojiStatus == null;
+        long backgroundCustomEmojiId = isUnset ?
+          Td.customEmojiId(emojiStatusChanged.oldEmojiStatus) :
+          Td.customEmojiId(emojiStatusChanged.newEmojiStatus);
+        if (msg.isOutgoing) {
+          return getText(
+            (isUnset ? R.string.EventLogEmojiStatusUnsetYou : R.string.EventLogEmojiStatusSetYou),
+            new CustomEmojiArgument(tdlib, backgroundCustomEmojiId, null)
+          );
+        } else {
+          return getText(
+            (isUnset ? R.string.EventLogEmojiStatusUnset : R.string.EventLogEmojiStatusSet),
+            new SenderArgument(sender),
+            new CustomEmojiArgument(tdlib, backgroundCustomEmojiId, null)
+          );
+        }
+      } else {
+        long oldBackgroundCustomEmojiId = Td.customEmojiId(emojiStatusChanged.oldEmojiStatus);
+        long newBackgroundCustomEmojiId = Td.customEmojiId(emojiStatusChanged.newEmojiStatus);
+        if (msg.isOutgoing) {
+          return getText(
+            R.string.EventLogEmojiStatusChangedYou,
+            new CustomEmojiArgument(tdlib, oldBackgroundCustomEmojiId, null),
+            new CustomEmojiArgument(tdlib, newBackgroundCustomEmojiId, null)
+          );
+        } else {
+          return getText(
+            R.string.EventLogEmojiStatusChanged,
+            new SenderArgument(sender),
+            new CustomEmojiArgument(tdlib, oldBackgroundCustomEmojiId, null),
+            new CustomEmojiArgument(tdlib, newBackgroundCustomEmojiId, null)
+          );
+        }
+      }
+    });
   }
 
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventSlowModeDelayChanged slowModeDelayChanged) {
@@ -1650,6 +2742,26 @@ public final class TGMessageService extends TGMessageServiceImpl {
     });
   }
 
+  public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventMemberSubscriptionExtended memberSubscriptionExtended) {
+    super(context, msg);
+    TdlibSender sender = new TdlibSender(tdlib(), msg.chatId, new TdApi.MessageSenderUser(memberSubscriptionExtended.userId));
+    setTextCreator(() -> {
+      int date = Td.getMemberUntilDate(memberSubscriptionExtended.newStatus);
+      if (date != 0) {
+        return getText(
+          R.string.RenewedSubscriptionUntilX,
+          new SenderArgument(sender),
+          new BoldArgument(Lang.getDatestamp(date, TimeUnit.SECONDS))
+        );
+      } else {
+        return getText(
+          R.string.RenewedSubscription,
+          new SenderArgument(sender)
+        );
+      }
+    });
+  }
+
   public TGMessageService (MessagesManager context, TdApi.Message msg, TdApi.ChatEventInviteLinkRevoked inviteLinkRevoked) {
     super(context, msg);
     TdlibSender linkAuthor = new TdlibSender(tdlib(), msg.chatId, new TdApi.MessageSenderUser(inviteLinkRevoked.inviteLink.creatorUserId));
@@ -1746,7 +2858,7 @@ public final class TGMessageService extends TGMessageServiceImpl {
         public int clickableTextColor (boolean isPressed) {
           return ColorUtils.fromToArgb(
             getBubbleDateTextColor(),
-            Theme.getColor(R.id.theme_color_messageAuthor),
+            Theme.getColor(ColorId.messageAuthor),
             messagesController().wallpaper().getBackgroundTransparency()
           );
         }
@@ -1763,7 +2875,7 @@ public final class TGMessageService extends TGMessageServiceImpl {
         public int backgroundColorId (boolean isPressed) {
           float transparency = messagesController().wallpaper().getBackgroundTransparency();
           return isPressed && transparency == 1f ?
-            R.id.theme_color_messageAuthor :
+            ColorId.messageAuthor :
             0;
         }
 
@@ -1785,12 +2897,12 @@ public final class TGMessageService extends TGMessageServiceImpl {
 
         @Override
         public int clickableTextColor (boolean isPressed) {
-          return Theme.getColor(R.id.theme_color_messageAuthor);
+          return Theme.getColor(ColorId.messageAuthor);
         }
 
         @Override
         public int backgroundColorId (boolean isPressed) {
-          return isPressed ? R.id.theme_color_messageAuthor : 0;
+          return isPressed ? ColorId.messageAuthor : 0;
         }
 
         @Override
@@ -1803,7 +2915,7 @@ public final class TGMessageService extends TGMessageServiceImpl {
 
         @Override
         public int iconColor () {
-          return Theme.getColor(R.id.theme_color_icon);
+          return Theme.getColor(ColorId.icon);
         }
       };
     }

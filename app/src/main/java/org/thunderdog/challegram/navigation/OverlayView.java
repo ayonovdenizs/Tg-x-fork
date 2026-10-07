@@ -22,7 +22,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 
-import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.util.Unlockable;
@@ -84,32 +83,6 @@ public class OverlayView extends View {
     return statusChanger == null ? 0 : statusChanger.getColor(getAlpha() / barFactor * brightnessFactor);
   }
 
-  private boolean ignoreChanges;
-
-  public void setIgnoreChanges (boolean ignoreChanges) {
-    if (this.ignoreChanges != ignoreChanges) {
-      this.ignoreChanges = ignoreChanges;
-      if (!ignoreChanges && window != null && changeBarColor) {
-        updateStatusBarColor();
-      }
-    }
-  }
-
-  private void updateStatusBarColor () {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && !Config.USE_FULLSCREEN_NAVIGATION) {
-      window.setStatusBarColor(statusChanger.getColor(getAlpha() / barFactor * brightnessFactor));
-    }
-  }
-
-  @Override
-  public void setAlpha (float alpha) {
-    super.setAlpha(alpha);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-      if (window != null && changeBarColor && !ignoreChanges) {
-        updateStatusBarColor();
-      }
-    }
-  }
 
   @Override
   public boolean onTouchEvent (MotionEvent event) {

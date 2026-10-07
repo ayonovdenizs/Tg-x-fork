@@ -23,6 +23,7 @@ import android.graphics.drawable.Drawable;
 import android.os.SystemClock;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
+import android.text.TextPaint;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -36,10 +37,12 @@ import android.widget.LinearLayout;
 import androidx.annotation.DrawableRes;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
+import org.thunderdog.challegram.BuildConfig;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
+import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.emoji.Emoji;
@@ -48,6 +51,8 @@ import org.thunderdog.challegram.service.TGCallService;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibCache;
+import org.thunderdog.challegram.theme.ColorId;
+import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.DrawAlgorithms;
 import org.thunderdog.challegram.tool.Drawables;
 import org.thunderdog.challegram.tool.Fonts;
@@ -56,7 +61,10 @@ import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.util.CustomTypefaceSpan;
-import org.thunderdog.challegram.voip.VoIPController;
+import org.thunderdog.challegram.util.EmojiStatusHelper;
+import org.thunderdog.challegram.util.RateLimiter;
+import org.thunderdog.challegram.util.text.TextColorSetOverride;
+import org.thunderdog.challegram.util.text.TextColorSets;
 import org.thunderdog.challegram.voip.gui.CallSettings;
 import org.thunderdog.challegram.widget.AvatarView;
 import org.thunderdog.challegram.widget.EmojiTextView;
@@ -74,7 +82,7 @@ import me.vkryl.core.ColorUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
 
-public class CallController extends ViewController<CallController.Arguments> implements TdlibCache.UserDataChangeListener, TdlibCache.CallStateChangeListener, View.OnClickListener, FactorAnimator.Target, Runnable, CallControlsLayout.CallControlCallback {
+public class CallController extends ViewController<CallController.Arguments> implements TdlibCache.UserDataChangeListener, TdlibCache.CallStateChangeListener, View.OnClickListener, FactorAnimator.Target, Runnable, CallControlsLayout.CallControlCallback, Screen.StatusBarHeightChangeListener {
   private static final boolean DEBUG_FADE_BRANDING = true;
 
   private static class ButtonView extends View implements FactorAnimator.Target {
@@ -205,6 +213,9 @@ public class CallController extends ViewController<CallController.Arguments> imp
 
   private AvatarView avatarView;
   private TextView nameView, stateView;
+  private EmojiStatusHelper emojiStatusHelper;
+  private float nameTextWidth;
+  private TextPaint nameTextPaint;
   private LinearLayout brandWrap;
   private TextView debugView;
   private CallStrengthView strengthView;
@@ -304,6 +315,27 @@ public class CallController extends ViewController<CallController.Arguments> imp
   }
 
   @Override
+  public boolean supportsBottomInset () {
+    return true;
+  }
+
+  @Override
+  protected void onBottomInsetChanged (int extraBottomInset, int extraBottomInsetWithoutIme, boolean isImeInset) {
+    super.onBottomInsetChanged(extraBottomInset, extraBottomInsetWithoutIme, isImeInset);
+    Views.setPaddingBottom(buttonWrap, extraBottomInset);
+    Views.setLayoutHeight(buttonWrap, Screen.dp(76f) + extraBottomInset);
+    Views.setPaddingBottom(callControlsLayout, extraBottomInset);
+  }
+
+  @Override
+  public void onStatusBarHeightChanged (int newHeight) {
+    int startMargin = Math.max(Screen.dp(18f) + newHeight, Screen.dp(42f));
+    Views.setTopMargin(brandWrap, startMargin);
+    Views.setTopMargin(nameView, startMargin + Screen.dp(34f));
+    Views.setTopMargin(stateView, startMargin + Screen.dp(94f));
+  }
+
+  @Override
   protected View onCreateView (final Context context) {
     final FrameLayoutFix contentView = new FrameLayoutFix(context) {
       @Override
@@ -318,7 +350,7 @@ public class CallController extends ViewController<CallController.Arguments> imp
         updateEmojiPosition();
       }
     };
-    ViewSupport.setThemedBackground(contentView, R.id.theme_color_headerBackground, this);
+    ViewSupport.setThemedBackground(contentView, ColorId.headerBackground, this);
 
     avatarView = new AvatarView(context) {
       private final Drawable topShadow = ScrimUtil.makeCubicGradientScrimDrawable(0xff000000, 2, Gravity.TOP, false);
@@ -367,10 +399,28 @@ public class CallController extends ViewController<CallController.Arguments> imp
 
     // Top-left corner
 
-    params.topMargin = Screen.dp(76f);
+    int startMargin = Math.max(Screen.dp(18f) + Screen.getStatusBarHeight(), Screen.dp(42f));
+
+    params.topMargin = startMargin + Screen.dp(34f);
     params.leftMargin = params.rightMargin = Screen.dp(18f);
 
-    nameView = new EmojiTextView(context);
+    nameView = new EmojiTextView(context) {
+      @Override
+      protected void onLayout (boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        nameTextWidth = U.measureText(TD.getUserName(user), nameTextPaint);
+        if (nameTextWidth > getMeasuredWidth() - getPaddingRight()) {
+          CharSequence text = getText().subSequence(0, getLayout().getEllipsisStart(0)) + "...";
+          nameTextWidth = U.measureText(text, nameTextPaint);
+        }
+      }
+
+      @Override
+      protected void onDraw (Canvas canvas) {
+        super.onDraw(canvas);
+        emojiStatusHelper.draw(canvas, (int) Math.min(getMeasuredWidth() - emojiStatusHelper.getWidth(0), nameTextWidth + Screen.dp(7)), Screen.dp(9));
+      }
+    };
     nameView.setScrollDisabled(true);
     nameView.setSingleLine(true);
     nameView.setTextColor(0xffffffff);
@@ -381,8 +431,13 @@ public class CallController extends ViewController<CallController.Arguments> imp
     nameView.setLayoutParams(params);
     contentView.addView(nameView);
 
+    nameTextPaint = new TextPaint();
+    nameTextPaint.setTextSize(Screen.dp(40));
+    nameTextPaint.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
+    emojiStatusHelper = new EmojiStatusHelper(tdlib, nameView, null);
+
     params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-    params.topMargin = Screen.dp(136f);
+    params.topMargin = startMargin + Screen.dp(94f);
     params.leftMargin = params.rightMargin = Screen.dp(18f);
 
     stateView = new TextView(context);
@@ -398,8 +453,9 @@ public class CallController extends ViewController<CallController.Arguments> imp
     stateView.setLayoutParams(params);
     contentView.addView(stateView);
 
+    Screen.addStatusBarHeightListener(this);
     params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-    params.topMargin = Screen.dp(42f);
+    params.topMargin = startMargin;
     params.leftMargin = params.rightMargin = Screen.dp(18f);
     brandWrap = new LinearLayout(context);
     if (DEBUG_FADE_BRANDING) {
@@ -432,8 +488,8 @@ public class CallController extends ViewController<CallController.Arguments> imp
     Views.setSimpleShadow(brandView);
     brandView.setEllipsize(TextUtils.TruncateAt.END);
     brandView.setLayoutParams(lp);
-    brandView.setText(Lang.getString(R.string.VoipBranding).toUpperCase());
-    if (Log.checkLogLevel(Log.LEVEL_INFO)) {
+    brandView.setText(Lang.uppercase(Lang.getString(R.string.VoipBranding)));
+    if (Log.checkLogLevel(Log.LEVEL_INFO) || BuildConfig.EXPERIMENTAL) {
       brandView.setOnClickListener(new View.OnClickListener() {
         @Override
         public void onClick (View v) {
@@ -452,12 +508,22 @@ public class CallController extends ViewController<CallController.Arguments> imp
             view.post(new Runnable() {
               @Override
               public void run () {
+                TGCallService service = TGCallService.currentInstance();
+
                 SpannableStringBuilder b = new SpannableStringBuilder();
-                b.append("libtgvoip ");
-                b.append(VoIPController.getVersion());
+                if (service != null) {
+                  b.append(service.getLibraryNameAndVersion());
+                } else {
+                  b.append("service unavailable");
+                }
                 b.setSpan(new CustomTypefaceSpan(Fonts.getRobotoBold(), 0), 0, b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                b.append("\n\n");
-                b.append(TGCallService.getLog());
+                if (service != null) {
+                  CharSequence log = service.getDebugString();
+                  if (!StringUtils.isEmpty(log)) {
+                    b.append("\n\n");
+                    b.append(log);
+                  }
+                }
                 view.setText(b);
                 if (view.getParent() != null) {
                   view.postDelayed(this, 500l);
@@ -557,10 +623,11 @@ public class CallController extends ViewController<CallController.Arguments> imp
     speakerButtonView.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(72f), Screen.dp(72f), Gravity.RIGHT | Gravity.BOTTOM));
 
     buttonWrap = new FrameLayoutFix(context);
-    buttonWrap.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(76f), Gravity.BOTTOM));
+    buttonWrap.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(76f) + extraBottomInset, Gravity.BOTTOM));
     buttonWrap.addView(muteButtonView);
     buttonWrap.addView(messageButtonView);
     buttonWrap.addView(speakerButtonView);
+    Views.setPaddingBottom(buttonWrap, extraBottomInset);
     Drawable drawable = ScrimUtil.makeCubicGradientScrimDrawable(0xff000000, 2, Gravity.BOTTOM, false);
     drawable.setAlpha((int) (255f * .3f));
     ViewUtils.setBackground(buttonWrap, drawable);
@@ -569,6 +636,7 @@ public class CallController extends ViewController<CallController.Arguments> imp
     // Answer controls
 
     callControlsLayout = new CallControlsLayout(context, this);
+    Views.setPaddingBottom(callControlsLayout, extraBottomInset);
     callControlsLayout.setCallback(this);
     callControlsLayout.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     contentView.addView(callControlsLayout);
@@ -594,8 +662,19 @@ public class CallController extends ViewController<CallController.Arguments> imp
 
 
   private void setTexts () {
-    if (nameView != null)
+    if (emojiStatusHelper != null) {
+      this.emojiStatusHelper.updateEmoji(tdlib, user, new TextColorSetOverride(TextColorSets.Regular.NORMAL) {
+        @Override
+        public long mediaTextComplexColor () {
+          return Theme.newComplexColor(true, ColorId.white);
+        }
+      }, R.drawable.baseline_premium_star_28, 32);
+    }
+    if (nameView != null) {
       this.nameView.setText(TD.getUserName(user));
+      this.nameView.setPadding(0, 0, user != null && user.isPremium ? emojiStatusHelper.getWidth(Screen.dp(7)) : 0, 0);
+      this.nameView.requestLayout();
+    }
     if (emojiViewHint != null)
       this.emojiViewHint.setText(Lang.getString(R.string.CallEmojiHint, TD.getUserSingleName(call.userId, user)));
   }
@@ -726,9 +805,8 @@ public class CallController extends ViewController<CallController.Arguments> imp
   public void onFactorChangeFinished (int id, float finalFactor, FactorAnimator callee) {
     switch (id) {
       case ANIMATOR_FLASH_ID: {
-        flashAnimator.forceFactor(0f);
-        if (isFlashing) {
-          flashAnimator.animateTo(1f);
+        if (finalFactor == 1f) {
+          flashLimiter.run();
         }
         break;
       }
@@ -737,38 +815,30 @@ public class CallController extends ViewController<CallController.Arguments> imp
 
   @Override
   public void onClick (View v) {
-    switch (v.getId()) {
-      case R.id.btn_emoji: {
-        if (isEmojiVisible) {
-          setEmojiExpanded(true);
-        }
-        break;
+    final int viewId = v.getId();
+    if (viewId == R.id.btn_emoji) {
+      if (isEmojiVisible) {
+        setEmojiExpanded(true);
       }
-      case R.id.btn_mute: {
-        if (!TD.isFinished(call)) {
-          if (callSettings == null) {
-            callSettings = new CallSettings(tdlib, call.id);
-          }
-          callSettings.setMicMuted(((ButtonView) v).toggleActive());
+    } else if (viewId == R.id.btn_mute) {
+      if (!TD.isFinished(call)) {
+        if (callSettings == null) {
+          callSettings = new CallSettings(tdlib, call.id);
         }
-        break;
+        callSettings.setMicMuted(((ButtonView) v).toggleActive());
       }
-      case R.id.btn_openChat: {
-        tdlib.ui().openPrivateChat(this, call.userId, null);
-        break;
-      }
-      case R.id.btn_speaker: {
-        if (!TD.isFinished(call)) {
-          if (callSettings == null) {
-            callSettings = new CallSettings(tdlib, call.id);
-          }
-          if (callSettings.isSpeakerModeEnabled()) {
-            callSettings.setSpeakerMode(CallSettings.SPEAKER_MODE_NONE);
-          } else {
-            callSettings.toggleSpeakerMode(this);
-          }
+    } else if (viewId == R.id.btn_openChat) {
+      tdlib.ui().openPrivateChat(this, call.userId, null);
+    } else if (viewId == R.id.btn_speaker) {
+      if (!TD.isFinished(call)) {
+        if (callSettings == null) {
+          callSettings = new CallSettings(tdlib, call.id);
         }
-        break;
+        if (callSettings.isSpeakerModeEnabled()) {
+          callSettings.setSpeakerMode(CallSettings.SPEAKER_MODE_EARPIECE);
+        } else {
+          callSettings.toggleSpeakerMode(this);
+        }
       }
     }
   }
@@ -848,6 +918,15 @@ public class CallController extends ViewController<CallController.Arguments> imp
   public static final long CALL_FLASH_DURATION = 1100;
   public static final long CALL_FLASH_DELAY = 650l;
 
+  private final RateLimiter flashLimiter = new RateLimiter(() -> {
+    if (isFlashing) {
+      flashAnimator.forceFactor(0f);
+      if (isFlashing) {
+        flashAnimator.animateTo(1f);
+      }
+    }
+  }, 100l, null);
+
   private void setFlashing (boolean isFlashing) {
     if (this.isFlashing != isFlashing) {
       this.isFlashing = isFlashing;
@@ -885,7 +964,7 @@ public class CallController extends ViewController<CallController.Arguments> imp
         }
       }
     }
-    stateView.setText(str.toUpperCase());
+    stateView.setText(Lang.uppercase(str));
     setButtonsVisible(!TD.isFinished(call) && !(call.state.getConstructor() == TdApi.CallStatePending.CONSTRUCTOR && !call.isOutgoing), isFocused());
     updateEmoji();
     updateFlashing();
@@ -1097,6 +1176,7 @@ public class CallController extends ViewController<CallController.Arguments> imp
   @Override
   public void destroy () {
     super.destroy();
+    Screen.removeStatusBarHeightListener(this);
     tdlib.cache().unsubscribeFromCallUpdates(call.id, this);
     tdlib.cache().removeUserDataListener(call.userId, this);
     avatarView.performDestroy();

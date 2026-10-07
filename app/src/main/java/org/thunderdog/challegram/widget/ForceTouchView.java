@@ -14,9 +14,6 @@
  */
 package org.thunderdog.challegram.widget;
 
-import static java.lang.annotation.RetentionPolicy.SOURCE;
-
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.ColorFilter;
@@ -42,9 +39,10 @@ import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.Px;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.UiThread;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.config.Device;
@@ -60,10 +58,14 @@ import org.thunderdog.challegram.navigation.HeaderView;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.ChatListener;
+import org.thunderdog.challegram.telegram.DisplayInformation;
 import org.thunderdog.challegram.telegram.MessageThreadListener;
 import org.thunderdog.challegram.telegram.NotificationSettingsListener;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.telegram.TdlibAccount;
 import org.thunderdog.challegram.telegram.TdlibCache;
+import org.thunderdog.challegram.telegram.TdlibManager;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.ColorState;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeChangeListener;
@@ -79,6 +81,7 @@ import org.thunderdog.challegram.util.SensitiveContentContainer;
 import org.thunderdog.challegram.util.text.Text;
 
 import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 
 import me.vkryl.android.AnimatorUtils;
@@ -88,12 +91,12 @@ import me.vkryl.android.widget.FrameLayoutFix;
 import me.vkryl.core.ColorUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.lambda.Destroyable;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.Td;
+import tgx.td.ChatId;
+import tgx.td.Td;
 
 public class ForceTouchView extends FrameLayoutFix implements
   PopupLayout.AnimatedPopupProvider, FactorAnimator.Target,
-  ChatListener, MessageThreadListener, NotificationSettingsListener, TdlibCache.UserDataChangeListener, TdlibCache.SupergroupDataChangeListener, TdlibCache.BasicGroupDataChangeListener, ThemeChangeListener, TdlibCache.UserStatusChangeListener, SensitiveContentContainer {
+  ChatListener, MessageThreadListener, NotificationSettingsListener, TdlibCache.UserDataChangeListener, TdlibCache.SupergroupDataChangeListener, TdlibCache.BasicGroupDataChangeListener, ThemeChangeListener, TdlibCache.UserStatusChangeListener, SensitiveContentContainer, RootFrameLayout.MarginModifier {
   private ForceTouchContext forceTouchContext;
   private final RelativeLayout contentWrap;
   private final View backgroundView;
@@ -201,7 +204,7 @@ public class ForceTouchView extends FrameLayoutFix implements
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       contentWrap.setOutlineProvider(new android.view.ViewOutlineProvider() {
         @Override
-        @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+        @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
         public void getOutline (View view, android.graphics.Outline outline) {
           outline.setRoundRect(Math.round(drawingRect.left), Math.round(drawingRect.top), Math.round(drawingRect.right), Math.round(drawingRect.bottom), Screen.dp(RADIUS));
         }
@@ -226,6 +229,7 @@ public class ForceTouchView extends FrameLayoutFix implements
       }
 
       @Override
+      @SuppressWarnings("deprecation")
       public int getOpacity () {
         return PixelFormat.UNKNOWN;
       }
@@ -235,6 +239,11 @@ public class ForceTouchView extends FrameLayoutFix implements
 
     themeListenerList.addThemeInvalidateListener(contentWrap);
     complexAvatarReceiver = new ComplexReceiver(this);
+  }
+
+  @Override
+  public void onApplyMarginInsets (View child, LayoutParams params, Rect legacyInsets, Rect insets, Rect insetsWithoutIme) {
+    // Views.setBottomMargin(contentWrap, insets.bottom / 2);
   }
 
   @Override
@@ -278,7 +287,7 @@ public class ForceTouchView extends FrameLayoutFix implements
     if (context.backgroundColor != 0) {
       backgroundView.setBackgroundColor(context.backgroundColor);
     } else {
-      ViewSupport.setThemedBackground(backgroundView, R.id.theme_color_previewBackground);
+      ViewSupport.setThemedBackground(backgroundView, ColorId.previewBackground);
       themeListenerList.addThemeInvalidateListener(backgroundView);
     }
 
@@ -313,10 +322,20 @@ public class ForceTouchView extends FrameLayoutFix implements
         headerView.setIgnoreCustomHeight();
         headerView.setInnerMargins(Screen.dp(8f), Screen.dp(8f));
         headerView.setTextColors(Theme.textAccentColor(), Theme.textDecentColor());
-        if (context.boundDataType == TYPE_CHAT && context.boundDataId != 0) {
-          setupChat(context.boundDataId, (ThreadInfo) context.boundArg1, headerView);
-        } else if (context.boundDataType == TYPE_USER && context.boundDataId != 0) {
-          setupUser((int) context.boundDataId, headerView);
+        if (context.boundDataType != 0 && (context.boundDataId != 0 || context.boundDataType == DataType.ACCOUNT)) {
+          switch (context.boundDataType) {
+            case DataType.CHAT:
+              setupChat(context.boundDataId, (ThreadInfo) context.boundArg1, headerView);
+              break;
+            case DataType.USER:
+              setupUser(context.boundDataId, headerView);
+              break;
+            case DataType.ACCOUNT:
+              setupAccount((int) context.boundDataId, headerView);
+              break;
+            default:
+              throw new UnsupportedOperationException();
+          }
         } else {
           if (context.avatarSender != null) {
             headerView.getAvatarReceiver().requestMessageSender(tdlib, context.avatarSender, AvatarReceiver.Options.NONE);
@@ -367,11 +386,12 @@ public class ForceTouchView extends FrameLayoutFix implements
         }
 
         @Override
+        @SuppressWarnings("deprecation")
         public int getOpacity () {
           return PixelFormat.UNKNOWN;
         }
       });
-      themeListenerList.addThemeDoubleTextColorListener(targetHeaderView, R.id.theme_color_text, R.id.theme_color_textLight);
+      themeListenerList.addThemeDoubleTextColorListener(targetHeaderView, ColorId.text, ColorId.textLight);
 
       params = new RelativeLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, Screen.dp(7f));
       params.addRule(RelativeLayout.ALIGN_LEFT, R.id.forceTouch_content);
@@ -431,6 +451,7 @@ public class ForceTouchView extends FrameLayoutFix implements
         }
 
         @Override
+        @SuppressWarnings("deprecation")
         public int getOpacity () {
           return PixelFormat.UNKNOWN;
         }
@@ -438,7 +459,7 @@ public class ForceTouchView extends FrameLayoutFix implements
 
       View offsetView;
 
-      final int offsetWeight = context.shrunkenFooter ? 4: 1;
+      final int offsetWeight = context.shrunkenFooter ? 4 : 1;
 
       if (context.actionItems.size() > 1) {
         offsetView = new View(getContext());
@@ -471,10 +492,10 @@ public class ForceTouchView extends FrameLayoutFix implements
           view = new ImageView(getContext()) {
             @Override
             protected void onDraw (Canvas c) {
-              c.save();
+              final int restoreToCount = Views.save(c);
               c.scale(-1f, 1f, getMeasuredWidth() / 2f, getMeasuredHeight() / 2f);
               super.onDraw(c);
-              c.restore();
+              Views.restore(c, restoreToCount);
             }
           };
         } else if (actionItem.messageSender != null && actionItem.iconRes == 0) {
@@ -486,10 +507,10 @@ public class ForceTouchView extends FrameLayoutFix implements
             @Override
             protected void onDraw (Canvas c) {
               super.onDraw(c);
-              c.save();
+              final int restoreToCount = Views.save(c);
               c.translate((getMeasuredWidth() - receiver.getWidth()) / 2f, (getMeasuredHeight() - receiver.getHeight()) / 2f);
               receiver.draw(c);
-              c.restore();
+              Views.restore(c, restoreToCount);
             }
           };
           receiver.setUpdateListener(r -> view.invalidate());
@@ -500,7 +521,7 @@ public class ForceTouchView extends FrameLayoutFix implements
         PopupContext popupContext = new PopupContext(popupWrapView, view, actionItem.title);
         view.setTag(popupContexts[i] = popupContext);
         view.setScaleType(ImageView.ScaleType.CENTER);
-        themeListenerList.addThemeFilterListener(view, R.id.theme_color_icon);
+        themeListenerList.addThemeFilterListener(view, ColorId.icon);
         if (actionItem.iconRes != 0) {
           view.setImageResource(actionItem.iconRes);
           view.setColorFilter(Theme.iconColor());
@@ -998,14 +1019,18 @@ public class ForceTouchView extends FrameLayoutFix implements
 
   private static final float MAXIMIZE_FACTOR = 1.3f;
 
-  private static final int TYPE_NONE = 0;
-  private static final int TYPE_CHAT = 1;
-  private static final int TYPE_USER = 2;
+  @Retention(RetentionPolicy.SOURCE)
+  @IntDef({
+    DataType.CHAT, DataType.USER, DataType.ACCOUNT
+  })
+  private @interface DataType {
+    int CHAT = 1, USER = 2, ACCOUNT = 3;
+  }
 
   // Context
 
   public static class ForceTouchContext {
-    @Retention(SOURCE)
+    @Retention(RetentionPolicy.SOURCE)
     @IntDef({ANIMATION_TYPE_SCALE, ANIMATION_TYPE_EXPAND_VERTICALLY})
     public @interface AnimationType {}
 
@@ -1030,7 +1055,7 @@ public class ForceTouchView extends FrameLayoutFix implements
 
     private String title, subtitle;
 
-    private int boundDataType;
+    private @DataType int boundDataType;
     private long boundDataId;
     private @Nullable Object boundArg1;
 
@@ -1165,7 +1190,7 @@ public class ForceTouchView extends FrameLayoutFix implements
     public void setBoundChatId (long chatId, @Nullable ThreadInfo messageThread) {
       this.needHeader = true;
       this.needHeaderAvatar = true;
-      this.boundDataType = TYPE_CHAT;
+      this.boundDataType = DataType.CHAT;
       this.boundDataId = chatId;
       this.boundArg1 = messageThread;
     }
@@ -1173,8 +1198,16 @@ public class ForceTouchView extends FrameLayoutFix implements
     public void setBoundUserId (long userId) {
       this.needHeader = userId != 0;
       this.needHeaderAvatar = true;
-      this.boundDataType = TYPE_USER;
+      this.boundDataType = DataType.USER;
       this.boundDataId = userId;
+      this.boundArg1 = 0;
+    }
+
+    public void setBoundAccountId (int accountId) {
+      this.needHeader = accountId != TdlibAccount.NO_ID;
+      this.needHeaderAvatar = true;
+      this.boundDataType = DataType.ACCOUNT;
+      this.boundDataId = accountId;
       this.boundArg1 = 0;
     }
 
@@ -1215,28 +1248,52 @@ public class ForceTouchView extends FrameLayoutFix implements
 
   // Header
 
-  private int boundDataType;
+  private @DataType int boundDataType;
   private TdApi.User boundUser;
   private TdApi.Chat boundChat;
+  private TdlibAccount boundAccount;
   private ThreadInfo boundMessageThread;
 
-  private void setupUser (int userId, ComplexHeaderView headerView) {
+  private void setupUser (long userId, ComplexHeaderView headerView) {
     TdApi.User user = tdlib.cache().user(userId);
     if (user == null) {
       throw new NullPointerException();
     }
 
-    this.boundDataType = TYPE_USER;
+    this.boundDataType = DataType.USER;
     this.boundUser = user;
-    addUserListeners(user, true);
+    addUserListeners(user.id, true);
 
     setHeaderUser(user);
   }
 
+  private void setupAccount (int accountId, ComplexHeaderView headerView) {
+    TdlibAccount account = TdlibManager.instanceForAccountId(accountId).account(accountId);
+    TdApi.User user = account.getUser();
+    if (user == null) {
+      this.boundDataType = DataType.ACCOUNT;
+      this.boundAccount = account;
+      addUserListeners(account.getKnownUserId(), true);
+      setHeaderUser(account.getDisplayInformation());
+    } else {
+      this.boundDataType = DataType.USER;
+      this.boundUser = user;
+      addUserListeners(user.id, true);
+      setHeaderUser(user);
+    }
+
+  }
+
+  private void setHeaderUser (DisplayInformation displayInformation) {
+    headerView.setShowVerify(displayInformation.isVerified());
+    headerView.setText(TD.getUserName(displayInformation.getFirstName(), displayInformation.getLastName()), "");
+  }
+
   private void setHeaderUser (TdApi.User user) {
-    headerView.setShowVerify(user.isVerified);
-    headerView.setShowScam(user.isScam);
-    headerView.setShowFake(user.isFake);
+    headerView.setShowVerify(Td.isVerified(user));
+    headerView.setShowScam(Td.isScam(user));
+    headerView.setShowFake(Td.isFake(user));
+    headerView.setEmojiStatus(user);
     headerView.setText(TD.getUserName(user), tdlib.status().getPrivateChatSubtitle(user.id, user, false));
     setChatAvatar();
   }
@@ -1247,7 +1304,7 @@ public class ForceTouchView extends FrameLayoutFix implements
       throw new NullPointerException();
     }
 
-    this.boundDataType = TYPE_CHAT;
+    this.boundDataType = DataType.CHAT;
     this.boundChat = chat;
     this.boundMessageThread = messageThread;
     addChatListeners(chat, messageThread, true);
@@ -1257,6 +1314,7 @@ public class ForceTouchView extends FrameLayoutFix implements
     headerView.setShowScam(tdlib.chatScam(chat));
     headerView.setShowFake(tdlib.chatFake(chat));
     headerView.setShowMute(tdlib.chatNeedsMuteIcon(chat));
+    headerView.setEmojiStatus(tdlib.chatUser(chat));
     if (messageThread != null) {
       headerView.setText(messageThread.chatHeaderTitle(), messageThread.chatHeaderSubtitle());
     } else {
@@ -1268,15 +1326,21 @@ public class ForceTouchView extends FrameLayoutFix implements
   private void setChatAvatar () {
     if (!isDestroyed) {
       switch (boundDataType) {
-        case TYPE_CHAT: {
+        case DataType.CHAT: {
           if (boundChat != null) {
             headerView.getAvatarReceiver().requestChat(tdlib, boundChat.id, AvatarReceiver.Options.NONE);
           }
           break;
         }
-        case TYPE_USER: {
+        case DataType.USER: {
           if (boundUser != null) {
             headerView.getAvatarReceiver().requestUser(tdlib, boundUser.id, AvatarReceiver.Options.NONE);
+          }
+          break;
+        }
+        case DataType.ACCOUNT: {
+          if (boundAccount != null) {
+            headerView.getAvatarReceiver().requestAccount(tdlib, boundAccount.id, AvatarReceiver.Options.NONE);
           }
           break;
         }
@@ -1321,16 +1385,20 @@ public class ForceTouchView extends FrameLayoutFix implements
       boundChat = null;
     }
     if (boundUser != null) {
-      addUserListeners(boundUser, false);
+      addUserListeners(boundUser.id, false);
       boundUser = null;
+    }
+    if (boundAccount != null) {
+      addUserListeners(boundAccount.getKnownUserId(), false);
+      boundAccount = null;
     }
   }
 
-  private void addUserListeners (TdApi.User user, boolean add) {
+  private void addUserListeners (long userId, boolean add) {
     if (add) {
-      tdlib.cache().subscribeToUserUpdates(user.id, this);
+      tdlib.cache().subscribeToUserUpdates(userId, this);
     } else {
-      tdlib.cache().unsubscribeFromUserUpdates(user.id, this);
+      tdlib.cache().unsubscribeFromUserUpdates(userId, this);
     }
   }
 
@@ -1339,7 +1407,7 @@ public class ForceTouchView extends FrameLayoutFix implements
       tdlib.listeners().subscribeToChatUpdates(chat.id, this);
       tdlib.listeners().subscribeToSettingsUpdates(chat.id, this);
       if (messageThread == null || chat.id == messageThread.getChatId()) {
-        headerView.attachChatStatus(chat.id, messageThread != null ? messageThread.getMessageThreadId() : 0);
+        headerView.attachChatStatus(chat.id, messageThread != null ? messageThread.getMessageTopicId() : null);
       }
       if (messageThread != null) {
         messageThread.addListener(this);
@@ -1386,9 +1454,10 @@ public class ForceTouchView extends FrameLayoutFix implements
   @Override
   public void onUserUpdated (TdApi.User user) {
     switch (boundDataType) {
-      case TYPE_CHAT:
+      case DataType.CHAT:
         break;
-      case TYPE_USER:
+      case DataType.USER:
+      case DataType.ACCOUNT:
         setHeaderUser(user);
         break;
     }
@@ -1403,8 +1472,9 @@ public class ForceTouchView extends FrameLayoutFix implements
   @Override
   public void onUserStatusChanged (long userId, TdApi.UserStatus status, boolean uiOnly) {
     switch (boundDataType) {
-      case TYPE_CHAT:
-      case TYPE_USER:
+      case DataType.CHAT:
+      case DataType.USER:
+      case DataType.ACCOUNT:
         setChatSubtitle();
         break;
     }
@@ -1462,7 +1532,7 @@ public class ForceTouchView extends FrameLayoutFix implements
   }
 
   @Override
-  public void onMessageThreadReplyCountChanged (long chatId, long messageThreadId, int replyCount) {
+  public void onMessageThreadReplyCountChanged (long chatId, TdApi.MessageTopic topicId, int replyCount) {
     setChatSubtitle();
   }
 }

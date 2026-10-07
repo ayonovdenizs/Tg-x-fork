@@ -17,19 +17,17 @@ package org.thunderdog.challegram.loader;
 import android.graphics.Bitmap;
 import android.os.CancellationSignal;
 
+import androidx.media3.extractor.metadata.id3.ApicFrame;
 import androidx.palette.graphics.Palette;
 
-import com.google.android.exoplayer2.metadata.id3.ApicFrame;
-
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.config.Config;
-import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.player.AudioController;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibManager;
 
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
 public class ImageActor implements ImageReader.Listener, AudioController.ApicListener {
   private ImageFile file;
@@ -90,7 +88,7 @@ public class ImageActor implements ImageReader.Listener, AudioController.ApicLis
 
     final TdApi.File rawFile = file.getFile();
 
-    if (isCustomFile(file) || TD.isFileLoadedAndExists(rawFile)) {
+    if (isCustomFile(file) || ImageLoader.isFileLoaded(file.tdlib(), rawFile)) {
       act(file.getFilePath());
       return false;
     }
@@ -120,16 +118,16 @@ public class ImageActor implements ImageReader.Listener, AudioController.ApicLis
     if (success) {
       if (file.needPalette()) {
         try {
-          file.setPalette(Palette.from((Bitmap) result).generate().getDarkVibrantSwatch());
+          file.setPalette(Palette.from(result).generate().getDarkVibrantSwatch());
         } catch (Throwable t) {
           Log.e("Failed to generate palette", t);
         }
       }
       if (file.shouldBeCached()) {
-        ImageCache.instance().putBitmap(file, (Bitmap) result);
+        ImageCache.instance().putBitmap(file, result);
       } else if (isCancelled) {
         Log.i(Log.TAG_IMAGE_LOADER, "#%s: recycling bitmap because associated actor is canceled and image should not be cached", file.toString());
-        ((Bitmap) result).recycle();
+        result.recycle();
         return;
       }
       /*if (file.needOverlayCalcs()) {

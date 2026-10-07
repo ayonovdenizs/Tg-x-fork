@@ -21,7 +21,7 @@ import android.view.View;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.loader.ComplexReceiver;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.telegram.Tdlib;
@@ -179,6 +179,14 @@ public class TextWrapper implements ListAnimator.Measurable, Destroyable, Text.T
     return false;
   }
 
+  public boolean hasBuiltInEmoji () {
+    for (Text text : texts) {
+      if (text != null && text.hasBuiltInEmoji())
+        return true;
+    }
+    return false;
+  }
+
   public int getMaxMediaCount () {
     int count = 0;
     for (Text text : texts) {
@@ -197,7 +205,7 @@ public class TextWrapper implements ListAnimator.Measurable, Destroyable, Text.T
     requestMedia(receiver, -1, -1);
   }
 
-  public void requestMedia (ComplexReceiver receiver, int startKey, int maxMediaCount) {
+  public void requestMedia (ComplexReceiver receiver, long startKey, long maxMediaCount) {
     Text text = getCurrent();
     if (text != null) {
       text.requestMedia(receiver, startKey, maxMediaCount);
@@ -231,6 +239,7 @@ public class TextWrapper implements ListAnimator.Measurable, Destroyable, Text.T
         Text.Builder b = new Text.Builder(this.text, maxWidth, textStyleProvider, colorTheme)
           .maxLineCount(maxLines)
           .entities(entities, this)
+          .viewProvider(viewProvider)
           .highlight(highlightText)
           .lineWidthProvider(lineWidthProvider)
           .textFlags(BitwiseUtils.setFlag(textFlags, Text.FLAG_BIG_EMOJI, false));
@@ -346,6 +355,28 @@ public class TextWrapper implements ListAnimator.Measurable, Destroyable, Text.T
   public void detachFromView (View view) {
     if (currentViews != null) {
       currentViews.detachFromView(view);
+    }
+  }
+
+  public final void beginDrawBatch (@Nullable ComplexReceiver receiver, int externalBatchId) {
+    if (receiver != null) {
+      final Text text = getCurrent();
+      if (text != null) {
+        text.beginDrawBatch(receiver, externalBatchId);
+      }
+    }
+  }
+
+  public final void finishAllDrawBatches (@Nullable ComplexReceiver receiver) {
+    finishDrawBatch(receiver, 0);
+  }
+
+  public final void finishDrawBatch (@Nullable ComplexReceiver receiver, int externalBatchId) {
+    if (receiver != null) {
+      final Text text = getCurrent();
+      if (text != null) {
+        text.finishDrawBatch(receiver, externalBatchId);
+      }
     }
   }
 

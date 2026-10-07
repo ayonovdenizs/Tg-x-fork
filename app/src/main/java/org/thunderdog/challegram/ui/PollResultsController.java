@@ -19,7 +19,7 @@ import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.attach.CustomItemAnimator;
 import org.thunderdog.challegram.core.Lang;
@@ -31,10 +31,11 @@ import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.ListManager;
 import org.thunderdog.challegram.telegram.PollListener;
+import org.thunderdog.challegram.telegram.PollVoterListManager;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibUi;
 import org.thunderdog.challegram.telegram.UserListManager;
-import org.thunderdog.challegram.theme.ThemeColorId;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.v.CustomRecyclerView;
@@ -48,7 +49,8 @@ import java.util.Arrays;
 import java.util.List;
 
 import me.vkryl.android.AnimatorUtils;
-import me.vkryl.td.ChatId;
+import me.vkryl.core.ArrayUtils;
+import tgx.td.Td;
 
 public class PollResultsController extends RecyclerViewController<PollResultsController.Args> implements PollListener, UserListManager.ChangeListener, View.OnClickListener {
   public static class Args {
@@ -107,9 +109,9 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
 
   private static final boolean NEED_CENTER_DECORATION = false;
 
-  private static class ListCache implements UserListManager.ChangeListener {
+  private static class ListCache implements PollVoterListManager.ChangeListener {
     private final Tdlib tdlib;
-    private final UserListManager voters;
+    private final PollVoterListManager voters;
     private final SettingsAdapter adapter;
 
     public ListCache (ViewController<?> context, long chatId, long messageId, int optionId) {
@@ -122,20 +124,29 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
         }
       };
       this.adapter.setNoEmptyProgress();
-      this.voters = new UserListManager(tdlib, 50, 50, this) {
+      this.voters = new PollVoterListManager(tdlib, 50, 50, this) {
         @Override
-        protected TdApi.Function<?> nextLoadFunction (boolean reverse, int itemCount, int loadCount) {
+        protected TdApi.Function<TdApi.PollVoters> nextLoadFunction (boolean reverse, int itemCount, int loadCount) {
           return new TdApi.GetPollVoters(chatId, messageId, optionId, itemCount, loadCount);
         }
       };
       this.voters.loadInitialChunk(null);
     }
 
+    private ListItem newItem (TdApi.PollVoter voter) {
+      TGFoundChat foundChat = new TGFoundChat(tdlib, voter.voterId, false)
+        .setNoUnread()
+        .setNoAnonymousBadge();
+      return new ListItem(ListItem.TYPE_CHAT_VERTICAL, R.id.sender)
+        .setData(foundChat)
+        .setLongId(Td.getSenderId(voter.voterId));
+    }
+
     @Override
-    public void onItemsAdded (ListManager<Long> list, List<Long> items, int startIndex, boolean isInitialChunk) {
+    public void onItemsAdded (ListManager<TdApi.PollVoter> list, List<TdApi.PollVoter> items, int startIndex, boolean isInitialChunk) {
       List<ListItem> itemsToAdd = new ArrayList<>(items.size());
-      for (long userId : items) {
-        itemsToAdd.add(new ListItem(ListItem.TYPE_CHAT_VERTICAL, R.id.user).setData(new TGFoundChat(tdlib, userId).setNoUnread()).setLongId(ChatId.fromUserId(userId)));
+      for (TdApi.PollVoter voter : items) {
+        itemsToAdd.add(newItem(voter));
       }
       adapter.getItems().addAll(startIndex, itemsToAdd);
       adapter.notifyItemRangeInserted(startIndex, itemsToAdd.size());
@@ -145,26 +156,20 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
     }
 
     @Override
-    public void onItemAdded (ListManager<Long> list, Long userId, int toIndex) {
-      adapter.addItem(toIndex, new ListItem(ListItem.TYPE_CHAT_VERTICAL).setData(new TGFoundChat(tdlib, userId).setNoUnread()).setLongId(ChatId.fromUserId(userId)));
+    public void onItemAdded (ListManager<TdApi.PollVoter> list, TdApi.PollVoter item, int toIndex) {
+      adapter.addItem(toIndex, newItem(item));
       if (NEED_CENTER_DECORATION) {
         adapter.invalidateItemDecorations();
       }
-    }
-
-    @Override
-    public void onItemChanged (ListManager<Long> list, Long item, int index, int cause) {
-      // Do nothing
     }
   }
 
   @Override
   public void onClick (View v) {
-    switch (v.getId()) {
-      case R.id.user: {
-        tdlib.ui().openPrivateProfile(this, ((VerticalChatView) v).getUserId(), new TdlibUi.UrlOpenParameters().tooltip(context().tooltipManager().builder(v)));
-        break;
-      }
+    if (v.getId() == R.id.sender) {
+      ListItem item = (ListItem) v.getTag();
+      TdApi.MessageSender sender = tdlib.sender(item.getLongId());
+      tdlib.ui().openSenderProfile(this, sender, new TdlibUi.UrlOpenParameters().tooltip(context().tooltipManager().builder(v)));
     }
   }
 
@@ -194,7 +199,7 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
     // FillingDecoration decoration = new FillingDecoration(recyclerView, this);
     List<ListItem> items = new ArrayList<>();
 
-    items.add(new ListItem(ListItem.TYPE_TEXT_VIEW, R.id.text_title, 0, getPoll().question, false));
+    items.add(new ListItem(ListItem.TYPE_TEXT_VIEW, R.id.text_title, 0, TD.toCharSequence(getPoll().question), false));
     items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
 
     int optionId = 0;
@@ -203,7 +208,7 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
         optionId++;
         continue;
       }
-      items.add(new ListItem(ListItem.TYPE_TEXT_VIEW, R.id.text_subtitle, 0, option.text, false).setIntValue(optionId));
+      items.add(new ListItem(ListItem.TYPE_TEXT_VIEW, R.id.text_subtitle, 0, TD.toCharSequence(option.text), false).setIntValue(optionId));
       items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
       items.add(newRecyclerItem(optionId));
       items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
@@ -214,30 +219,26 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
     adapter = new SettingsAdapter(this) {
       @Override
       protected void setInfo(ListItem item, int position, ListInfoView infoView) {
-        int correctOptionId = isQuiz() ? ((TdApi.PollTypeQuiz) getPoll().type).correctOptionId : -1;
+        int[] correctOptionIds = isQuiz() ? ((TdApi.PollTypeQuiz) getPoll().type).correctOptionIds : null;
         TdApi.PollOption option = getPoll().options[item.getIntValue()];
-        infoView.showInfo(Lang.formatString("%s — %d%%", null, Lang.pluralBold(isQuiz() ? (item.getIntValue() == correctOptionId ? R.string.xCorrectAnswers : R.string.xAnswers) : R.string.xVotes, option.voterCount), option.votePercentage));
+        infoView.showInfo(Lang.formatString("%s — %d%%", null, Lang.pluralBold(isQuiz() ? (correctOptionIds != null && ArrayUtils.contains(correctOptionIds, item.getIntValue()) ? R.string.xCorrectAnswers : R.string.xAnswers) : R.string.xVotes, option.voterCount), option.votePercentage));
       }
 
       @Override
       protected void setText(ListItem item, CustomTextView view, boolean isUpdate) {
         super.setText(item, view, isUpdate);
 
-        switch (view.getId()) {
-          case R.id.text_title: {
-            view.setTextSize(17f);
-            view.setPadding(Screen.dp(16f), Screen.dp(13f), Screen.dp(16f), Screen.dp(13f));
-            view.setTextColorId(R.id.theme_color_text);
-            ViewSupport.setThemedBackground(view, R.id.theme_color_filling, PollResultsController.this);
-            break;
-          }
-          case R.id.text_subtitle: {
-            view.setTextSize(15f);
-            view.setPadding(Screen.dp(16f), Screen.dp(6f), Screen.dp(16f), Screen.dp(6f));
-            view.setTextColorId(R.id.theme_color_background_text);
-            ViewSupport.setThemedBackground(view, ThemeColorId.NONE, PollResultsController.this);
-            break;
-          }
+        final int viewId = view.getId();
+        if (viewId == R.id.text_title) {
+          view.setTextSize(17f);
+          view.setPadding(Screen.dp(16f), Screen.dp(13f), Screen.dp(16f), Screen.dp(13f));
+          view.setTextColorId(ColorId.text);
+          ViewSupport.setThemedBackground(view, ColorId.filling, PollResultsController.this);
+        } else if (viewId == R.id.text_subtitle) {
+          view.setTextSize(15f);
+          view.setPadding(Screen.dp(16f), Screen.dp(6f), Screen.dp(16f), Screen.dp(6f));
+          view.setTextColorId(ColorId.background_text);
+          ViewSupport.setThemedBackground(view, ColorId.NONE, PollResultsController.this);
         }
       }
 
@@ -262,7 +263,7 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
           recyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
-              UserListManager listManager = ((ListCache) ((ListItem) recyclerView.getTag()).getData()).voters;
+              PollVoterListManager listManager = ((ListCache) ((ListItem) recyclerView.getTag()).getData()).voters;
               int lastVisiblePosition = ((LinearLayoutManager) recyclerView.getLayoutManager()).findLastVisibleItemPosition();
               if (lastVisiblePosition + 5 >= listManager.getCount()) {
                 listManager.loadItems(false, null);
@@ -343,7 +344,7 @@ public class PollResultsController extends RecyclerViewController<PollResultsCon
             if (optionIndex == -1) {
               int atIndex = findInsertionIndex(optionId);
               items.addAll(atIndex, Arrays.asList(
-                new ListItem(ListItem.TYPE_HEADER, R.id.text_subtitle, 0, option.text, false).setIntValue(optionId),
+                new ListItem(ListItem.TYPE_HEADER, R.id.text_subtitle, 0, TD.toCharSequence(option.text), false).setIntValue(optionId),
                 new ListItem(ListItem.TYPE_SHADOW_TOP),
                 newRecyclerItem(optionId),
                 new ListItem(ListItem.TYPE_SHADOW_BOTTOM),

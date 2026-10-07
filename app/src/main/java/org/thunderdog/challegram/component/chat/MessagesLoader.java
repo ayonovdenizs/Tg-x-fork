@@ -21,8 +21,8 @@ import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 import androidx.collection.LongSparseArray;
 
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -33,17 +33,17 @@ import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Background;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.ChatEventUtil;
-import org.thunderdog.challegram.data.SponsoredMessageUtils;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.data.TGMessage;
 import org.thunderdog.challegram.data.TdApiExt;
 import org.thunderdog.challegram.data.ThreadInfo;
+import org.thunderdog.challegram.emoji.EmojiCodes;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibDelegate;
+import org.thunderdog.challegram.telegram.TdlibMessageViewer;
 import org.thunderdog.challegram.tool.Strings;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.unsorted.Settings;
-import org.thunderdog.challegram.util.CancellableResultHandler;
 
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -54,12 +54,13 @@ import me.vkryl.core.DateUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.RunnableData;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.MessageId;
-import me.vkryl.td.Td;
-import me.vkryl.td.TdConstants;
+import tgx.td.ChatId;
+import tgx.td.MessageId;
+import tgx.td.Td;
+import tgx.td.TdConstants;
 
 public class MessagesLoader implements Client.ResultHandler {
+  private static final boolean DEBUG_HANDLER = false;
   private static final int CHUNK_SIZE_BIG = 50;
   private static final int CHUNK_SIZE_SMALL = 19;
 
@@ -90,6 +91,7 @@ public class MessagesLoader implements Client.ResultHandler {
   private int knownTotalMessageCount = -1;
   private MessageId scrollMessageId;
   private int scrollHighlightMode;
+  private TdlibMessageViewer.Viewport viewport;
 
   public static final int SPECIAL_MODE_NONE = 0;
   public static final int SPECIAL_MODE_EVENT_LOG = 1;
@@ -102,11 +104,13 @@ public class MessagesLoader implements Client.ResultHandler {
   private String searchQuery;
   private TdApi.MessageSender searchSender;
   private TdApi.SearchMessagesFilter searchFilter;
+  private TdApi.MessageSource messageSource;
 
   private @Nullable TdApi.Chat chat;
   private @Nullable ThreadInfo messageThread;
+  private @Nullable TdApi.MessageTopic topicId;
 
-  private CancellableResultHandler sponsoredResultHandler;
+  private Tdlib.CancellableResultHandler<TdApi.SponsoredMessages> sponsoredResultHandler;
   private final MessagesSearchManagerMiddleware searchManagerMiddleware;
 
   private long contextId;
@@ -115,38 +119,25 @@ public class MessagesLoader implements Client.ResultHandler {
     return tdlib.isChannel(chatId) && !manager.controller().isInForceTouchMode() && !manager.controller().inPreviewMode() && !manager.controller().areScheduledOnly() && !manager.controller().arePinnedMessages();
   }
 
-  // Callback is called only on successful load
-  public void requestSponsoredMessage (long chatId, RunnableData<TdApi.SponsoredMessages> callback) {
+  public void requestSponsoredMessages (long chatId, RunnableData<TdApi.SponsoredMessages> callback) {
     if (!canShowSponsoredMessage(chatId) || isLoadingSponsoredMessage) {
       return;
     }
-
     isLoadingSponsoredMessage = true;
-    sponsoredResultHandler = new CancellableResultHandler() {
+    final long contextId = this.contextId;
+    sponsoredResultHandler = new Tdlib.CancellableResultHandler<>() {
       @Override
-      public void processResult (TdApi.Object object) {
+      public void act (TdApi.SponsoredMessages sponsoredMessages, @Nullable TdApi.Error error) {
         UI.post(() -> {
           isLoadingSponsoredMessage = false;
           sponsoredResultHandler = null;
-
-          TdApi.SponsoredMessages message;
-
-          if (object.getConstructor() == TdApi.SponsoredMessages.CONSTRUCTOR) {
-            message = ((TdApi.SponsoredMessages) object);
-          } else if (tdlib.account().isDebug()) {
-            message = SponsoredMessageUtils.generateSponsoredMessages(tdlib);
-          } else {
-            message = null;
-          }
-
-          if (chatId == getChatId()) {
-            callback.runWithData(message);
+          if (chatId == getChatId() && MessagesLoader.this.contextId == contextId) {
+            callback.runWithData(sponsoredMessages);
           }
         });
       }
     };
-
-    tdlib.client().send(new TdApi.GetChatSponsoredMessages(chatId), sponsoredResultHandler);
+    tdlib.send(new TdApi.GetChatSponsoredMessages(chatId), sponsoredResultHandler);
   }
 
   public MessagesLoader (MessagesManager manager, MessagesSearchManagerMiddleware searchMiddleware) {
@@ -156,11 +147,59 @@ public class MessagesLoader implements Client.ResultHandler {
     reuse();
   }
 
-  public void setChat (@Nullable TdApi.Chat chat, @Nullable ThreadInfo messageThread, int mode, TdApi.SearchMessagesFilter filter) {
+  public void setChat (@Nullable TdApi.Chat chat, @Nullable ThreadInfo messageThread, @Nullable TdApi.MessageTopic topicId, int mode, TdApi.SearchMessagesFilter filter) {
     this.chat = chat;
     this.messageThread = messageThread;
+    this.topicId = topicId;
     this.specialMode = mode;
     this.searchFilter = filter;
+    this.messageSource = newMessageSource();
+    recycleMessageViewer();
+    this.viewport = tdlib.messageViewer().createViewport(messageSource, manager.controller());
+  }
+
+  private void recycleMessageViewer () {
+    if (viewport != null) {
+      viewport.performDestroy();
+      viewport = null;
+    }
+  }
+
+  public TdlibMessageViewer.Viewport viewport () {
+    if (viewport == null)
+      throw new IllegalStateException();
+    return viewport;
+  }
+
+  public TdApi.MessageSource messageSource () {
+    return messageSource;
+  }
+
+  private TdApi.MessageSource newMessageSource () {
+    if (manager.readMessagesDisabled()) {
+      return new TdApi.MessageSourceHistoryPreview();
+    } else if (specialMode == MessagesLoader.SPECIAL_MODE_EVENT_LOG) {
+      return new TdApi.MessageSourceChatEventLog();
+    } else if (specialMode == MessagesLoader.SPECIAL_MODE_SEARCH) {
+      return new TdApi.MessageSourceSearch();
+    } else if (topicId != null) {
+      return switch (topicId.getConstructor()) {
+        case TdApi.MessageTopicThread.CONSTRUCTOR ->
+          new TdApi.MessageSourceMessageThreadHistory();
+        case TdApi.MessageTopicForum.CONSTRUCTOR ->
+          new TdApi.MessageSourceForumTopicHistory();
+        case TdApi.MessageTopicDirectMessages.CONSTRUCTOR ->
+          new TdApi.MessageSourceDirectMessagesChatTopicHistory();
+        case TdApi.MessageTopicSavedMessages.CONSTRUCTOR ->
+          new TdApi.MessageSourceChatHistory();
+        default -> {
+          Td.assertMessageTopic_98b4a9a3();
+          throw Td.unsupported(topicId);
+        }
+      };
+    } else {
+      return new TdApi.MessageSourceChatHistory();
+    }
   }
 
   public void setSearchParameters (String query, TdApi.MessageSender sender, TdApi.SearchMessagesFilter filter) {
@@ -179,8 +218,14 @@ public class MessagesLoader implements Client.ResultHandler {
     return messageThread != null ? messageThread.getChatId() : chat != null ? chat.id : 0;
   }
 
-  public long getMessageThreadId () {
-    return messageThread != null ? messageThread.getMessageThreadId() : 0;
+  @Nullable
+  public TdApi.MessageTopic getMessageTopicId () {
+    return messageThread != null ? messageThread.getMessageTopicId() : null;
+  }
+
+  @Nullable
+  public TdApi.MessageTopic getTopicId () {
+    return topicId;
   }
 
   @Nullable
@@ -198,10 +243,7 @@ public class MessagesLoader implements Client.ResultHandler {
 
   private Client.ResultHandler newHandler (final boolean allowMoreTop, final boolean allowMoreBottom, boolean needFindUnread) {
     final long currentContextId = contextId;
-    if (lastHandler != null) {
-      throw new IllegalStateException("lastHandler != null");
-    }
-    return lastHandler = new Client.ResultHandler() {
+    Client.ResultHandler handler = new Client.ResultHandler() {
       @Override
       public void onResult (final TdApi.Object object) {
         if (contextId != currentContextId) {
@@ -254,13 +296,6 @@ public class MessagesLoader implements Client.ResultHandler {
             nextSearchFromMessageId = 0;
             break;
           }
-          case TdApi.Error.CONSTRUCTOR: {
-            Log.w(Log.TAG_MESSAGES_LOADER, "Received error: %s", TD.toErrorString(object));
-            messages = new TdApi.Message[0];
-            knownTotalCount = -1;
-            nextSearchOffset = null; nextSearchFromMessageId = 0;
-            break;
-          }
           case TdApi.ChatEvents.CONSTRUCTOR: {
             if (Log.isEnabled(Log.TAG_MESSAGES_LOADER)) {
               Log.i(Log.TAG_MESSAGES_LOADER, "Received %d events in %dms", ((TdApi.ChatEvents) object).events.length, ms);
@@ -270,17 +305,15 @@ public class MessagesLoader implements Client.ResultHandler {
             nextSearchOffset = null; nextSearchFromMessageId = 0;
             break;
           }
+          case TdApi.Error.CONSTRUCTOR: {
+            Log.w(Log.TAG_MESSAGES_LOADER, "Received error: %s", TD.toErrorString(object));
+            messages = new TdApi.Message[0];
+            knownTotalCount = -1;
+            nextSearchOffset = null; nextSearchFromMessageId = 0;
+            break;
+          }
           default: {
-            synchronized (lock) {
-              lastHandler = null;
-            }
-            Log.unexpectedTdlibResponse(object,
-              TdApi.GetChatHistory.class,
-              TdApi.Messages.class, TdApi.FoundMessages.class, TdApi.FoundChatMessages.class,
-              TdApi.ChatEvents.class,
-              TdApi.Error.class
-            );
-            return;
+            throw new UnsupportedOperationException(object.toString());
           }
         }
 
@@ -470,12 +503,14 @@ public class MessagesLoader implements Client.ResultHandler {
             mergeMode = MERGE_MODE_TOP;
             mergeChunk = messages;
             Log.i(Log.TAG_MESSAGES_LOADER, "Loading more groupped messages on the top, count: %d, fromMessageId: %d", loadMoreTopCount, oldestMessage.id);
+            Log.ensureReturnType(TdApi.GetChatHistory.class, TdApi.Messages.class);
             tdlib.client().send(new TdApi.GetChatHistory(messages[0].chatId, oldestMessage.id, 0, loadMoreTopCount, true), this);
             return;
           } else if (loadMoreBottomCount > 0) {
             mergeMode = MERGE_MODE_BOTTOM;
             mergeChunk = messages;
             Log.i(Log.TAG_MESSAGES_LOADER, "Loading more groupped messages on the bottom, count: %d, fromMessageId: %d", loadMoreBottomCount + 1, newestMessage.id);
+            Log.ensureReturnType(TdApi.GetChatHistory.class, TdApi.Messages.class);
             tdlib.client().send(new TdApi.GetChatHistory(messages[0].chatId, newestMessage.id, -loadMoreBottomCount, loadMoreBottomCount + 1, true), this);
             return;
           }
@@ -484,6 +519,9 @@ public class MessagesLoader implements Client.ResultHandler {
         mergeMode = MERGE_MODE_NONE;
         mergeChunk = null;
         synchronized (lock) {
+          if (DEBUG_HANDLER) {
+            Log.w("lastHandler = null [1]", Log.generateException(1));
+          }
           lastHandler = null;
         }
 
@@ -492,6 +530,16 @@ public class MessagesLoader implements Client.ResultHandler {
           needFindUnread && object.getConstructor() == TdApi.Messages.CONSTRUCTOR, missingAlbums);
       }
     };
+    synchronized (lock) {
+      if (DEBUG_HANDLER) {
+        Log.w("lastHandler = [new instance], error: %b", Log.generateException(1), lastHandler != null);
+      }
+      if (lastHandler != null) {
+        throw new IllegalStateException("lastHandler != null");
+      }
+      lastHandler = handler;
+      return handler;
+    }
   }
 
   public void reuse () {
@@ -515,9 +563,13 @@ public class MessagesLoader implements Client.ResultHandler {
 
     if (sponsoredResultHandler != null) {
       sponsoredResultHandler.cancel();
+      sponsoredResultHandler = null;
     }
 
     synchronized (lock) {
+      if (DEBUG_HANDLER) {
+        Log.w("lastHandler = null [2]", Log.generateException(1));
+      }
       lastHandler = null;
       isLoading = false;
     }
@@ -552,10 +604,10 @@ public class MessagesLoader implements Client.ResultHandler {
     public final int date;
     public final int after;
     public final boolean out;
-    public final int senderUserId;
+    public final long senderUserId;
     public final TdApi.MessageContent content;
 
-    public PreviewMessage (int date, int after, boolean out, int senderUserId, TdApi.MessageContent content) {
+    public PreviewMessage (int date, int after, boolean out, long senderUserId, TdApi.MessageContent content) {
       this.date = date;
       this.after = after;
       this.out = out;
@@ -616,7 +668,7 @@ public class MessagesLoader implements Client.ResultHandler {
 
   private static TdApi.User parsePreviewUser (Tdlib tdlib, JSONArray data, int lang) throws JSONException {
     int dataArrayLength = data.length();
-    int userId = data.getInt(0);
+    long userId = data.getLong(0);
     TdApi.User user = TD.newFakeUser(userId, parsePreviewString(data.getString(1), lang), dataArrayLength > 2 ? parsePreviewString(data.getString(2), lang) : null);
     String remoteId = dataArrayLength > 3 ? data.getString(3) : null;
     if (!StringUtils.isEmpty(remoteId) && !Strings.isValidLink(remoteId)) {
@@ -642,6 +694,7 @@ public class MessagesLoader implements Client.ResultHandler {
     Tdlib tdlib = context.tdlib();
     boolean isGroupChat = false;
     final long myUserId = tdlib.myUserId();
+    final TdApi.MessageSender mySender = tdlib.mySender();
 
     JSONObject chat = null;
     JSONArray chatsArray = new JSONArray(json.startsWith("[") && json.endsWith("]") ? json : "[" + json + "]");
@@ -762,7 +815,7 @@ public class MessagesLoader implements Client.ResultHandler {
       boolean isOut = false;
       int date = 0;
       int after = 60;
-      int senderUserId = 0;
+      long senderUserId = 0;
       TdApi.FormattedText text = null;
       TdApi.Photo photo = null;
       TdApi.Sticker sticker = null;
@@ -889,16 +942,15 @@ public class MessagesLoader implements Client.ResultHandler {
           height,
           null,
           new TdApi.StickerFormatWebp(), new TdApi.StickerFullTypeRegular(),
-          null,
           new TdApi.Thumbnail(new TdApi.ThumbnailFormatWebp(), width, height, thumbFile),
           file
         );
       }
 
       if (data.has("left")) {
-        int userId;
+        long userId;
 
-        userId = data.getInt("left");
+        userId = data.getLong("left");
         left = new TdApi.MessageChatDeleteMember(userId);
         senderUserId = userId;
       }
@@ -928,7 +980,7 @@ public class MessagesLoader implements Client.ResultHandler {
 
       TdApi.MessageContent content;
       if (photo != null)
-        content = new TdApi.MessagePhoto(photo, text, false, false);
+        content = new TdApi.MessagePhoto(photo, null, text, false, false, false);
       else if (sticker != null)
         content = new TdApi.MessageSticker(sticker, false);
       else if (audio != null)
@@ -942,7 +994,7 @@ public class MessagesLoader implements Client.ResultHandler {
       else if (autoDeleteTime != null)
         content = autoDeleteTime;
       else if (text != null)
-        content = new TdApi.MessageText(text, null);
+        content = new TdApi.MessageText(text, null, null);
       else
         throw new JSONException("Invalid message: " + data);
       messages.add(new PreviewMessage(date, after, isOut, senderUserId, content));
@@ -960,13 +1012,18 @@ public class MessagesLoader implements Client.ResultHandler {
         msg.id = maxId - messages.size() + i;
         msg.date = message.date != 0 ? message.date : (minDate = minDate + message.after);
         msg.isOutgoing = message.out;
-        msg.senderId = new TdApi.MessageSenderUser(message.out ? myUserId : message.senderUserId);
+        msg.senderId = message.out ? mySender : new TdApi.MessageSenderUser(message.senderUserId);
         msg.content = message.content;
         if (isLast) {
           msg.interactionInfo = new TdApi.MessageInteractionInfo();
-          msg.interactionInfo.reactions = new TdApi.MessageReaction[]{
-            new TdApi.MessageReaction(new TdApi.ReactionTypeEmoji("\uD83D\uDC4D"), 5, true, new TdApi.MessageSender[0])
-          };
+          msg.interactionInfo.reactions = new TdApi.MessageReactions(
+            new TdApi.MessageReaction[]{
+              new TdApi.MessageReaction(new TdApi.ReactionTypeEmoji(EmojiCodes.THUMBS_UP), 5, true, mySender, new TdApi.MessageSender[0])
+            },
+            false,
+            new TdApi.PaidReactor[0],
+            false
+          );
         }
         out.add(msg);
         i++;
@@ -1066,29 +1123,36 @@ public class MessagesLoader implements Client.ResultHandler {
 
       switch (specialMode) {
         case SPECIAL_MODE_EVENT_LOG:
+          Log.ensureReturnType(TdApi.GetChatEventLog.class, TdApi.ChatEvents.class);
           function = new TdApi.GetChatEventLog(sourceChatId, manager.getEventLogQuery(), (lastFromMessageId = fromMessageId).getMessageId(), lastLimit = limit, manager.getEventLogFilters(), manager.getEventLogUserIds());
           break;
         case SPECIAL_MODE_SEARCH: {
           long chatId = getChatId();
           if (ChatId.isSecret(chatId)) {
+            Log.ensureReturnType(TdApi.SearchSecretMessages.class, TdApi.FoundMessages.class);
             function = new TdApi.SearchSecretMessages(sourceChatId, searchQuery, lastSearchNextOffset, limit, searchFilter);
           } else {
-            function = new TdApi.SearchChatMessages(sourceChatId, searchQuery, searchSender, (lastFromMessageId = fromMessageId).getMessageId(), lastOffset = offset, lastLimit = limit, searchFilter, messageThread != null ? messageThread.getMessageThreadId() : 0);
+            Log.ensureReturnType(TdApi.SearchChatMessages.class, TdApi.FoundChatMessages.class);
+            function = new TdApi.SearchChatMessages(sourceChatId, topicId, searchQuery, searchSender, (lastFromMessageId = fromMessageId).getMessageId(), lastOffset = offset, lastLimit = limit, searchFilter);
           }
           break;
         }
         case SPECIAL_MODE_SCHEDULED:
           loadingAllowMoreBottom = loadingAllowMoreTop = loadingLocal = allowMoreBottom = allowMoreTop = onlyLocal = false;
+          Log.ensureReturnType(TdApi.GetChatScheduledMessages.class, TdApi.Messages.class);
           function = new TdApi.GetChatScheduledMessages(sourceChatId);
           break;
         default:
           if (hasSearchFilter()) {
             loadingLocal = false;
-            function = new TdApi.SearchChatMessages(sourceChatId, null, null, (lastFromMessageId = fromMessageId).getMessageId(), lastOffset = offset, lastLimit = limit, searchFilter, messageThread != null ? messageThread.getMessageThreadId() : 0);
+            Log.ensureReturnType(TdApi.SearchChatMessages.class, TdApi.FoundChatMessages.class);
+            function = new TdApi.SearchChatMessages(sourceChatId, topicId, null, null, (lastFromMessageId = fromMessageId).getMessageId(), lastOffset = offset, lastLimit = limit, searchFilter);
           } else if (messageThread != null) {
             loadingLocal = false;
+            Log.ensureReturnType(TdApi.GetMessageThreadHistory.class, TdApi.Messages.class);
             function = new TdApi.GetMessageThreadHistory(sourceChatId, messageThread.getOldestMessageId(), (lastFromMessageId = fromMessageId).getMessageId(), lastOffset = offset, lastLimit = limit);
           } else {
+            Log.ensureReturnType(TdApi.GetChatHistory.class, TdApi.Messages.class);
             function = new TdApi.GetChatHistory(sourceChatId, (lastFromMessageId = fromMessageId).getMessageId(), lastOffset = offset, lastLimit = limit, loadingLocal);
           }
           break;
@@ -1127,7 +1191,7 @@ public class MessagesLoader implements Client.ResultHandler {
   }
 
   private boolean loadMore (boolean fromTop, int count, boolean onlyLocal) {
-    if (isLoading || getChatId() == 0) {
+    if (isLoading || getChatId() == 0 || lastHandler != null) {
       return false;
     }
     if (fromTop) {
@@ -1158,29 +1222,25 @@ public class MessagesLoader implements Client.ResultHandler {
   // Processing
 
   private TdApi.Message newMessage (final long chatId, final boolean isChannel, final TdApi.ChatEvent event) {
+    TdApi.Message relatedMessage = Td.findRelatedMessage(event.action);
+    boolean canBeSaved = relatedMessage == null || relatedMessage.canBeSaved;
     return new TdApi.Message(
       event.id,
       event.memberId,
+      null,
       chatId,
       null,
       null,
       tdlib.isSelfSender(event.memberId),
-      false, false,
-      false, false,
-      false, false, false,
-      false, false, false,
-      false, false, false,
-      isChannel, false,
-      false,
+      false, false, canBeSaved, false,
+      isChannel, false, false, false, false,
       event.date, 0,
-      null, null, null,
-      0, 0, 0,
-      0, 0, 0,
-      0, null,
-      0,
-      null,
-      null,
-      null
+      null, null, null, null,
+      null, null, null, null,
+      null, 0, 0,
+      0, null, 0, 0, "", 0, null,
+      0, 0,
+      null, null, null, null, null, 0, 0
     );
   }
 
@@ -1448,7 +1508,7 @@ public class MessagesLoader implements Client.ResultHandler {
     if (scrollItemIndex == -1 && scrollMessageId != null && (scrollHighlightMode == MessagesManager.HIGHLIGHT_MODE_NORMAL || scrollHighlightMode == MessagesManager.HIGHLIGHT_MODE_NORMAL_NEXT) && specialMode == SPECIAL_MODE_SEARCH) {
       TGMessage highlightItem = null;
       long minDistance = -1;
-      for (TGMessage item: items) {
+      for (TGMessage item : items) {
         long distance = (item.getId() - scrollMessageId.getMessageId());
         if (distance >= 0 && (minDistance == -1 || distance < minDistance)) {
           minDistance = distance;
@@ -1517,7 +1577,7 @@ public class MessagesLoader implements Client.ResultHandler {
 
         if (!items.isEmpty()) {
           for (TGMessage message : items) {
-            if (!message.isSponsored()) {
+            if (!message.isSponsoredMessage()) {
               suitableMessage = message;
               break;
             }
@@ -1534,7 +1594,7 @@ public class MessagesLoader implements Client.ResultHandler {
         break;
       }
       case MODE_MORE_BOTTOM: {
-        if (!loadingLocal && (totalCount == 0 || totalCount == 1)) {
+        if (totalCount == 0 && !loadingLocal) {
           canLoadBottom = false;
           if (Log.isEnabled(Log.TAG_MESSAGES_LOADER)) {
             Log.i(Log.TAG_MESSAGES_LOADER, "Bottom end reached.");
@@ -1710,13 +1770,13 @@ public class MessagesLoader implements Client.ResultHandler {
 
   @Nullable
   private MessageId getStartBottom () {
-    TGMessage msg = manager.getAdapter().getBottomMessage();
+    TGMessage msg = manager.getAdapter().getBottomActiveMessage();
     return msg != null ? new MessageId(msg.getChatId(), msg.getBiggestId()) : null;
   }
 
   @Nullable
   private MessageId getStartTop () {
-    TGMessage msg = manager.getAdapter().getTopMessage();
+    TGMessage msg = manager.getAdapter().getTopActiveMessage();
     return msg != null ? new MessageId(msg.getChatId(), msg.getSmallestId()) : null;
   }
 
@@ -1749,7 +1809,7 @@ public class MessagesLoader implements Client.ResultHandler {
             return true;
           }
         }
-        if (searchFilter != null && searchFilter.getConstructor() == TdApi.SearchMessagesFilterPinned.CONSTRUCTOR && manager.maxPinnedMessageId() != 0 && messageId.getMessageId() >= manager.maxPinnedMessageId()) {
+        if (searchFilter != null && Td.isPinnedFilter(searchFilter) && manager.maxPinnedMessageId() != 0 && messageId.getMessageId() >= manager.maxPinnedMessageId()) {
           return true;
         }
       }

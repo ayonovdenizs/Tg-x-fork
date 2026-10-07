@@ -21,14 +21,16 @@ import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
+import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.SoundEffectConstants;
 import android.view.View;
+import android.view.ViewConfiguration;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.core.Lang;
@@ -41,6 +43,7 @@ import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibCache;
 import org.thunderdog.challegram.telegram.TdlibContext;
 import org.thunderdog.challegram.telegram.TdlibManager;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.DrawAlgorithms;
 import org.thunderdog.challegram.tool.Drawables;
@@ -49,28 +52,35 @@ import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.ui.CallController;
 import org.thunderdog.challegram.ui.PlaybackController;
+import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.unsorted.Size;
+import org.thunderdog.challegram.util.CounterPlaybackSpeedDrawableSet;
+import org.thunderdog.challegram.util.RateLimiter;
+import org.thunderdog.challegram.util.text.Counter;
 import org.thunderdog.challegram.util.text.Text;
 import org.thunderdog.challegram.util.text.TextColorSet;
 import org.thunderdog.challegram.util.text.TextColorSets;
-import org.thunderdog.challegram.voip.VoIPController;
+import org.thunderdog.challegram.voip.annotation.CallState;
 import org.thunderdog.challegram.voip.gui.CallSettings;
+import org.thunderdog.challegram.widget.PopupLayout;
 import org.thunderdog.challegram.widget.ShadowView;
 
 import java.util.concurrent.TimeUnit;
 
 import me.vkryl.android.AnimatorUtils;
+import me.vkryl.android.animator.BoolAnimator;
 import me.vkryl.android.animator.FactorAnimator;
 import me.vkryl.android.util.ClickHelper;
+import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.ColorUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.Destroyable;
-import me.vkryl.core.BitwiseUtils;
+import tgx.td.Td;
 
 public class HeaderFilling extends Drawable implements TGLegacyAudioManager.PlayListener, FactorAnimator.Target, CallManager.CurrentCallListener, TdlibCache.CallStateChangeListener, Runnable, TGPlayerController.TrackChangeListener, TGPlayerController.TrackListener, ClickHelper.Delegate, Destroyable, TGLegacyManager.EmojiLoadListener {
   private HeaderView headerView; // Header that holds the filling
-  private @Nullable NavigationController navigationController;
+  private final @Nullable NavigationController navigationController;
 
   // Filling
 
@@ -101,6 +111,8 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
   private int ongoingSections;
 
   private Drawable hangIcon, micIcon, forwardIcon;
+  private final BoolAnimator speedIsActive;
+  private final @Nullable Counter speedCounter;
 
   private int lastBarType;
   private int textLeft;
@@ -113,7 +125,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
   }
 
   private int getTopOffset () {
-    return needOffsets ? HeaderView.getTopOffset() : 0;
+    return needOffsets ? headerView.getEffectiveTopOffset() : 0;
   }
 
   private final ClickHelper helper;
@@ -134,14 +146,39 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
     this.micIcon = Drawables.get(parent.getResources(), R.drawable.baseline_mic_24);
     this.hangIcon = Drawables.get(parent.getResources(), R.drawable.baseline_call_end_24);
     this.forwardIcon = Drawables.get(parent.getResources(), R.drawable.baseline_fast_forward_24);
+    this.speedIsActive = new BoolAnimator(0, (a, b, c, d) -> invalidate(), AnimatorUtils.DECELERATE_INTERPOLATOR, 180L);
 
     this.textLeft = Screen.dp(72f);
 
     if (navigationController != null) {
+      this.speedCounter = new Counter.Builder()
+        .noBackground()
+        .allBold(true)
+        .drawable(Drawables.get(R.drawable.baseline_playback_speed_x_5), 0, Gravity.LEFT)
+        .setCustomTextPartBuilder(new CounterPlaybackSpeedDrawableSet())
+        .textSize(13f)
+        .colorSet(this::getSpeedCounterColor)
+        .callback((a, b) -> invalidate())
+        .build();
+
       TdlibManager.instance().player().addTrackChangeListener(this);
       initCallListeners();
+      updateSpeedCounter(TdlibManager.instance().player().getSpeed(), false);
+    } else {
+      this.speedCounter = null;
     }
     TGLegacyManager.instance().addEmojiListener(this);
+  }
+
+  private void updateSpeedCounter (int speed, boolean animated) {
+    if (speedCounter != null) {
+      speedIsActive.setValue(speed != TGPlayerController.PLAY_SPEED_NORMAL, animated);
+      speedCounter.setCount(speed, false, PlaybackSpeedLayout.getSpeedText(speed), animated);
+    }
+  }
+
+  private int getSpeedCounterColor () {
+    return ColorUtils.fromToArgb(Theme.getColor(ColorId.icon), Theme.getColor(ColorId.iconActive), speedIsActive.getFloatValue());
   }
 
   @Override
@@ -372,7 +409,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
         float startX = Lang.rtl() ? Screen.dp(49f) / 2 - Screen.dp(3f) - Screen.dp(5f) : width - Screen.dp(49f) / 2 + Screen.dp(3f) + Screen.dp(5f);
         float endX = width / 2;
         float x = startX + (endX - startX) * radiusFactor;
-        float y = HeaderView.getTopOffset() + HeaderView.getSize(false) / 2 + Screen.dp(2f);
+        float y = headerView.getEffectiveTopOffset() + HeaderView.getSize(false) / 2 + Screen.dp(2f);
         c.drawCircle(x, y, radius * radiusFactor, Paints.fillingPaint(ColorUtils.alphaColor(.35f + .65f * radiusFactor, radiusColor)));
         // c.drawCircle(startX, y, Screen.dp(2f), Paints.fillingPaint(0xaaff0000));
         c.restore();
@@ -394,7 +431,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
     /*if (needStatusBar) {
       final int offset = getTopOffset();
       if (navigationController == null && offset > 0) {
-        c.drawRect(0, 0, width, offset, Paints.fillingPaint(Theme.getColor(R.id.theme_color_statusBar)));
+        c.drawRect(0, 0, width, offset, Paints.fillingPaint(Theme.getColor(ColorId.statusBar)));
       }
     }*/
   }
@@ -474,11 +511,16 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
   }
 
   @Override
+  public void onPlaybackSpeedChanged (int newSpeed) {
+    UI.execute(() -> updateSpeedCounter(newSpeed, true));
+  }
+
+  @Override
   public void onTrackStateChanged (Tdlib tdlib, long chatId, long messageId, int fileId, int state) { }
 
   @Override
   public void onTrackPlayProgress (Tdlib tdlib, long chatId, long messageId, int fileId, float progress, long playPosition, long playDuration, boolean isBuffering) {
-    if (currentTrack != null && currentTrack.content.getConstructor() != TdApi.MessageVideoNote.CONSTRUCTOR) {
+    if (currentTrack != null && !Td.isVideoNote(currentTrack.content)) {
       setSeekFactor(progress);
     }
   }
@@ -497,7 +539,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
     if (navigationController == null || playingMessageTdlib == null || playingMessage == null) {
       return;
     }
-    if (playingMessage.content.getConstructor() != TdApi.MessageAudio.CONSTRUCTOR) {
+    if (!Td.isAudio(playingMessage.content)) {
       if (playingMessage.chatId == 0 || playingMessage.id == 0) {
         return;
       }
@@ -555,7 +597,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
     } else {
       title = tdlib.messageAuthor(message);
       if (StringUtils.isEmpty(title)) {
-        title = Lang.getString(message.content.getConstructor() == TdApi.MessageVideoNote.CONSTRUCTOR ? R.string.AttachRound : R.string.AttachAudio);
+        title = Lang.getString(Td.isVideoNote(message.content) ? R.string.AttachRound : R.string.AttachAudio);
       }
     }
     return title;
@@ -596,7 +638,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
       subtitle = fileName.trim();
     }
 
-    setText(StringUtils.isEmpty(title) ? null : title, StringUtils.isEmpty(subtitle) ? null : subtitle, Screen.dp(56f) * 2 + Screen.dp(24f) + Screen.dp(6f));
+    setText(StringUtils.isEmpty(title) ? null : title, StringUtils.isEmpty(subtitle) ? null : subtitle, Screen.dp(67 + (SIZE + GAP) * 3 + OFFSET));
   }
 
   private void drawOngoingAudio (Canvas c, int playerTop, float rectWidth, int playerBottom) {
@@ -608,13 +650,17 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
 
     c.drawRect(0, playerTop, rectWidth, playerBottom, Paints.fillingPaint(playerFillingColor));
     if (seekFactor != 0f) {
-      c.drawRect(0, playerBottom - (Screen.dp(1f) + 1), (int) (width * seekFactor), playerBottom, Paints.fillingPaint(ColorUtils.alphaColor(dropShadowAlpha, Theme.getColor(R.id.theme_color_headerBarCallActive))));
+      c.drawRect(0, playerBottom - (Screen.dp(1f) + 1), (int) (width * seekFactor), playerBottom, Paints.fillingPaint(ColorUtils.alphaColor(dropShadowAlpha, Theme.getColor(ColorId.headerBarCallActive))));
+    }
+
+    if (speedCounter != null) {
+      speedCounter.draw(c, getRightButtonCenter(width, 2), (playerBottom + playerTop) / 2f, Gravity.CENTER, 1f);
     }
 
     TdApi.File file = TD.getFile(playingMessage);
-    DrawAlgorithms.drawPlayPause(c, width - Screen.dp(28f), playerBottom - Size.getHeaderPlayerSize() / 2, Screen.dp(12f), playPausePath, playPauseDrawFactor, playPauseDrawFactor = playPauseFactor, file != null ? TD.getFileProgress(file) : 1f, ColorUtils.alphaColor(dropShadowAlpha, Theme.iconColor()));
+    DrawAlgorithms.drawPlayPause(c, getRightButtonCenter(width, 0), playerBottom - Size.getHeaderPlayerSize() / 2, Screen.dp(12f), playPausePath, playPauseDrawFactor, playPauseDrawFactor = playPauseFactor, file != null ? TD.getFileProgress(file) : 1f, ColorUtils.alphaColor(dropShadowAlpha, Theme.iconColor()));
 
-    Drawables.draw(c, forwardIcon, width - Screen.dp(52f) - forwardIcon.getMinimumWidth(), playerBottom - Size.getHeaderPlayerSize() / 2 - forwardIcon.getMinimumHeight() / 2, dropShadowAlpha == 1f ? Paints.getIconGrayPorterDuffPaint() : Paints.getPorterDuffPaint(ColorUtils.alphaColor(dropShadowAlpha, Theme.iconColor())));
+    Drawables.draw(c, forwardIcon, getRightButtonLeft(width, 1), playerBottom - Size.getHeaderPlayerSize() / 2 - forwardIcon.getMinimumHeight() / 2, dropShadowAlpha == 1f ? Paints.getIconGrayPorterDuffPaint() : Paints.getPorterDuffPaint(ColorUtils.alphaColor(dropShadowAlpha, Theme.iconColor())));
     drawCloseIcon(c, playerTop, width, playerBottom, false);
 
     drawOngoingText(c, playerTop, rectWidth, playerBottom, Screen.dp(67f), null, 1f, 1f);
@@ -667,7 +713,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
   private void trimSubtitle (int textPadding) {
     if (width != 0) {
       final int availWidth = width - textPadding - getTitleWidth();
-      this.trimmedSubtitle = !StringUtils.isEmpty(subtitle) && availWidth > 0 ? new Text.Builder(subtitle, availWidth, Paints.getTitleStyleProvider(), TextColorSets.Regular.LIGHT).singleLine().build() : null;
+      this.trimmedSubtitle = !StringUtils.isEmpty(subtitle) && availWidth > Screen.dp(16) ? new Text.Builder(subtitle, availWidth, Paints.getTitleStyleProvider(), TextColorSets.Regular.LIGHT).singleLine().build() : null;
     }
   }
 
@@ -745,7 +791,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
 
   @Override
   public void onCallStateChanged (final int callId, final int newState) {
-    if (getCallId() == callId && newState == VoIPController.STATE_ESTABLISHED) {
+    if (getCallId() == callId && newState == CallState.ESTABLISHED) {
       buildCall();
       invalidateOngoingBar();
     }
@@ -928,6 +974,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
           callFlashAnimator.animateTo(1f);
         }
       } else {
+        flashCallBar.cancelIfScheduled();
         if (callFlashAnimator != null && callFlashAnimator.getFactor() == 0f) {
           callFlashAnimator.forceFactor(0f);
         }
@@ -989,7 +1036,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
   }
 
   private void drawOngoingCall (Canvas c, int playerTop, float rectWidth, int playerBottom) {
-    final int backgroundColor = ColorUtils.fromToArgb(Theme.getColor(R.id.theme_color_headerBarCallMuted), ColorUtils.fromToArgb(Theme.getColor(R.id.theme_color_headerBarCallActive), Theme.getColor(R.id.theme_color_headerBarCallIncoming), callIncomingFactor), (1f - callMuteFactor) * callActiveFactor);
+    final int backgroundColor = ColorUtils.fromToArgb(Theme.getColor(ColorId.headerBarCallMuted), ColorUtils.fromToArgb(Theme.getColor(ColorId.headerBarCallActive), Theme.getColor(ColorId.headerBarCallIncoming), callIncomingFactor), (1f - callMuteFactor) * callActiveFactor);
     if (restoreRect && restorePixels > 0) {
       c.drawRect(rectWidth, playerTop, width, playerBottom, Paints.fillingPaint(backgroundColor));
     }
@@ -997,7 +1044,7 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
 
     c.drawRect(0, playerTop, rectWidth, playerBottom, Paints.fillingPaint(playerFillingColor));
 
-    Paint iconPaint = Paints.getPorterDuffPaint(0xffffffff);
+    Paint iconPaint = Paints.whitePorterDuffPaint();
 
     // Mute button
     iconPaint.setAlpha((int) (255f * dropShadowAlpha * callActiveFactor * (1f - callIncomingFactor)));
@@ -1147,13 +1194,21 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
     }
   }
 
+  private final RateLimiter flashCallBar = new RateLimiter(() -> {
+    if (isCallFlashing) {
+      callFlashAnimator.animateTo(1f);
+    }
+  }, 100L, null);
+
   @Override
   public void onFactorChangeFinished (int id, float finalFactor, FactorAnimator callee) {
     switch (id) {
       case ANIMATOR_CALL_FLASH_ID: {
-        callFlashAnimator.forceFactor(0f);
-        if (isCallFlashing) {
-          callFlashAnimator.animateTo(1f);
+        if (finalFactor == 1f) {
+          callFlashAnimator.forceFactor(0f);
+          if (isCallFlashing) {
+            flashCallBar.run();
+          }
         }
         break;
       }
@@ -1161,6 +1216,9 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
   }
 
   // Touch processing
+
+  private float touchDownX, touchDownY;
+  private float playbackOffsetY;
 
   private void performSoundFeedback () {
     if (headerView != null) {
@@ -1174,6 +1232,8 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
 
   @Override
   public boolean needClickAt (View view, float x, float y) {
+    touchDownX = x;
+    touchDownY = y;
     return (navigationController == null || !navigationController.isAnimating()) && (showOngoingBar || showFactor != 0f) && dropShadowAlpha != 0f && hideFactor != 1f && !(y < playerTop) && !(y > playerBottom) && !(y <= fillingBottom);
   }
 
@@ -1183,36 +1243,70 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
       return false;
     }
     if (BitwiseUtils.hasFlag(ongoingSections, SECTION_AUDIO)) {
-      int endX = width - Screen.dp(52f);
-      return x <= endX && x >= endX - Screen.dp(24f);
+      int rIndex = getRightButtonIndex(width, x);
+      return rIndex == 2;
     }
     return false;
   }
 
   @Override
   public boolean onLongPressRequestedAt (View view, float x, float y) {
-    if (needLongPress(x, y)) {
-      TdlibManager.instance().player().setPlaybackSpeed(TGPlayerController.PLAY_SPEED_2X);
+    if (needLongPress(x, y) && playbackSpeedLayout == null) {
+      showPlaybackSpeedPicker(x, y);
       return true;
     }
     return false;
   }
 
   @Override
+  public void onLongPressMove (View view, MotionEvent e, float x, float y, float startX, float startY) {
+    if (playbackSpeedLayout != null) {
+      playbackSpeedLayout.processTouchEvent(MotionEvent.ACTION_MOVE, x, y, playbackOffsetY, true);
+    }
+  }
+
+  @Override
   public void onLongPressFinish (View view, float x, float y) {
-    TdlibManager.instance().player().setPlaybackSpeed(TGPlayerController.PLAY_SPEED_NORMAL);
+    if (playbackSpeedLayout != null) {
+      playbackSpeedLayout.processTouchEvent(MotionEvent.ACTION_UP, x, y, playbackOffsetY, true);
+    }
+  }
+
+  @Override
+  public void onLongPressCancelled (View view, float x, float y) {
+    if (playbackSpeedLayout != null) {
+      playbackSpeedLayout.processTouchEvent(MotionEvent.ACTION_CANCEL, x, y, playbackOffsetY, true);
+    }
   }
 
   @Override
   public void onClickAt (View view, float x, float y) {
+    final boolean isAudio = BitwiseUtils.hasFlag(ongoingSections, SECTION_AUDIO);
+    int rIndex = getRightButtonIndex(width, x);
+
     int buttonSize = Screen.dp(52f);
-    if (x <= width && x >= width - buttonSize - Screen.dp(24f)) {
+    if (!isAudio && x <= width && x >= width - buttonSize - Screen.dp(24f)) {
       int index = x >= width - buttonSize ? 0 : (int) (width - x - buttonSize) / Screen.dp(24f) + 1;
       onRightClick(index);
+    } else if (isAudio && x <= width && rIndex <= 2) {
+      onRightClick(rIndex);
     } else if (x >= 0 && x <= buttonSize) {
       onLeftClick();
     } else {
       onBarClick();
+    }
+  }
+
+  @Override
+  public void onClickTouchMove (View view, float x, float y) {
+    if (playbackSpeedLayout == null && !helper.inLongPress()){
+      final float dx = x - touchDownX;
+      final float dy = y - touchDownY;
+      if (Math.hypot(dx, dy) > ViewConfiguration.get(view.getContext()).getScaledTouchSlop() * 1.77f && dy > 0 && Math.abs(dy) > Math.abs(dx) && needLongPress(touchDownX, touchDownY)) {
+        if (onLongPressRequestedAt(view, touchDownX, touchDownY)) {
+          helper.onLongPress(view, x, y);
+        }
+      }
     }
   }
 
@@ -1240,6 +1334,16 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
         }
         if (BitwiseUtils.hasFlag(ongoingSections, SECTION_AUDIO)) {
           TdlibManager.instance().player().playNextMessageInQueue();
+          return true;
+        }
+        break;
+      }
+      case 2: {
+        if (BitwiseUtils.hasFlag(ongoingSections, SECTION_CALL)) {
+          return false;
+        }
+        if (BitwiseUtils.hasFlag(ongoingSections, SECTION_AUDIO)) {
+          onPlaybackSpeedClick();
           return true;
         }
         break;
@@ -1289,7 +1393,121 @@ public class HeaderFilling extends Drawable implements TGLegacyAudioManager.Play
   public void setColorFilter (ColorFilter colorFilter) { }
 
   @Override
+  @SuppressWarnings("deprecation")
   public int getOpacity () {
     return PixelFormat.UNKNOWN;
+  }
+
+
+
+  private static final int SIZE = 24;
+  private static final int OFFSET = 12;
+  private static final int GAP = 8;
+
+  private static int getRightButtonIndex (int width, float x) {
+    return Math.max(0, ((int) (width - x - Screen.dp(OFFSET - GAP / 2f))) / Screen.dp(SIZE + GAP));
+  }
+
+  private static int getRightButtonLeft (int width, int index) {
+    return width - Screen.dp(OFFSET + SIZE * (index + 1) + GAP * index);
+  }
+
+  private static int getRightButtonRight (int width, int index) {
+    return getRightButtonLeft(width, index) + Screen.dp(SIZE);
+  }
+
+  private static int getRightButtonCenter (int width, int index) {
+    return getRightButtonLeft(width, index) + Screen.dp(SIZE / 2f);
+  }
+
+
+  // Playback Speed
+
+  private void onPlaybackSpeedClick () {
+    final int speed = TdlibManager.instance().player().getSpeed();
+    final boolean isVideo = TdlibManager.instance().player().isPlayingRoundVideo();
+
+    if (speed < 100) {
+      TdlibManager.instance().player().setPlaybackSpeed(100);
+      showPlaybackTooltip(isVideo ? R.string.PlaybackSpeedHintVideo100 : R.string.PlaybackSpeedHintAudio100);
+    } else if (speed < 150) {
+      TdlibManager.instance().player().setPlaybackSpeed(150);
+      showPlaybackTooltip(isVideo ? R.string.PlaybackSpeedHintVideo150 : R.string.PlaybackSpeedHintAudio150);
+    } else if (speed < 200) {
+      TdlibManager.instance().player().setPlaybackSpeed(200);
+      showPlaybackTooltip(isVideo ? R.string.PlaybackSpeedHintVideo200 : R.string.PlaybackSpeedHintAudio200);
+    } else {
+      TdlibManager.instance().player().setPlaybackSpeed(100);
+      showPlaybackTooltip(isVideo ? R.string.PlaybackSpeedHintVideo100 : R.string.PlaybackSpeedHintAudio100);
+    }
+    UI.hapticVibrate(headerView, false);
+  }
+
+  private void showPlaybackTooltip (int res) {
+    String text = Lang.getString(res);
+    if (Settings.instance().needTutorial(Settings.TUTORIAL_PLAYBACK_SPEED_HOLD)) {
+      showPlaybackTooltip(Lang.getString(R.string.PlaybackSpeedHintTemplate, text, Lang.getString(R.string.PlaybackSpeedHintHold)));
+    } else if (Settings.instance().needTutorial(Settings.TUTORIAL_PLAYBACK_SPEED_SWIPE)) {
+      showPlaybackTooltip(Lang.getString(R.string.PlaybackSpeedHintTemplate, text, Lang.getString(R.string.PlaybackSpeedHintSwipe)));
+    } else {
+      showPlaybackTooltip(text);
+    }
+  }
+
+  private void showPlaybackTooltip (CharSequence text) {
+    ((BaseActivity) headerView.getContext()).tooltipManager()
+      .builder(headerView)
+      .locate((targetView, outRect) -> {
+        final int width = targetView.getMeasuredWidth();
+        outRect.set(getRightButtonLeft(width, 2), 0, getRightButtonRight(width, 2), playerBottom);
+      })
+      .maxWidth(300)
+      .show(null, text).hideDelayed(3000, TimeUnit.MILLISECONDS);
+  }
+
+  private PlaybackSpeedLayout playbackSpeedLayout;
+  private PopupLayout playbackSpeedPopup;
+
+  private void showPlaybackSpeedPicker (float touchX, float touchY) {
+    playbackOffsetY = Screen.dp(24) - (playerTop + playerBottom) / 2f + touchY;
+
+    Settings.instance().markTutorialAsComplete(Settings.TUTORIAL_PLAYBACK_SPEED_HOLD);
+
+    playbackSpeedPopup = new PopupLayout(headerView.getContext());
+    playbackSpeedLayout = new PlaybackSpeedLayout(headerView.getContext());
+    playbackSpeedLayout.init(navigationController != null ? navigationController.getThemeListeners() : null, (speed, needClose) -> {
+      TdlibManager.instance().player().setPlaybackSpeed(speed);
+      if (needClose) {
+        playbackSpeedPopup.hideWindow(true);
+      }
+    }, TdlibManager.instance().player().getSpeed());
+    playbackSpeedLayout.setTranslationY((playerTop + playerBottom) / 2f - Screen.dp(24 + 8));
+    playbackSpeedLayout.setTranslationX(getRightButtonCenter(0, 2) + Screen.dp( 24 + 8));
+    playbackSpeedLayout.processTouchEvent(MotionEvent.ACTION_DOWN, touchX, touchY, playbackOffsetY, true);
+
+    playbackSpeedPopup.init(true);
+    playbackSpeedPopup.setNeedRootInsets();
+    playbackSpeedPopup.setOverlayStatusBar(true);
+    playbackSpeedPopup.setDismissListener(new PopupLayout.DismissListener() {
+      @Override
+      public void onPopupDismissPrepare (PopupLayout popup) {
+        if (playbackSpeedLayout == popup.getContentChild()) {
+          playbackSpeedLayout = null;
+          if (navigationController != null) {
+            navigationController.unlockSwipeNavigation();
+          }
+        }
+      }
+
+      @Override
+      public void onPopupDismiss (PopupLayout popup) {
+
+      }
+    });
+
+    playbackSpeedPopup.showMoreView(playbackSpeedLayout);
+    if (navigationController != null) {
+      navigationController.lockSwipeNavigation();
+    }
   }
 }

@@ -8,7 +8,7 @@ import android.graphics.drawable.Drawable;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.component.sticker.TGStickerObj;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.loader.ComplexReceiver;
@@ -19,7 +19,7 @@ import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.util.text.TextMedia;
 
 import me.vkryl.core.lambda.RunnableData;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
 public class TGReaction {
   private final Tdlib tdlib;
@@ -72,6 +72,10 @@ public class TGReaction {
     }
 
     loadAllAnimationsAndCache();
+  }
+
+  public boolean needThemedColorFilter () {
+    return TD.needThemedColorFilter(customReaction);
   }
 
   public boolean isPremium () {
@@ -258,6 +262,7 @@ public class TGReaction {
     public void setColorFilter (@Nullable ColorFilter colorFilter) { }
 
     @Override
+    @SuppressWarnings("deprecation")
     public int getOpacity () {
       return PixelFormat.UNKNOWN;
     }

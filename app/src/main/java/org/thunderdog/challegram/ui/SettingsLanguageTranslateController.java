@@ -17,11 +17,10 @@ package org.thunderdog.challegram.ui;
 import android.content.Context;
 import android.view.View;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.base.SettingView;
 import org.thunderdog.challegram.core.Lang;
-import org.thunderdog.challegram.navigation.SettingsWrapBuilder;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.v.CustomRecyclerView;
@@ -42,47 +41,46 @@ public class SettingsLanguageTranslateController extends RecyclerViewController<
     return true;
   }
 
+  private int headerItemCount, doNotTranslateItemCount;
+
   @Override
   protected void onCreateView (Context context, CustomRecyclerView recyclerView) {
     adapter = new SettingsAdapter(this) {
       @Override
       protected void setValuedSetting (ListItem item, SettingView view, boolean isUpdate) {
-        switch (item.getId()) {
-          case R.id.language: {
-            TdApi.LanguagePackInfo languageInfo = (TdApi.LanguagePackInfo) item.getData();
-            item.setSelected(Settings.instance().containsInNotTranslatableLanguageList(languageInfo.id));
-            view.findCheckBox().setChecked(item.isSelected(), isUpdate);
-            view.setData(languageInfo.name);
-            break;
-          }
-          case R.id.btn_chatDoNotTranslateAppLang:
-          case R.id.btn_chatDoNotTranslateSelected: {
-            int chatDoNotTranslateMode = Settings.instance().getChatDoNotTranslateMode();
+        final int itemId = item.getId();
+        if (itemId == R.id.language) {
+          TdApi.LanguagePackInfo languageInfo = (TdApi.LanguagePackInfo) item.getData();
+          item.setSelected(Settings.instance().containsInNotTranslatableLanguageList(languageInfo.id));
+          view.findCheckBox().setChecked(item.isSelected(), isUpdate);
+          view.setData(languageInfo.name);
+        } else if (itemId == R.id.btn_chatDoNotTranslateAppLang || itemId == R.id.btn_chatDoNotTranslateSelected) {
+          int chatDoNotTranslateMode = Settings.instance().getChatDoNotTranslateMode();
 
-            if (item.getId() == R.id.btn_chatDoNotTranslateAppLang) {
-              item.setSelected(chatDoNotTranslateMode == Settings.DO_NOT_TRANSLATE_MODE_APP_LANG);
-              view.setData(Lang.getLanguageName(Settings.instance().getLanguage().packInfo.pluralCode, ""));
-            } else {
-              item.setSelected(chatDoNotTranslateMode == Settings.DO_NOT_TRANSLATE_MODE_SELECTED);
-              String[] languages = Settings.instance().getAllNotTranslatableLanguages();
-              if (languages == null || languages.length == 0) {
-                view.setData(Lang.getString(R.string.PickLanguages));
-              } else if (languages.length < 4) {
-                StringBuilder builder = new StringBuilder();
-                for (String lang: languages) {
-                  if (builder.length() > 0) {
-                    builder.append(", ");
-                  }
-                  builder.append(Lang.getLanguageName(lang, lang));
+          if (item.getId() == R.id.btn_chatDoNotTranslateAppLang) {
+            item.setSelected(chatDoNotTranslateMode == Settings.DO_NOT_TRANSLATE_MODE_APP_LANG);
+            view.setData(Lang.getLanguageName(Settings.instance().getLanguage().packInfo.pluralCode, ""));
+          } else {
+            item.setSelected(chatDoNotTranslateMode == Settings.DO_NOT_TRANSLATE_MODE_SELECTED);
+            String[] languages = Settings.instance().getAllNotTranslatableLanguages();
+            if (languages == null || languages.length == 0) {
+              view.setData(Lang.getString(R.string.PickLanguages));
+            } else if (languages.length < 4) {
+              StringBuilder builder = new StringBuilder();
+              for (String lang : languages) {
+                if (builder.length() > 0) {
+                  builder.append(", ");
                 }
-                view.setData(builder);
-              } else {
-                view.setData(Lang.plural(R.string.DoNotTranslateLanguages, languages.length));
+                builder.append(Lang.getLanguageName(lang, lang));
               }
+              view.setData(builder);
+            } else {
+              view.setData(Lang.plural(R.string.DoNotTranslateLanguages, languages.length));
             }
-            view.findRadioView().setChecked(item.isSelected(), isUpdate);
-            break;
           }
+          view.findRadioView().setChecked(item.isSelected(), isUpdate);
+        } else if (itemId == R.id.btn_quickTranslate) {
+          view.getToggler().setRadioEnabled(Settings.instance().needUseQuickTranslation(), isUpdate);
         }
       }
     };
@@ -99,9 +97,11 @@ public class SettingsLanguageTranslateController extends RecyclerViewController<
     items.add(new ListItem(ListItem.TYPE_RADIO_OPTION, R.id.btn_chatTranslateStyleNone, 0, R.string.ChatTranslateStyle3, R.id.btn_chatTranslateStyle, chatTranslateMode == Settings.TRANSLATE_MODE_NONE));
     items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
     items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.TranslateSettingsDesc));
+    headerItemCount = items.size();
 
     if (Settings.instance().getChatTranslateMode() != Settings.TRANSLATE_MODE_NONE) {
       addDoNotTranslateItems(items);
+      doNotTranslateItemCount = items.size() - headerItemCount;
       if (Settings.instance().getChatDoNotTranslateMode() == Settings.DO_NOT_TRANSLATE_MODE_SELECTED) {
         addLanguagesItems(items);
       }
@@ -110,8 +110,12 @@ public class SettingsLanguageTranslateController extends RecyclerViewController<
     adapter.setItems(items, true);
   }
 
-  private void addDoNotTranslateItems (List<ListItem> items) {
+  private static void addDoNotTranslateItems (List<ListItem> items) {
     int chatDoNotTranslateMode = Settings.instance().getChatDoNotTranslateMode();
+    items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
+    items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_quickTranslate, 0, R.string.QuickTranslate));
+    items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
+    items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.QuickTranslateDesc));
     items.add(new ListItem(ListItem.TYPE_HEADER_PADDED, 0, 0, R.string.DoNotTranslate));
     items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
     items.add(new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT_WITH_RADIO_2, R.id.btn_chatDoNotTranslateAppLang, 0, R.string.ApplicationLanguage, R.id.btn_chatDoNotTranslate, chatDoNotTranslateMode == Settings.DO_NOT_TRANSLATE_MODE_APP_LANG));
@@ -119,7 +123,7 @@ public class SettingsLanguageTranslateController extends RecyclerViewController<
     items.add(new ListItem(ListItem.TYPE_VALUED_SETTING_COMPACT_WITH_RADIO_2, R.id.btn_chatDoNotTranslateSelected, 0, R.string.SelectedLanguages, R.id.btn_chatDoNotTranslate, chatDoNotTranslateMode == Settings.DO_NOT_TRANSLATE_MODE_SELECTED));
   }
 
-  private void addLanguagesItems (List<ListItem> items) {
+  private static void addLanguagesItems (List<ListItem> items) {
     items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
     items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
     for (int a = 0; a < Lang.getSupportedLanguagesForTranslate().length; a++) {
@@ -138,46 +142,33 @@ public class SettingsLanguageTranslateController extends RecyclerViewController<
 
   @Override
   public void onClick (View v) {
-    int id = v.getId();
-    switch (id) {
-      case R.id.btn_chatTranslateStylePopup:
-      case R.id.btn_chatTranslateStyleInline:
-      case R.id.btn_chatTranslateStyleNone: {  // popup
-        if (adapter.processToggle(v)) {
-          int value = adapter.getCheckIntResults().get(R.id.btn_chatTranslateStyle);
-          int newMode;
-          switch (value) {
-            case R.id.btn_chatTranslateStylePopup:
-              newMode = Settings.TRANSLATE_MODE_POPUP;
-              break;
-            case R.id.btn_chatTranslateStyleInline:
-              newMode = Settings.TRANSLATE_MODE_INLINE;
-              break;
-            case R.id.btn_chatTranslateStyleNone:
-              newMode = Settings.TRANSLATE_MODE_NONE;
-              break;
-            default:
-              return;
-          }
-          updateTranslationStyleMode(newMode);
+    final int viewId = v.getId();
+    if (viewId == R.id.btn_chatTranslateStylePopup || viewId == R.id.btn_chatTranslateStyleInline || viewId == R.id.btn_chatTranslateStyleNone) {// popup
+      if (adapter.processToggle(v)) {
+        int valueId = adapter.getCheckIntResults().get(R.id.btn_chatTranslateStyle);
+        int newMode;
+        if (valueId == R.id.btn_chatTranslateStylePopup) {
+          newMode = Settings.TRANSLATE_MODE_POPUP;
+        } else if (valueId == R.id.btn_chatTranslateStyleInline) {
+          newMode = Settings.TRANSLATE_MODE_INLINE;
+        } else if (valueId == R.id.btn_chatTranslateStyleNone) {
+          newMode = Settings.TRANSLATE_MODE_NONE;
+        } else {
+          return;
         }
-        break;
+        updateTranslationStyleMode(newMode);
       }
-      case R.id.btn_chatDoNotTranslateSelected: {
-        updateDoNotTranslationStyleMode(Settings.DO_NOT_TRANSLATE_MODE_SELECTED);
-        break;
-      }
-      case R.id.btn_chatDoNotTranslateAppLang: {
-        updateDoNotTranslationStyleMode(Settings.DO_NOT_TRANSLATE_MODE_APP_LANG);
-        break;
-      }
-      case R.id.language: {
-        TdApi.LanguagePackInfo languageInfo = (TdApi.LanguagePackInfo) ((ListItem) v.getTag()).getData();
-        Settings.instance().setIsNotTranslatableLanguage(languageInfo.id, !Settings.instance().containsInNotTranslatableLanguageList(languageInfo.id));
-        adapter.updateValuedSettingByData(languageInfo);
-        adapter.updateAllValuedSettingsById(R.id.btn_chatDoNotTranslateSelected);
-        break;
-      }
+    } else if (viewId == R.id.btn_chatDoNotTranslateSelected) {
+      updateDoNotTranslationStyleMode(Settings.DO_NOT_TRANSLATE_MODE_SELECTED);
+    } else if (viewId == R.id.btn_chatDoNotTranslateAppLang) {
+      updateDoNotTranslationStyleMode(Settings.DO_NOT_TRANSLATE_MODE_APP_LANG);
+    } else if (viewId == R.id.language) {
+      TdApi.LanguagePackInfo languageInfo = (TdApi.LanguagePackInfo) ((ListItem) v.getTag()).getData();
+      Settings.instance().setIsNotTranslatableLanguage(languageInfo.id, !Settings.instance().containsInNotTranslatableLanguageList(languageInfo.id));
+      adapter.updateValuedSettingByData(languageInfo);
+      adapter.updateAllValuedSettingsById(R.id.btn_chatDoNotTranslateSelected);
+    } else if (viewId == R.id.btn_quickTranslate) {
+      Settings.instance().setUseQuickTranslation(adapter.toggleView(v));
     }
   }
 
@@ -196,14 +187,17 @@ public class SettingsLanguageTranslateController extends RecyclerViewController<
     Settings.instance().setChatTranslateMode(mode);
 
     if (mode == Settings.TRANSLATE_MODE_NONE) {
-      adapter.removeRange(7, adapter.getItemCount() - 7);
+      adapter.removeRange(headerItemCount, adapter.getItemCount() - headerItemCount);
+      doNotTranslateItemCount = 0;
     } else if (oldMode == Settings.TRANSLATE_MODE_NONE) {
       List<ListItem> items = adapter.getItems();
+      final int index = items.size();
       addDoNotTranslateItems(items);
+      doNotTranslateItemCount = items.size() - index;
       if (Settings.instance().getChatDoNotTranslateMode() == Settings.DO_NOT_TRANSLATE_MODE_SELECTED) {
         addLanguagesItems(items);
       }
-      adapter.notifyItemRangeInserted(7, items.size() - 7);
+      adapter.notifyItemRangeInserted(index, items.size() - index);
     }
   }
 
@@ -216,11 +210,13 @@ public class SettingsLanguageTranslateController extends RecyclerViewController<
     adapter.updateAllValuedSettingsById(R.id.btn_chatDoNotTranslateSelected);
 
     if (mode == Settings.DO_NOT_TRANSLATE_MODE_APP_LANG) {
-      adapter.removeRange(12, adapter.getItemCount() - 12);
+      final int index = headerItemCount + doNotTranslateItemCount;
+      adapter.removeRange(index, adapter.getItemCount() - index);
     } else {
       List<ListItem> items = adapter.getItems();
+      final int index = items.size();
       addLanguagesItems(items);
-      adapter.notifyItemRangeInserted(12, items.size() - 12);
+      adapter.notifyItemRangeInserted(index, items.size() - index);
     }
   }
 

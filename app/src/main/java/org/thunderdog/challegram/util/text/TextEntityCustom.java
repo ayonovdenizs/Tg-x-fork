@@ -20,9 +20,10 @@ import android.view.View;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
+import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.navigation.ViewController;
@@ -36,6 +37,7 @@ import org.thunderdog.challegram.util.StringList;
 import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.collection.IntList;
+import tgx.td.Td;
 
 // TODO merge with TextEntityMessage into one type
 public class TextEntityCustom extends TextEntity {
@@ -47,15 +49,26 @@ public class TextEntityCustom extends TextEntity {
   public static final int FLAG_SUBSCRIPT = 1 << 5;
   public static final int FLAG_SUPERSCRIPT = 1 << 6;
   public static final int FLAG_MARKED = 1 << 7;
-  public static final int FLAG_CLICKABLE = 1 << 10;
-  public static final int FLAG_ANCHOR = 1 << 11;
+  public static final int FLAG_SPOILER = 1 << 9;
+  public static final int FLAG_CLICKABLE = 1 << 20;
+  public static final int FLAG_ANCHOR = 1 << 21;
+  public static final int FLAG_REFERENCE = 1 << 22;
 
   public static final int LINK_TYPE_NONE = 0;
   public static final int LINK_TYPE_EMAIL = 1;
   public static final int LINK_TYPE_URL = 2;
   public static final int LINK_TYPE_PHONE_NUMBER = 3;
-  public static final int LINK_TYPE_ANCHOR = 4;
-  public static final int LINK_TYPE_REFERENCE = 5;
+  public static final int LINK_TYPE_BANK_CARD_NUMBER = 4;
+  public static final int LINK_TYPE_BOT_COMMAND = 5;
+  public static final int LINK_TYPE_DATE_TIME = 6;
+  public static final int LINK_TYPE_CASHTAG = 7;
+  public static final int LINK_TYPE_HASHTAG = 8;
+  public static final int LINK_TYPE_MENTION = 9;
+  public static final int LINK_TYPE_MENTION_NAME = 10;
+
+  public static final int LINK_TYPE_ANCHOR = 100;
+  public static final int LINK_TYPE_REFERENCE = 101;
+  public static final int LINK_TYPE_BUTTON = 102;
 
   private final ViewController<?> context; // TODO move to TextEntity
 
@@ -66,11 +79,15 @@ public class TextEntityCustom extends TextEntity {
   private int linkType;
   private String link;
   private boolean linkCached;
+  private TdApi.InlineButton button;
 
   private ClickableSpan onClickListener;
-  private String anchorName;
+  private String anchorOrReferenceName;
+  private boolean anchorIsReference;
   private String referenceAnchorName;
   private TdApi.RichTextIcon icon;
+  private TdApi.RichTextCustomEmoji emoji;
+  private TdApi.RichTextMathematicalExpression mathematicalExpression;
   private String copyLink;
 
   public TextEntityCustom (@Nullable ViewController<?> context, @Nullable Tdlib tdlib, String in, int offset, int end, int flags, @Nullable TdlibUi.UrlOpenParameters openParameters) {
@@ -88,8 +105,19 @@ public class TextEntityCustom extends TextEntity {
     return this;
   }
 
-  public TextEntityCustom setAnchorName (String anchorName) {
-    this.anchorName = anchorName;
+  public TextEntityCustom setEmoji (TdApi.RichTextCustomEmoji emoji) {
+    this.emoji = emoji;
+    return this;
+  }
+
+  public TextEntityCustom setMathematicalExpression (TdApi.RichTextMathematicalExpression mathematicalExpression) {
+    this.mathematicalExpression = mathematicalExpression;
+    return this;
+  }
+
+  public TextEntityCustom setAnchorOrReferenceName (String name, boolean isReference) {
+    this.anchorOrReferenceName = name;
+    this.anchorIsReference = isReference;
     return this;
   }
 
@@ -101,6 +129,10 @@ public class TextEntityCustom extends TextEntity {
   public TextEntityCustom setCopyLink (String copyLink) {
     this.copyLink = copyLink;
     return this;
+  }
+
+  public String getLinkIfUrl () {
+    return linkType == LINK_TYPE_URL ? link : null;
   }
 
   @Override
@@ -137,11 +169,17 @@ public class TextEntityCustom extends TextEntity {
     if (referenceAnchorName != null) {
       copy.setReferenceAnchorName(referenceAnchorName);
     }
-    if (anchorName != null) {
-      copy.setAnchorName(anchorName);
+    if (anchorOrReferenceName != null) {
+      copy.setAnchorOrReferenceName(anchorOrReferenceName, anchorIsReference);
     }
     if (icon != null) {
       copy.setIcon(icon);
+    }
+    if (emoji != null) {
+      copy.setEmoji(emoji);
+    }
+    if (mathematicalExpression != null) {
+      copy.setMathematicalExpression(mathematicalExpression);
     }
     return copy;
   }
@@ -155,6 +193,24 @@ public class TextEntityCustom extends TextEntity {
       colorSet = customColorSet;
     } else if (linkType == LINK_TYPE_REFERENCE) {
       colorSet = TextColorSets.InstantView.REFERENCE;
+    } else if (linkType == LINK_TYPE_BUTTON) {
+      // TODO: similar to TextColorSets.InstantView.REFERENCE
+      colorSet = switch (button.style.getConstructor()) {
+        case TdApi.ButtonStyleLink.CONSTRUCTOR ->
+          null;
+        case TdApi.ButtonStyleDanger.CONSTRUCTOR ->
+          TextColorSets.InstantView.REFERENCE; // TODO: red
+        case TdApi.ButtonStyleDefault.CONSTRUCTOR ->
+          TextColorSets.InstantView.REFERENCE; // TODO: default style
+        case TdApi.ButtonStylePrimary.CONSTRUCTOR ->
+          TextColorSets.InstantView.REFERENCE; // TODO: dark blue
+        case TdApi.ButtonStyleSuccess.CONSTRUCTOR ->
+          TextColorSets.InstantView.REFERENCE; // TODO: green
+        default -> {
+          Td.assertButtonStyle_4f30e8d0();
+          throw Td.unsupported(button.type);
+        }
+      };
     } else if (BitwiseUtils.hasFlag(flags, FLAG_MARKED)) {
       colorSet = TextColorSets.InstantView.Marked.NORMAL;
     } else if (BitwiseUtils.hasFlag(flags, FLAG_MONOSPACE)) {
@@ -205,6 +261,11 @@ public class TextEntityCustom extends TextEntity {
   }
 
   @Override
+  public boolean forceDisableAnimations () {
+    return false;
+  }
+
+  @Override
   public boolean hasMedia () {
     return isIcon();
   }
@@ -241,6 +302,10 @@ public class TextEntityCustom extends TextEntity {
     this.linkCached = linkCached;
   }
 
+  public void setButton (TdApi.InlineButton button) {
+    this.button = button;
+  }
+
   // Impl
 
   @Override
@@ -255,6 +320,11 @@ public class TextEntityCustom extends TextEntity {
 
   @Override
   public TdApi.TextEntity getSpoiler () {
+    return null;
+  }
+
+  @Override
+  public TdApi.TextEntity getQuote () {
     return null;
   }
 
@@ -290,7 +360,7 @@ public class TextEntityCustom extends TextEntity {
 
   @Override
   public boolean hasAnchor (String anchor) {
-    return !StringUtils.isEmpty(this.anchorName) && this.anchorName.equals(anchor);
+    return !StringUtils.isEmpty(this.anchorOrReferenceName) && this.anchorOrReferenceName.equals(anchor);
   }
 
   @Override
@@ -299,7 +369,17 @@ public class TextEntityCustom extends TextEntity {
   }
 
   @Override
-  public void performClick (View view, Text text, TextPart part, @Nullable Text.ClickCallback callback) {
+  public int getQuoteId () {
+    return -1;
+  }
+
+  @Override
+  public boolean isQuote () {
+    return false;
+  }
+
+  @Override
+  public void performClick (View view, Text text, TextPart part, @Nullable Text.ClickCallback callback, boolean isFromLongPressMenu) {
     switch (linkType) {
       case LINK_TYPE_EMAIL: {
         if (callback == null || !callback.onEmailClick(link)) {
@@ -314,7 +394,7 @@ public class TextEntityCustom extends TextEntity {
         break;
       }
       case LINK_TYPE_URL: {
-        TdlibUi.UrlOpenParameters openParameters = this.openParameters(view, text, part);
+        TdlibUi.UrlOpenParameters openParameters = this.openParameters(view, text, part, isFromLongPressMenu);
         if (callback == null || !callback.onUrlClick(view, link, !StringUtils.equalsOrBothEmpty(text.getText(), link), openParameters)) {
           if (context != null) {
             context.openLinkAlert(link, modifyUrlOpenParameters(openParameters, callback, link));
@@ -335,8 +415,14 @@ public class TextEntityCustom extends TextEntity {
         break;
       }
       case LINK_TYPE_REFERENCE: {
-        if (callback == null || !(callback.onReferenceClick(view, link, referenceAnchorName, this.openParameters(view, text, part))) || callback.onAnchorClick(view, link)) {
+        if (callback == null || !(callback.onReferenceClick(view, link, referenceAnchorName, this.openParameters(view, text, part, isFromLongPressMenu))) || callback.onAnchorClick(view, link)) {
           // TODO open pop-up with ${referenceText}?
+        }
+        break;
+      }
+      case LINK_TYPE_BUTTON: {
+        if (callback == null || !(callback.onButtonClick(view, button, this.openParameters(view, text, part, isFromLongPressMenu)))) {
+          // TODO
         }
         break;
       }
@@ -354,12 +440,12 @@ public class TextEntityCustom extends TextEntity {
       if (linkType == LINK_TYPE_NONE || StringUtils.isEmpty(link) || ((linkType == LINK_TYPE_ANCHOR || linkType == LINK_TYPE_REFERENCE) && (openParameters == null || StringUtils.isEmpty(openParameters.refererUrl)))) {
         if (isMonospace()) {
           String content = text.getText().substring(getStart(), getEnd());
-          context.showOptions(content, new int[] {R.id.btn_copyText}, new String[] {Lang.getString(R.string.Copy)}, null, new int[] {R.drawable.baseline_content_copy_24}, (itemView, id) -> {
+          context.showOptions(content, new int[] {R.id.btn_copyText}, new String[] {Lang.getString(R.string.Copy)}, null, new int[] {R.drawable.baseline_content_copy_24}, Config.MAX_COPY_TEXT_LINE_COUNT, (itemView, id) -> {
             if (id == R.id.btn_copyText) {
               UI.copyText(content, R.string.CopiedText);
             }
             return true;
-          });
+          }, null);
           return true;
         }
         return false;
@@ -402,22 +488,15 @@ public class TextEntityCustom extends TextEntity {
     final int[] shareState = {0};
 
     context.showOptions(copyText, ids.get(), strings.get(), null, icons.get(), (itemView, id) -> {
-      switch (id) {
-        case R.id.btn_copyLink: {
-          UI.copyText(copyText, R.string.CopiedLink);
-          break;
+      if (id == R.id.btn_copyLink) {
+        UI.copyText(copyText, R.string.CopiedLink);
+      } else if (id == R.id.btn_shareLink) {
+        if (shareState[0] == 0) {
+          shareState[0] = 1;
+          TD.shareLink(new TdlibContext(context.context(), tdlib), copyText);
         }
-        case R.id.btn_shareLink: {
-          if (shareState[0] == 0) {
-            shareState[0] = 1;
-            TD.shareLink(new TdlibContext(context.context(), tdlib), copyText);
-          }
-          break;
-        }
-        case R.id.btn_openLink: {
-          performClick(view, text, part, clickCallback);
-          break;
-        }
+      } else if (id == R.id.btn_openLink) {
+        performClick(view, text, part, clickCallback, true);
       }
       return true;
     }, clickCallback != null ? clickCallback.getForcedTheme(view, text) : null);

@@ -30,6 +30,9 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.os.SystemClock;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
 import android.text.TextPaint;
 import android.text.TextUtils;
 import android.util.SparseIntArray;
@@ -48,8 +51,8 @@ import androidx.annotation.StringRes;
 import androidx.annotation.UiThread;
 import androidx.collection.LongSparseArray;
 
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.drinkmore.Tracer;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.BuildConfig;
@@ -70,22 +73,28 @@ import org.thunderdog.challegram.loader.ComplexReceiver;
 import org.thunderdog.challegram.loader.DoubleImageReceiver;
 import org.thunderdog.challegram.loader.ImageReceiver;
 import org.thunderdog.challegram.loader.Receiver;
+import org.thunderdog.challegram.loader.gif.GifFile;
 import org.thunderdog.challegram.loader.gif.GifReceiver;
 import org.thunderdog.challegram.mediaview.MediaViewThumbLocation;
 import org.thunderdog.challegram.mediaview.data.MediaItem;
 import org.thunderdog.challegram.navigation.HeaderView;
-import org.thunderdog.challegram.navigation.MenuMoreWrap;
 import org.thunderdog.challegram.navigation.ReactionsOverlayView;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
 import org.thunderdog.challegram.navigation.ViewController;
+import org.thunderdog.challegram.telegram.MessageEditMediaPending;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.telegram.TdlibAccentColor;
 import org.thunderdog.challegram.telegram.TdlibDelegate;
+import org.thunderdog.challegram.telegram.TdlibEmojiManager;
+import org.thunderdog.challegram.telegram.TdlibForumTopicManager;
 import org.thunderdog.challegram.telegram.TdlibSender;
+import org.thunderdog.challegram.telegram.TdlibThread;
 import org.thunderdog.challegram.telegram.TdlibUi;
+import org.thunderdog.challegram.theme.ColorId;
+import org.thunderdog.challegram.theme.PorterDuffColorId;
+import org.thunderdog.challegram.theme.PropertyId;
 import org.thunderdog.challegram.theme.Theme;
-import org.thunderdog.challegram.theme.ThemeColorId;
 import org.thunderdog.challegram.theme.ThemeManager;
-import org.thunderdog.challegram.theme.ThemeProperty;
 import org.thunderdog.challegram.tool.DrawAlgorithms;
 import org.thunderdog.challegram.tool.Drawables;
 import org.thunderdog.challegram.tool.Fonts;
@@ -99,7 +108,9 @@ import org.thunderdog.challegram.ui.FeatureToggles;
 import org.thunderdog.challegram.ui.MessagesController;
 import org.thunderdog.challegram.ui.TranslationControllerV2;
 import org.thunderdog.challegram.unsorted.Settings;
+import org.thunderdog.challegram.util.EmojiStatusHelper;
 import org.thunderdog.challegram.util.LanguageDetector;
+import org.thunderdog.challegram.util.NonBubbleEmojiLayout;
 import org.thunderdog.challegram.util.ReactionsCounterDrawable;
 import org.thunderdog.challegram.util.TranslationCounterDrawable;
 import org.thunderdog.challegram.util.text.Counter;
@@ -124,11 +135,12 @@ import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.SdkVersion;
@@ -147,15 +159,21 @@ import me.vkryl.core.StringUtils;
 import me.vkryl.core.collection.LongList;
 import me.vkryl.core.collection.LongSet;
 import me.vkryl.core.lambda.CancellableRunnable;
+import me.vkryl.core.lambda.FutureBool;
+import me.vkryl.core.lambda.RunnableBool;
 import me.vkryl.core.lambda.RunnableData;
 import me.vkryl.core.reference.ReferenceList;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.MessageId;
-import me.vkryl.td.Td;
+import tgx.td.ChatId;
+import tgx.td.MessageId;
+import tgx.td.Td;
+import tgx.td.TdExt;
+import tgx.td.data.MessageWithProperties;
 
-public abstract class TGMessage implements InvalidateContentProvider, TdlibDelegate, FactorAnimator.Target, Comparable<TGMessage>, Counter.Callback, TranslationsManager.Translatable {
+public abstract class TGMessage implements InvalidateContentProvider, TdlibDelegate, FactorAnimator.Target, Comparable<TGMessage>, Counter.Callback, TGAvatars.Callback, TranslationsManager.Translatable, TdlibForumTopicManager.Observer {
   private static final int MAXIMUM_CHANNEL_MERGE_TIME_DIFF = 150;
   private static final int MAXIMUM_COMMON_MERGE_TIME_DIFF = 900;
+
+  protected static final long TEXT_CROSS_FADE_DURATION_MS = 200L;
 
   private static final int MAXIMUM_CHANNEL_MERGE_COUNT = 19;
   private static final int MAXIMUM_COMMON_MERGE_COUNT = 14;
@@ -183,7 +201,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   private static final int FLAG_NO_UNREAD = 1 << 20;
   private static final int FLAG_ATTACHED = 1 << 21;
   private static final int FLAG_EVENT_LOG = 1 << 22;
-  // private static final int FLAG_IS_ADMIN = 1 << 24;
+  private static final int FLAG_BELOW_ALL_MESSAGES = 1 << 24;
   private static final int FLAG_SELF_CHAT = 1 << 25;
   private static final int FLAG_IGNORE_SWIPE = 1 << 26;
   private static final int FLAG_READY_QUICK_LEFT = 1 << 27;
@@ -193,6 +211,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   private static final int FLAG_BEING_ADDED = 1 << 31;
 
   protected TdApi.Message msg;
+  protected final TdApi.SponsoredMessage sponsoredMessage;
   private int flags;
 
   protected int mergeTime, mergeIndex;
@@ -203,6 +222,10 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   protected String time;
 
   protected @NonNull final TdlibSender sender;
+
+  private final TdlibForumTopicManager.Key forumTopicKey;
+  private TdApi.ForumTopicInfo topicInfo;
+  private boolean topicObserverRegistered;
 
   protected @Nullable final String viaBotUsername;
   protected TGSource forwardInfo;
@@ -215,26 +238,35 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   // header values
 
   private String date;
+  private @Nullable TdlibAccentColor hAuthorAccentColor;
   private @Nullable Text hAuthorNameT, hPsaTextT, hAuthorChatMark;
   private @Nullable Text hAdminNameT;
   private @Nullable Letters uBadge;
+  private EmojiStatusHelper.EmojiStatusDrawable hAuthorEmojiStatus;
 
   // counters
 
-  private final Counter viewCounter, replyCounter, shareCounter, isPinned;
+  private final Counter viewCounter, replyCounter, shareCounter, isPinned, isEdited, isRestricted, isUnsupported;
   private Counter shrinkedReactionsCounter, reactionsCounter;
-  private ReactionsCounterDrawable reactionsCounterDrawable;
-  private Counter isChannelHeaderCounter;
-  private float isChannelHeaderCounterX, isChannelHeaderCounterY;
+  private final ReactionsCounterDrawable reactionsCounterDrawable;
+  private final Counter isChannelHeaderCounter;
 
   private boolean translatedCounterForceShow;
   private final Counter isTranslatedCounter;
   private final TranslationCounterDrawable isTranslatedCounterDrawable;
-  private float isTranslatedCounterX, isTranslatedCounterY;
+
+  // counter last-draw positions
+
+  private final RectF isChannelHeaderCounterLastDrawRect = new RectF();
+  private final RectF isTranslatedCounterLastDrawRect = new RectF();
+  private final RectF isRestrictedCounterLastDrawRect = new RectF();
+  private final RectF isEditedCounterLastDrawRect = new RectF();
+
 
   // forward values
 
   private String fTime;
+  private TdlibAccentColor fAuthorNameAccentColor;
   private Text fAuthorNameT, fPsaTextT;
   private float fTimeWidth;
 
@@ -247,7 +279,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   private float lastMergeRadius, lastDefaultRadius;
   private int pContentX, pContentY, pContentMaxWidth;
   private int timeAddedHeight;
-  private FactorAnimator timeExpandValue = new FactorAnimator(0, new FactorAnimator.Target() {
+  private final FactorAnimator timeExpandValue = new FactorAnimator(0, new FactorAnimator.Target() {
     @Override
     public void onFactorChanged (int id, float factor, float fraction, FactorAnimator callee) {
       if (BitwiseUtils.hasFlag(flags, FLAG_LAYOUT_BUILT)) {
@@ -261,7 +293,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       }
       invalidate();
     }
-  }, AnimatorUtils.DECELERATE_INTERPOLATOR, 200l);
+  }, AnimatorUtils.DECELERATE_INTERPOLATOR, 200L);
 
   private int pTimeLeft, pTimeWidth;
   private int pClockLeft, pClockTop;
@@ -271,7 +303,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   private final Path bubblePath, bubbleClipPath;
   private float topRightRadius, topLeftRadius, bottomLeftRadius, bottomRightRadius;
-  private final RectF bubblePathRect, bubbleClipPathRect;
+  protected final RectF bubblePathRect, bubbleClipPathRect;
 
   private boolean needSponsorSmallPadding;
 
@@ -291,6 +323,14 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   private final TranslationsManager mTranslationsManager;
 
   protected TGMessage (MessagesManager manager, TdApi.Message msg) {
+    this(manager, msg, null, false);
+  }
+
+  protected TGMessage (MessagesManager manager, TdApi.SponsoredMessage sponsoredMessage, long inChatId, boolean isBelowAllMessages) {
+    this(manager, toFakeMessage(manager, inChatId, sponsoredMessage), sponsoredMessage, isBelowAllMessages);
+  }
+
+  private TGMessage (MessagesManager manager, TdApi.Message msg, @Nullable TdApi.SponsoredMessage sponsoredMessage, boolean isBelowAllMessages) {
     if (!initialized) {
       synchronized (TGMessage.class) {
         if (!initialized) {
@@ -303,6 +343,13 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     this.manager = manager;
     this.tdlib = manager.controller().tdlib();
 
+    TdApi.MessageTopic topicId = msg.topicId;
+    if (topicId != null && topicId.getConstructor() == TdApi.MessageTopicForum.CONSTRUCTOR) {
+      this.forumTopicKey = new TdlibForumTopicManager.Key(msg.chatId, ((TdApi.MessageTopicForum) topicId).forumTopicId);
+    } else {
+      this.forumTopicKey = null;
+    }
+
     this.mTranslationsManager = new TranslationsManager(tdlib, this, this::setTranslatedStatus, this::setTranslationResult, this::showTranslateErrorMessageBubbleMode);
 
     this.bubblePath = new Path();
@@ -314,11 +361,15 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     this.currentViews = new MultipleViewProvider();
     this.currentViews.setContentProvider(this);
     this.msg = msg;
+    this.sponsoredMessage = sponsoredMessage;
+    this.flags |= BitwiseUtils.optional(FLAG_BELOW_ALL_MESSAGES, isBelowAllMessages);
     this.messageReactions = new TGReactions(this, tdlib, msg.interactionInfo != null ? msg.interactionInfo.reactions : null, new TGReactions.MessageReactionsDelegate() {
       @Override
       public void onClick (View v, TGReactions.MessageReactionEntry entry) {
         boolean hasReaction = messageReactions.hasReaction(entry.getReactionType());
-        if (hasReaction || messagesController().callNonAnonymousProtection(getId() + entry.hashCode(), TGMessage.this, getReactionBubbleLocationProvider(entry))) {
+        if (Config.DISABLE_ANONYMOUS_NON_OWNER_REACTIONS && !hasReaction && tdlib.isAnonymousAdminNonCreator(msg.chatId)) {
+          showReactionBubbleTooltip(v, entry, Lang.getString(R.string.error_ANONYMOUS_REACTIONS_DISABLED));
+        } else if (!Config.PROTECT_ANONYMOUS_REACTIONS || hasReaction || messagesController().callNonAnonymousProtection(getId() + entry.hashCode(), TGMessage.this, getReactionBubbleLocationProvider(entry))) {
           boolean needAnimation = messageReactions.toggleReaction(entry.getReactionType(), false, false, handler(v, entry, () -> {
           }));
           if (needAnimation) {
@@ -329,8 +380,8 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
       @Override
       public void onLongClick (View v, TGReactions.MessageReactionEntry entry) {
-        checkAvailableReactions(() -> {
-          checkMessageFlags(() -> {
+        loadAvailableReactions(() -> {
+          loadAllMessageProperties(() -> {
             if (canGetAddedReactions()) {
               MessagesController m = messagesController();
               m.showMessageAddedReactions(TGMessage.this, entry.getReactionType());
@@ -349,34 +400,47 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
           }
         });
       }
+
+      @Override
+      public void onInvalidateReceiversRequested () {
+        runOnUiThreadOptional(() -> {
+          invalidateReactionFilesReceiver();
+        });
+      }
     });
     this.commentButton = new TGCommentButton(this);
 
-    TdApi.MessageSender sender = msg.senderId;
-    if (tdlib.isSelfChat(msg.chatId)) {
-      flags |= FLAG_SELF_CHAT;
-      if (msg.forwardInfo != null) {
-        switch (msg.forwardInfo.origin.getConstructor()) {
-          case TdApi.MessageForwardOriginUser.CONSTRUCTOR:
-            sender = new TdApi.MessageSenderUser(((TdApi.MessageForwardOriginUser) msg.forwardInfo.origin).senderUserId);
-            break;
-          case TdApi.MessageForwardOriginChat.CONSTRUCTOR:
-            sender = new TdApi.MessageSenderChat(((TdApi.MessageForwardOriginChat) msg.forwardInfo.origin).senderChatId);
-            break;
-          case TdApi.MessageForwardOriginChannel.CONSTRUCTOR:
-            TdApi.MessageForwardOriginChannel info = (TdApi.MessageForwardOriginChannel) msg.forwardInfo.origin;
-            if ((msg.forwardInfo.fromChatId == 0 && msg.forwardInfo.fromMessageId == 0)) {
-              msg.forwardInfo.fromChatId = info.chatId;
-              msg.forwardInfo.fromMessageId = info.messageId;
-            }
-            break;
-          case TdApi.MessageForwardOriginHiddenUser.CONSTRUCTOR:
-          case TdApi.MessageForwardOriginMessageImport.CONSTRUCTOR:
-            break;
+    if (isSponsoredMessage()) {
+      this.sender = new TdlibSender(tdlib, msg.chatId, sponsoredMessage);
+    } else {
+      TdApi.MessageSender sender = msg.senderId;
+      if (sender == null) {
+        throw new IllegalArgumentException();
+      }
+      if (tdlib.isSelfChat(msg.chatId)) {
+        flags |= FLAG_SELF_CHAT;
+        if (msg.forwardInfo != null) {
+          switch (msg.forwardInfo.origin.getConstructor()) {
+            case TdApi.MessageOriginUser.CONSTRUCTOR:
+              sender = new TdApi.MessageSenderUser(((TdApi.MessageOriginUser) msg.forwardInfo.origin).senderUserId);
+              break;
+            case TdApi.MessageOriginChat.CONSTRUCTOR:
+              sender = new TdApi.MessageSenderChat(((TdApi.MessageOriginChat) msg.forwardInfo.origin).senderChatId);
+              break;
+            case TdApi.MessageOriginChannel.CONSTRUCTOR:
+              TdApi.MessageOriginChannel info = (TdApi.MessageOriginChannel) msg.forwardInfo.origin;
+              /*FIXME?
+                 if (!Td.hasMessageSource(msg.forwardInfo)) {
+                msg.forwardInfo.source = new TdApi.ForwardSource(info.chatId, info.messageId, null, "", 0, false);
+              }*/
+              break;
+            case TdApi.MessageOriginHiddenUser.CONSTRUCTOR:
+              break;
+          }
         }
       }
+      this.sender = new TdlibSender(tdlib, msg.chatId, sender, manager, !msg.isOutgoing && isDemoChat());
     }
-    this.sender = new TdlibSender(tdlib, msg.chatId, sender, manager, !msg.isOutgoing && isDemoChat());
 
     this.isPinned = new Counter.Builder()
       .noBackground()
@@ -384,6 +448,28 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       .callback(this)
       .drawable(R.drawable.deproko_baseline_pin_14, 14f, 0f, Gravity.CENTER_HORIZONTAL)
       .build();
+    this.isEdited = new Counter.Builder()
+      .noBackground()
+      .allBold(false)
+      .callback(this)
+      .drawable(R.drawable.baseline_edit_12, 12f, 0f, Gravity.CENTER_HORIZONTAL)
+      .build();
+    this.isEdited.showHide(true, false);
+    this.isRestricted = new Counter.Builder()
+      .noBackground()
+      .allBold(false)
+      .callback(this)
+      .drawable(R.drawable.baseline_warning_14, 14f, 0f, Gravity.CENTER_HORIZONTAL)
+      .colorSet(() -> Theme.getColor(ColorId.messageNegativeLine))
+      .build();
+    this.isRestricted.showHide(true, false);
+    this.isUnsupported = new Counter.Builder()
+      .noBackground()
+      .allBold(false)
+      .callback(this)
+      .drawable(R.drawable.baseline_info_14, 14f, 0f, Gravity.CENTER_HORIZONTAL)
+      .build();
+    this.isUnsupported.showHide(true, false);
     this.isChannelHeaderCounter = new Counter.Builder()
       .noBackground()
       .allBold(false)
@@ -391,9 +477,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       .drawable(R.drawable.baseline_bullhorn_16, 16f, 0, Gravity.CENTER_HORIZONTAL)
       .build();
     if (msg.isChannelPost || (msg.forwardInfo != null && (
-        msg.forwardInfo.origin.getConstructor() == TdApi.MessageForwardOriginChannel.CONSTRUCTOR ||
+        msg.forwardInfo.origin.getConstructor() == TdApi.MessageOriginChannel.CONSTRUCTOR ||
         TD.getViewCount(msg.interactionInfo) > 1 ||
-        tdlib.isChannel(msg.forwardInfo.fromChatId) ||
+        tdlib.isChannel(msg.forwardInfo.source) ||
         this.sender.isChannel()
     ))) {
       this.viewCounter = new Counter.Builder()
@@ -429,21 +515,21 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       .allBold(false)
       .callback(this)
       .textSize(useBubbles() ? 11f : 12f)
-      .colorSet(() -> messageReactions.hasChosen() ? Theme.getColor(R.id.theme_color_badge) : this.getTimePartTextColor())
+      .colorSet(() -> messageReactions.hasChosen() ? Theme.getColor(ColorId.badge) : this.getTimePartTextColor())
       .build();
     this.shrinkedReactionsCounter = new Counter.Builder()
       .noBackground()
       .allBold(false)
       .callback(this)
-      .colorSet(() -> messageReactions.hasChosen() ? Theme.getColor(R.id.theme_color_badge) : Theme.getColor(R.id.theme_color_iconLight))
+      .colorSet(() -> messageReactions.hasChosen() ? Theme.getColor(ColorId.badge) : Theme.getColor(ColorId.iconLight))
       .drawable(R.drawable.baseline_favorite_14, 14f, 0f, Gravity.CENTER_HORIZONTAL)
       .build();
 
     this.isTranslatedCounterDrawable = new TranslationCounterDrawable(Drawables.get(R.drawable.baseline_translate_14));
     this.isTranslatedCounterDrawable.setColors(
-      msg.isOutgoing ? R.id.theme_color_bubbleOut_time: R.id.theme_color_bubbleIn_time,
-      msg.isOutgoing ? R.id.theme_color_bubbleOut_time: R.id.theme_color_bubbleIn_time,
-      msg.isOutgoing ? R.id.theme_color_bubbleOut_textLink: R.id.theme_color_bubbleIn_textLink
+      msg.isOutgoing ? ColorId.bubbleOut_time : ColorId.bubbleIn_time,
+      msg.isOutgoing ? ColorId.bubbleOut_time : ColorId.bubbleIn_time,
+      msg.isOutgoing ? ColorId.bubbleOut_textLink : ColorId.bubbleIn_textLink
     );
     this.isTranslatedCounter = new Counter.Builder()
       .noBackground()
@@ -458,7 +544,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
     if (msg.viaBotUserId != 0) {
       TdApi.User viaBot = tdlib.cache().user(msg.viaBotUserId);
-      if (viaBot != null) {
+      if (viaBot != null && Td.hasUsername(viaBot)) {
         this.viaBotUsername = "@" + Td.primaryUsername(viaBot);
       } else {
         this.viaBotUsername = null;
@@ -474,21 +560,32 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       overlayViews = null;
     }
 
-    if (useForward() || forceForwardedInfo()) {
+    if (useForward() || forceForwardOrImportInfo()) {
       loadForward();
     }
 
     ThreadInfo messageThread = messagesController().getMessageThread();
-    if (msg.replyToMessageId != 0 && (messageThread == null || !messageThread.isRootMessage(msg.replyToMessageId))) {
-      loadReply();
+    if (msg.replyTo != null && (messageThread == null || !messageThread.isRootMessage(msg.replyTo)) && !(msg.content != null && msg.content.getConstructor() == TdApi.MessageGiveawayWinners.CONSTRUCTOR)) {
+      if (msg.replyTo.getConstructor() == TdApi.MessageReplyToMessage.CONSTRUCTOR) { // TODO: support replies to stories
+        loadReply();
+      }
     }
 
-    if (isHot() && needHotTimer() && msg.selfDestructIn < msg.selfDestructTime) {
+    if (isHot() && needHotTimer() && isHotOpened()) {
       startHotTimer(false);
     }
 
     computeQuickButtons();
     checkHighlightedText();
+
+    UI.post(() -> updateReactionAvatars(false));
+
+    this.isHiddenByFilter = new BoolAnimator(IS_HIDDEN_BY_MESSAGE_FILTER_ANIMATOR_ID, (a, b, c, d) -> {
+      if (BitwiseUtils.hasFlag(flags, FLAG_LAYOUT_BUILT)) {
+        notifyBubbleChanged();
+        invalidate();
+      }
+    }, AnimatorUtils.DECELERATE_INTERPOLATOR, 320L);
   }
 
   private static @NonNull <T> T nonNull (@Nullable T value) {
@@ -530,20 +627,20 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   private String genTime () {
     if (isEventLog()) {
       return Lang.getRelativeTimestampShort(msg.date, TimeUnit.SECONDS);
-    } else if (isSponsored()) {
-      return Lang.getString(R.string.SponsoredSign);
+    } else if (isSponsoredMessage()) {
+      return Lang.getString(sponsoredMessage.isRecommended ? R.string.RecommendedSign : R.string.SponsoredSign);
     }
     StringBuilder b = new StringBuilder();
     String signature;
     if (isChannel() && !StringUtils.isEmpty(msg.authorSignature)) {
       signature = msg.authorSignature;
-    } else if (forceForwardedInfo() && msg.forwardInfo != null) {
+    } else if (forceForwardOrImportInfo() && msg.forwardInfo != null) {
       switch (msg.forwardInfo.origin.getConstructor()) {
-        case TdApi.MessageForwardOriginChannel.CONSTRUCTOR:
-          signature = ((TdApi.MessageForwardOriginChannel) msg.forwardInfo.origin).authorSignature;
+        case TdApi.MessageOriginChannel.CONSTRUCTOR:
+          signature = ((TdApi.MessageOriginChannel) msg.forwardInfo.origin).authorSignature;
           break;
-        case TdApi.MessageForwardOriginChat.CONSTRUCTOR:
-          signature = ((TdApi.MessageForwardOriginChat) msg.forwardInfo.origin).authorSignature;
+        case TdApi.MessageOriginChat.CONSTRUCTOR:
+          signature = ((TdApi.MessageOriginChat) msg.forwardInfo.origin).authorSignature;
           break;
         default:
           signature = null;
@@ -565,7 +662,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     if (!useBubbles() && needAdminSign()) {
       b.append(getAdministratorSign()).append(" ");
     }
-    if (msg.forwardInfo != null && msg.forwardInfo.origin.getConstructor() == TdApi.MessageForwardOriginMessageImport.CONSTRUCTOR) {
+    if (isImported()) {
       b.append(Lang.getString(R.string.ImportedSign)).append(" ");
     }
     if (TD.isFailed(msg)) {
@@ -577,13 +674,15 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       }
     } else if ((flags & FLAG_SELF_CHAT) != 0 && !isOutgoing() && msg.forwardInfo != null) {
       int date = replaceTimeWithEditTime() ? msg.editDate : msg.date;
-      if (msg.forwardInfo.date != 0)
-        date = msg.forwardInfo.date;
+      final int forwardOrImportDate = getForwardOrImportDate();
+      if (forwardOrImportDate != 0)
+        date = forwardOrImportDate;
       if (date != 0) {
         b.append(Lang.getRelativeTimestampShort(date, TimeUnit.SECONDS));
       }
-    } else if (forceForwardedInfo() && msg.forwardInfo.date != 0) {
-      b.append(DateUtils.isSameDay(msg.forwardInfo.date, msg.date) ? Lang.time(msg.forwardInfo.date, TimeUnit.SECONDS) : Lang.getRelativeTimestampShort(msg.forwardInfo.date, TimeUnit.SECONDS));
+    } else if (forceForwardOrImportInfo() && getForwardOrImportDate() != 0) {
+      int date = getForwardOrImportDate();
+      b.append(DateUtils.isSameDay(date, msg.date) ? Lang.time(date, TimeUnit.SECONDS) : Lang.getRelativeTimestampShort(date, TimeUnit.SECONDS));
     } else {
       int date = replaceTimeWithEditTime() ? msg.editDate : msg.date;
       if (date != 0) {
@@ -647,7 +746,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   public final boolean mergeWith (@Nullable TGMessage top, boolean isBottom) {
     if (top != null) {
       top.setNeedExtraPadding(false);
-      top.setNeedExtraPresponsoredPadding(isSponsored());
+      top.setNeedExtraPresponsoredPadding(isSponsoredMessage() && BitwiseUtils.hasFlag(flags, FLAG_BELOW_ALL_MESSAGES));
       flags |= MESSAGE_FLAG_HAS_OLDER_MESSAGE;
     } else {
       flags &= ~MESSAGE_FLAG_HAS_OLDER_MESSAGE;
@@ -668,7 +767,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         top.setIsBottom(true);
       }
       setHeaderEnabled(!headerDisabled());
-      if ((top != null || getDate() != 0 || isScheduled()) && !isSponsored() && (!isBelowHeader || messagesController().areScheduledOnly())) {
+      if ((top != null || getDate() != 0 || isScheduled()) && !isSponsoredMessage() && (!isBelowHeader || messagesController().areScheduledOnly())) {
         flags |= FLAG_SHOW_DATE;
         setDate(genDate());
       } else {
@@ -683,7 +782,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     boolean isChannel = isChannel();
 
     TdApi.Message topMessage = top.getMessage();
-    if (top.headerDisabled() || (flags & FLAG_SHOW_BADGE) != 0 || !tdlib.isSameSender(topMessage, msg) || !TD.isSameSource(topMessage, msg, forceForwardedInfo()) || topMessage.viaBotUserId != msg.viaBotUserId || !StringUtils.equalsOrBothEmpty(topMessage.authorSignature, msg.authorSignature) || mergeDisabled() || (useBubbles ? top.isOutgoingBubble() != isOutgoingBubble() : top.getMessage().mediaAlbumId != msg.mediaAlbumId || msg.mediaAlbumId != 0)) {
+    if (top.headerDisabled() || top.isSponsoredMessage() != isSponsoredMessage() || (flags & FLAG_SHOW_BADGE) != 0 || !tdlib.isSameSender(topMessage, msg) || !TD.isSameSource(topMessage, msg, forceForwardOrImportInfo()) || topMessage.viaBotUserId != msg.viaBotUserId || !StringUtils.equalsOrBothEmpty(topMessage.authorSignature, msg.authorSignature) || mergeDisabled() || (useBubbles ? top.isOutgoingBubble() != isOutgoingBubble() : top.getMessage().mediaAlbumId != msg.mediaAlbumId || msg.mediaAlbumId != 0)) {
       setHeaderEnabled(!headerDisabled());
       top.setIsBottom(true);
       return false;
@@ -705,7 +804,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       maxIndex = MAXIMUM_COMMON_MERGE_COUNT;
     }
 
-    if (!(useBubbles && isChannel && msg.forwardInfo != null && msg.forwardInfo.origin.getConstructor() == TdApi.MessageForwardOriginUser.CONSTRUCTOR) &&
+    if (!(useBubbles && isChannel && msg.forwardInfo != null && msg.forwardInfo.origin.getConstructor() == TdApi.MessageOriginUser.CONSTRUCTOR) &&
       msg.date - top.getMergeTime() < maxTimeDiff && top.getMergeIndex() < maxIndex) {
       flags &= ~FLAG_HEADER_ENABLED;
       mergeTime = top.getMergeTime();
@@ -792,7 +891,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   private int getAuthorWidth () {
-    return hAuthorNameT != null ? hAuthorNameT.getWidth() + (hAuthorChatMark != null ? hAuthorChatMark.getWidth() + Screen.dp(16f) : 0) : needName(true) ? -Screen.dp(3f) : 0;
+    return hAuthorNameT != null ?
+      hAuthorNameT.getWidth() + (hAuthorEmojiStatus != null ? hAuthorEmojiStatus.getWidth(Screen.dp(3)) : 0) + (hAuthorChatMark != null ? hAuthorChatMark.getWidth() + Screen.dp(16f) : 0) :
+      needName(true) ? -Screen.dp(3f) : 0;
   }
 
   private int computeBubbleWidth () {
@@ -819,7 +920,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
     if (useForward()) {
       if (allowMessageHorizontalExtend()) {
-        boolean isPsa = isPsa() && !forceForwardedInfo();
+        boolean isPsa = isPsa() && !forceForwardOrImportInfo();
         float forwardWidth = Math.max((isPsa && fPsaTextT != null ? fAuthorNameT.getWidth() : fAuthorNameT != null ? fAuthorNameT.getWidth() : 0)
           + fTimeWidth + Screen.dp(6f)
           + (getViewCountMode() == VIEW_COUNT_FORWARD ? viewCounter.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN + COUNTER_ADD_MARGIN)) + shareCounter.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN + COUNTER_ADD_MARGIN)) : 0),
@@ -844,9 +945,29 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   protected final boolean useForward () {
-    // && !((flags & FLAG_SELF_CHAT) == 0 && msg.forwardInfo.origin.getConstructor() != TdApi.MessageForwardOriginChannel.CONSTRUCTOR && msg.content != null && msg.content.getConstructor() == TdApi.MessageAudio.CONSTRUCTOR)
-    return msg.forwardInfo != null && (!useBubbles() || !separateReplyFromBubble()) && !forceForwardedInfo();
+    // && !((flags & FLAG_SELF_CHAT) == 0 && msg.forwardInfo.origin.getConstructor() != TdApi.MessageOriginChannel.CONSTRUCTOR && msg.content != null && msg.content.getConstructor() == TdApi.MessageAudio.CONSTRUCTOR)
+    return msg.forwardInfo != null && (!useBubbles() || !separateReplyFromBubble()) && !forceForwardOrImportInfo();
   }
+
+
+
+  //
+
+  private static final int IS_HIDDEN_BY_MESSAGE_FILTER_ANIMATOR_ID = 2;
+
+  private static final int HIDDEN_BY_MESSAGE_FILTER_HEIGHT = 35;
+
+  private final BoolAnimator isHiddenByFilter;
+
+  public void setIsHiddenByMessagesFilter (boolean hidden, boolean animated) {
+    isHiddenByFilter.setValue(hidden && !isSponsoredMessage(), BitwiseUtils.hasFlag(flags, FLAG_LAYOUT_BUILT) && currentViews.hasAnyTargetToInvalidate() && UI.inUiThread() && controller() != null && controller().isFocused() && animated);
+  }
+
+  public boolean isHiddenByMessagesFilter () {
+    return isHiddenByFilter.getValue();
+  }
+
+
 
   private static final int VIEW_COUNT_HIDDEN = 0;
   private static final int VIEW_COUNT_MAIN = 1;
@@ -854,7 +975,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   private int getViewCountMode () {
     if (viewCounter != null) {
-      if (useForward() && !msg.isChannelPost && msg.forwardInfo != null && msg.forwardInfo.origin.getConstructor() == TdApi.MessageForwardOriginChannel.CONSTRUCTOR) {
+      if (useForward() && !msg.isChannelPost && msg.forwardInfo != null && msg.forwardInfo.origin.getConstructor() == TdApi.MessageOriginChannel.CONSTRUCTOR) {
         return VIEW_COUNT_FORWARD;
       }
       if (useBubbles() || BitwiseUtils.hasFlag(flags, FLAG_HEADER_ENABLED)) {
@@ -881,21 +1002,24 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return TGCommentButton.VIEW_MODE_INLINE;
   }
 
-  public final @Nullable TdApi.Message findMessageWithThread () {
-    TdApi.Message oldestMessage = getOldestMessage();
-    return oldestMessage.canGetMessageThread ? oldestMessage : null;
+  public final @Nullable TdApi.Message findMessageWithReplyInfo () {
+    TdApi.Message message = getAnchorMessageThreadMessage();
+    TdApi.MessageInteractionInfo interactionInfo = message.interactionInfo;
+    if (interactionInfo != null && interactionInfo.replyInfo != null) {
+      return message;
+    }
+    return null;
   }
 
   protected final boolean needCommentButton () {
-    if (isScheduled() || isSponsored() || !allowInteraction()) {
+    if (isScheduled() || isSponsoredMessage() || !allowInteraction()) {
       return false;
     }
     if (isChannel()) {
-      TdApi.Message messageWithThread = findMessageWithThread();
-      return messageWithThread != null && TD.getReplyInfo(messageWithThread.interactionInfo) != null;
+      return findMessageWithReplyInfo() != null;
     }
     if (isRepliesChat()) {
-      return FeatureToggles.SHOW_VIEW_IN_CHAT_BUTTON_IN_REPLIES && msg.forwardInfo != null && msg.forwardInfo.fromChatId != 0 && msg.forwardInfo.fromMessageId != 0 && msg.forwardInfo.fromChatId != msg.chatId;
+      return FeatureToggles.SHOW_VIEW_IN_CHAT_BUTTON_IN_REPLIES && msg.forwardInfo != null && Td.hasMessageSource(msg.forwardInfo) && msg.forwardInfo.source.chatId != msg.chatId;
     }
     return false;
   }
@@ -905,21 +1029,30 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public final void openMessageThread () {
-    TdApi.Message messageWithThread = findMessageWithThread();
-    if (messageWithThread == null)
-      return;
-    MessageId highlightMessageId;
-    if (isChannel() || isChannelAutoForward()) {
-      // View X Comments
-      highlightMessageId = null;
-    } else if (isMessageThreadRoot()) {
-      // View X Replies
-      highlightMessageId = new MessageId(messageWithThread.chatId, MessageId.MIN_VALID_ID);
-    } else {
-      // View Thread
-      highlightMessageId = toMessageId();
-    }
-    openMessageThread(new TdApi.GetMessageThread(messageWithThread.chatId, messageWithThread.id), highlightMessageId);
+    TdApi.Message messageWithReplyInfo = findMessageWithReplyInfo();
+    TdApi.Message targetMessage = messageWithReplyInfo != null ? messageWithReplyInfo : getNewestMessage();
+    getMessageProperties(targetMessage.id, properties -> {
+      if (!properties.canGetMessageThread) {
+        long messageThreadId = Td.messageThreadId(targetMessage.topicId);
+        if (messageThreadId != 0) {
+          MessageId highlightMessageId = toMessageId();
+          openMessageThread(new TdApi.GetMessageThread(targetMessage.chatId, targetMessage.id), highlightMessageId);
+        }
+        return;
+      }
+      MessageId highlightMessageId;
+      if (isChannel() || isChannelAutoForward()) {
+        // View X Comments
+        highlightMessageId = null;
+      } else if (isMessageThreadRoot()) {
+        // View X Replies
+        highlightMessageId = new MessageId(targetMessage.chatId, MessageId.MIN_VALID_ID);
+      } else {
+        // View Thread
+        highlightMessageId = toMessageId();
+      }
+      openMessageThread(new TdApi.GetMessageThread(targetMessage.chatId, targetMessage.id), highlightMessageId);
+    });
   }
 
   public final void openMessageThread (@NonNull MessageId highlightMessageId) {
@@ -955,12 +1088,11 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
           TdApi.MessageThreadInfo messageThread = (TdApi.MessageThreadInfo) result;
           ThreadInfo threadInfo = ThreadInfo.openedFromChat(tdlib, messageThread, getChatId());
           if (Config.SHOW_CHANNEL_POST_REPLY_INFO_IN_COMMENTS && isChannel() &&
-            msg.replyInChatId != 0 && msg.replyToMessageId != 0 &&
+            msg.replyTo != null &&
             msg.chatId == query.chatId && isDescendantOrSelf(query.messageId)) {
             TdApi.Message message = threadInfo.getOldestMessage();
-            if (message != null && message.replyToMessageId == 0 && tdlib.isChannelAutoForward(message)) {
-              message.replyInChatId = msg.replyInChatId;
-              message.replyToMessageId = msg.replyToMessageId;
+            if (message != null && message.replyTo == null && tdlib.isChannelAutoForward(message)) {
+              message.replyTo = msg.replyTo;
             }
           }
           TdlibUi.ChatOpenParameters params = new TdlibUi.ChatOpenParameters().keepStack().messageThread(threadInfo).after(chatId -> {
@@ -988,9 +1120,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
             boolean needAnimateChanges = needAnimateChanges();
             openingComments.setValue(false, needAnimateChanges);
             if (isChannel()) {
-              UI.showToast(R.string.ChannelPostDeleted, Toast.LENGTH_SHORT);
+              showCommentButtonError(Lang.getString(R.string.ChannelPostDeleted));
             } else {
-              UI.showError(result);
+              showCommentButtonError(TD.toErrorString(result));
             }
             break;
           }
@@ -1000,11 +1132,22 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
             break;
           }
           openingComments.setValue(false, needAnimateChanges());
-          UI.showError(result);
+          showCommentButtonError(TD.toErrorString(result));
           break;
         }
       }
     }));
+  }
+
+  private void showCommentButtonError (String text) {
+    View view = findCurrentView();
+    if (!needCommentButton() || view == null) {
+      UI.showToast(text, Toast.LENGTH_SHORT);
+      return;
+    }
+    buildContentHint(view, (targetView, outRect) ->
+      commentButton.getRect(outRect), false
+    ).show(tdlib, text).hideDelayed();
   }
 
   private int computeBubbleHeight () {
@@ -1154,9 +1297,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   public final @ColorInt int getContentReplaceColor () {
     if (useBubbles()) {
-      return Theme.getColor(isOutgoingBubble() ? R.id.theme_color_bubbleOut_background : R.id.theme_color_bubbleIn_background);
+      return Theme.getColor(isOutgoingBubble() ? ColorId.bubbleOut_background : ColorId.bubbleIn_background);
     } else {
-      int color = Theme.getColor(R.id.theme_color_chatBackground);
+      int color = Theme.getColor(ColorId.chatBackground);
       if (selectionFactor > 0f) {
         return ColorUtils.compositeColor(color, ColorUtils.alphaColor(selectionFactor, Theme.chatSelectionColor()));
       } else {
@@ -1252,7 +1395,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return useBubbles() ? getBubbleViewPaddingBottom() : xPaddingBottom;
   }
 
-  protected final int getExtraPadding () {
+  public final int getExtraPadding () {
     if (needSponsorSmallPadding) {
       return Screen.dp(7f);
     }
@@ -1261,8 +1404,10 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public int computeHeight () {
+    final int headerPadding = getHeaderPadding();
+    final int extraPadding = getExtraPadding();
     if (useBubbles()) {
-      int height = bottomContentEdge + getPaddingBottom() + getExtraPadding();
+      int height = bottomContentEdge + getPaddingBottom() + extraPadding;
       if (inlineKeyboard != null && !inlineKeyboard.isEmpty()) {
         height += inlineKeyboard.getHeight() + TGInlineKeyboard.getButtonSpacing();
       }
@@ -1276,9 +1421,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       if (commentButton.isBubble()) {
         height += commentButton.getAnimatedHeight(Screen.dp(5f), commentButton.getVisibility());
       }
-      return height;
+      return MathUtils.fromTo(height, Screen.dp(HIDDEN_BY_MESSAGE_FILTER_HEIGHT) + extraPadding + headerPadding, isHiddenByFilter.getFloatValue());
     } else {
-      int height = pContentY + getContentHeight() + getPaddingBottom() + getExtraPadding();
+      int height = pContentY + getContentHeight() + getPaddingBottom() + extraPadding;
       if (inlineKeyboard != null && !inlineKeyboard.isEmpty()) {
         height += inlineKeyboard.getHeight() + xPaddingBottom;
       }
@@ -1292,7 +1437,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       if (commentButton.isVisible() && commentButton.isInline()) {
         height += commentButton.getAnimatedHeight(useReactionBubbles ? -Screen.dp(2f) : 0, commentButton.getVisibility());
       }
-      return height;
+      return MathUtils.fromTo(height, Screen.dp(HIDDEN_BY_MESSAGE_FILTER_HEIGHT) + extraPadding + headerPadding, isHiddenByFilter.getFloatValue());
     }
   }
 
@@ -1334,9 +1479,16 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return !headerDisabled() && (isEdited() || isBeingEdited()) && msg.viaBotUserId == 0 && !sender.isBot() && !sender.isServiceAccount() && (useBubbles() ? useBubbleTime() : (!isOutgoing() || hasHeader() || !shouldShowTicks())) && (getViewCount() > 0 || !isEventLog());
   }
 
+  private boolean shouldShowMessageRestrictedWarning () {
+    return BitwiseUtils.hasFlag(flags, FLAG_UNSUPPORTED) || isRestrictedByTelegram();
+  }
+
   private boolean needAvatar () {
     if (!useBubbles()) {
       return true;
+    }
+    if (isSponsoredMessage()) {
+      return sponsoredMessage.sponsor.photo != null;
     }
     if (isThreadHeader() && messagesController().getMessageThread().areComments()) {
       return false;
@@ -1385,9 +1537,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     if (!useBubble() || separateReplyFromBubble()) {
       return false;
     }
-    if (isSponsored() && useBubbles())
+    if (isSponsoredMessage() && useBubbles())
       return true;
-    if (isPsa() && forceForwardedInfo())
+    if (isPsa() && forceForwardOrImportInfo())
       return true;
     if (isOutgoing() && (sender.isAnonymousGroupAdmin() || sender.isChannel()))
       return true;
@@ -1405,7 +1557,11 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   private boolean useBubbleTime () {
-    return !headerDisabled() && (!useForward() || (isOutgoing() || (flags & FLAG_HEADER_ENABLED) != 0)) && (msg.content.getConstructor() != TdApi.MessageCall.CONSTRUCTOR);
+    return !headerDisabled() && (!useForward() || (isOutgoing() || (flags & FLAG_HEADER_ENABLED) != 0)) && !(this instanceof TGMessageCall);
+  }
+
+  protected boolean centerReactions () {
+    return this instanceof TGMessageService;
   }
 
   private static Bitmap cornerTopLeftBig, cornerTopLeftSmall;
@@ -1487,7 +1643,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
     paint.setAlpha(255);
 
-    c.save();
+    final int restoreToCount = Views.save(c);
 
     offset = Screen.dp(18f);
     float shadowLeft, shadowTop, shadowRight, shadowBottom;
@@ -1539,7 +1695,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       cx = tx; cy = ty;
     }
 
-    c.restore();
+    Views.restore(c, restoreToCount);
   }
 
   public static void drawCornerFixes (Canvas c, TGMessage source, float factor, float left, float top, float right, float bottom, float topLeftRadius, float topRightRadius, float bottomRightRadius, float bottomLeftRadius) {
@@ -1588,7 +1744,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     }
   }
 
-  private void drawBubble (Canvas c, Paint paint, boolean stroke, int padding) {
+  protected void drawBubble (Canvas c, Paint paint, boolean stroke, int padding) {
     if (paint.getAlpha() == 0) {
       return;
     }
@@ -1688,55 +1844,55 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public final int getBubbleDateBackgroundColor () {
-    return manager.getOverlayColor(0, R.id.theme_color_bubble_date, R.id.theme_color_bubble_date_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_DATE);
+    return manager.getOverlayColor(ColorId.NONE, ColorId.bubble_date, ColorId.bubble_date_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_DATE);
   }
 
   public final int getBubbleDateTextColor () {
-    return manager.getColor(0, R.id.theme_color_bubble_dateText, R.id.theme_color_bubble_dateText_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_DATE);
+    return manager.getColor(ColorId.NONE, ColorId.bubble_dateText, ColorId.bubble_dateText_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_DATE);
   }
 
   protected final int getUnreadSeparatorBackgroundColor () {
-    return manager.getOverlayColor(R.id.theme_color_unread, R.id.theme_color_bubble_unread, R.id.theme_color_bubble_unread_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_UNREAD);
+    return manager.getOverlayColor(ColorId.unread, ColorId.bubble_unread, ColorId.bubble_unread_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_UNREAD);
   }
 
   protected final int getUnreadSeparatorContentColor () {
-    return manager.getColor(R.id.theme_color_unreadText, R.id.theme_color_bubble_unreadText, R.id.theme_color_bubble_unreadText_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_UNREAD);
+    return manager.getColor(ColorId.unreadText, ColorId.bubble_unreadText, ColorId.bubble_unreadText_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_UNREAD);
   }
 
   public final int getBubbleMediaReplyBackgroundColor () {
-    return manager.getOverlayColor(0, R.id.theme_color_bubble_mediaReply, R.id.theme_color_bubble_mediaReply_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_MEDIA_REPLY);
+    return manager.getOverlayColor(ColorId.NONE, ColorId.bubble_mediaReply, ColorId.bubble_mediaReply_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_MEDIA_REPLY);
   }
 
   public final int getBubbleMediaReplyTextColor () {
-    return manager.getColor(0, R.id.theme_color_bubble_mediaReplyText, R.id.theme_color_bubble_mediaReplyText_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_MEDIA_REPLY);
+    return manager.getColor(ColorId.NONE, ColorId.bubble_mediaReplyText, ColorId.bubble_mediaReplyText_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_MEDIA_REPLY);
   }
 
   protected final int getBubbleTimeColor () {
-    return manager.getOverlayColor(0, R.id.theme_color_bubble_mediaTime, R.id.theme_color_bubble_mediaTime_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_TIME);
+    return manager.getOverlayColor(ColorId.NONE, ColorId.bubble_mediaTime, ColorId.bubble_mediaTime_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_TIME);
   }
 
   protected final int getBubbleTimeTextColor () {
-    return manager.getColor(0, R.id.theme_color_bubble_mediaTimeText, R.id.theme_color_bubble_mediaTimeText_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_TIME);
+    return manager.getColor(ColorId.NONE, ColorId.bubble_mediaTimeText, ColorId.bubble_mediaTimeText_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_TIME);
   }
 
   public final int getBubbleButtonBackgroundColor () {
-    return manager.getOverlayColor(0, R.id.theme_color_bubble_button, R.id.theme_color_bubble_button_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_BUTTON);
+    return manager.getOverlayColor(ColorId.NONE, ColorId.bubble_button, ColorId.bubble_button_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_BUTTON);
   }
 
   public final int getBubbleButtonRippleColor () {
-    return manager.getOverlayColor(0, R.id.theme_color_bubble_buttonRipple, R.id.theme_color_bubble_buttonRipple_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_BUTTON);
+    return manager.getOverlayColor(ColorId.NONE, ColorId.bubble_buttonRipple, ColorId.bubble_buttonRipple_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_BUTTON);
   }
 
   public final int getBubbleButtonTextColor () {
-    return manager.getColor(0, R.id.theme_color_bubble_buttonText, R.id.theme_color_bubble_buttonText_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_BUTTON);
+    return manager.getColor(ColorId.NONE, ColorId.bubble_buttonText, ColorId.bubble_buttonText_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_BUTTON);
   }
 
   public static int getBubbleTransparentColor (MessagesManager manager) {
-    return manager.getOverlayColor(0, R.id.theme_color_bubble_overlay, R.id.theme_color_bubble_overlay_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_OVERLAY);
+    return manager.getOverlayColor(ColorId.NONE, ColorId.bubble_overlay, ColorId.bubble_overlay_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_OVERLAY);
   }
 
   public static int getBubbleTransparentTextColor (MessagesManager manager) {
-    return manager.getColor(0, R.id.theme_color_bubble_overlayText, R.id.theme_color_bubble_overlayText_noWallpaper, ThemeProperty.WALLPAPER_OVERRIDE_OVERLAY);
+    return manager.getColor(ColorId.NONE, ColorId.bubble_overlayText, ColorId.bubble_overlayText_noWallpaper, PropertyId.WALLPAPER_OVERRIDE_OVERLAY);
   }
 
   public boolean drawDate (Canvas c, int centerX, int startY, float detachFactor, float alpha) {
@@ -1765,7 +1921,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         int padding = Screen.dp(10f);
         rectF.set(centerX - pDateWidth / 2 - padding, startY + Screen.dp(8f), centerX + pDateWidth / 2 + padding, startY + Screen.dp(8f) + Screen.dp(26f));
         int radius = Screen.dp(Theme.getDateRadius());
-        c.drawRoundRect(rectF, radius, radius, Paints.fillingPaint(ColorUtils.alphaColor(alpha * detachFactor, Theme.getColor(R.id.theme_color_chatBackground))));
+        c.drawRoundRect(rectF, radius, radius, Paints.fillingPaint(ColorUtils.alphaColor(alpha * detachFactor, Theme.getColor(ColorId.chatBackground))));
         c.drawRoundRect(rectF, radius, radius, Paints.getProgressPaint(ColorUtils.alphaColor(alpha * detachFactor, Theme.separatorColor()), Math.max(1, Screen.dp(.5f))));
       }
       textX = centerX - pDateWidth / 2;
@@ -1809,6 +1965,12 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     final float selectableFactor = manager.getSelectableFactor();
 
     checkEdges();
+
+    final float isHiddenFactor = isHiddenByFilter.getFloatValue();
+    if (isHiddenFactor == 1f) {
+      drawHiddenMessage(view, c, isHiddenFactor);
+      return;
+    }
 
     // "Unread messages" / "Discussion started" badge
     if ((flags & FLAG_SHOW_BADGE) != 0) {
@@ -1857,7 +2019,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     boolean hasBubble = useBubbles && useBubble();
     float lineFactor = 0f;
     if (hasBubble) {
-      final int bubbleColor = Theme.getColor(isOutgoingBubble() && !useCircleBubble() ? R.id.theme_color_bubbleOut_background : R.id.theme_color_bubbleIn_background);
+      final int bubbleColor = Theme.getColor(isOutgoingBubble() && !useCircleBubble() ? ColorId.bubbleOut_background : ColorId.bubbleIn_background);
       lineFactor = Theme.getBubbleOutlineFactor();
       /*if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP && lineFactor < 1f) {
         c.save();
@@ -1906,7 +2068,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         int top = bottom - commentButton.getAnimatedHeight(0, commentButton.getVisibility());
         if (needCommentButtonSeparator()) {
           int separatorColor = ColorUtils.alphaColor(0.15f * commentButton.getVisibility(), getDecentColor());
-          Paint separatorPaint = Config.COMMENTS_INLINE_BUTTON_SEPARATOR_1PX ? Paints.strokeSeparatorPaint(separatorColor) : Paints.strokeSmallPaint(separatorColor);
+          Paint separatorPaint = Paints.strokeSmallPaint(separatorColor);
           c.drawLine(left + Screen.dp(7f), top, right - Screen.dp(7f), top, separatorPaint);
         }
         commentButton.draw(view, c, view, left, top, right, bottom);
@@ -1924,7 +2086,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         float cx = avatarReceiver.centerX();
         float cy = avatarReceiver.centerY();
         if (useFullWidth()) {
-          c.drawCircle(cx, cy, xAvatarRadius + Screen.dp(2.5f), Paints.fillingPaint(Theme.getColor(R.id.theme_color_chatBackground)));
+          c.drawCircle(cx, cy, xAvatarRadius + Screen.dp(2.5f), Paints.fillingPaint(Theme.getColor(ColorId.chatBackground)));
         }
         if (avatarReceiver.needPlaceholder())
           avatarReceiver.drawPlaceholder(c);
@@ -1935,7 +2097,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       if (needName(true)) {
         int left = useBubbles ? getActualLeftContentEdge() + xBubblePadding + xBubblePaddingSmall : xContentLeft;
         int top = useBubbles ? topContentEdge + xBubbleNameTop : xNameTop + getHeaderPadding();
-        boolean isPsa = isPsa() && forceForwardedInfo();
+        boolean isPsa = isPsa() && forceForwardOrImportInfo();
         if (hAuthorNameT != null) {
           int newTop = useBubbles ? topContentEdge + Screen.dp(9f) : getHeaderPadding() + Screen.dp(1f);
           if (isPsa && hPsaTextT != null) {
@@ -1943,11 +2105,15 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
             newTop += getPsaTitleHeight();
           }
           hAuthorNameT.draw(c, left, left + hAuthorNameT.getWidth(), 0, newTop);
+          if (hAuthorEmojiStatus != null) {
+            hAuthorEmojiStatus.draw(c, left + hAuthorNameT.getWidth() + Screen.dp(3), newTop, 1f, view.getEmojiStatusReceiver());
+          }
           if (sender.hasChatMark() && hAuthorChatMark != null) {
-            int cmLeft = left + hAuthorNameT.getWidth() + Screen.dp(6f);
+            int cmLeft = left + hAuthorNameT.getWidth() + Screen.dp(3f)
+              + (hAuthorEmojiStatus != null ? hAuthorEmojiStatus.getWidth(Screen.dp(3)) : 0);
             RectF rct = Paints.getRectF();
             rct.set(cmLeft, newTop, cmLeft + hAuthorChatMark.getWidth() + Screen.dp(8f), newTop + hAuthorNameT.getLineHeight(false));
-            c.drawRoundRect(rct, Screen.dp(2f), Screen.dp(2f), Paints.getProgressPaint(Theme.getColor(R.id.theme_color_textNegative), Screen.dp(1.5f)));
+            c.drawRoundRect(rct, Screen.dp(2f), Screen.dp(2f), Paints.getProgressPaint(Theme.getColor(ColorId.textNegative), Screen.dp(1.5f)));
             cmLeft += Screen.dp(4f);
             hAuthorChatMark.draw(c, cmLeft, cmLeft + hAuthorChatMark.getWidth(), 0, newTop + ((hAuthorNameT.getLineHeight(false) - hAuthorChatMark.getLineHeight(false)) / 2));
           }
@@ -1959,7 +2125,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
           hAdminNameT.draw(c, right, top - Screen.dp(12f));
         }
         if (useBubbles && needDrawChannelIconInHeader() && hAuthorNameT != null) {
-          isChannelHeaderCounter.draw(c, isChannelHeaderCounterX = (right - Screen.dp(6)), isChannelHeaderCounterY = (top - Screen.dp(5)), Gravity.RIGHT | Gravity.BOTTOM, 1f, view, isOutgoing() ? R.id.theme_color_bubbleOut_time: R.id.theme_color_bubbleIn_time);
+          isChannelHeaderCounter.draw(c, (right - Screen.dp(6)), (top - Screen.dp(5)), Gravity.RIGHT | Gravity.BOTTOM, 1f, view, isOutgoing() ? ColorId.bubbleOut_time : ColorId.bubbleIn_time, isChannelHeaderCounterLastDrawRect);
         }
       }
     }
@@ -1979,19 +2145,19 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       int viewsX = pTicksLeft - Icons.getSingleTickWidth() + ((flags & FLAG_HEADER_ENABLED) != 0 ? 0 : Screen.dp(1f)) - Screen.dp(Icons.TICKS_SHIFT_X);
 
       if (needDrawChannelIconInHeader() && hAuthorNameT != null) {
-        isChannelHeaderCounter.draw(c, isChannelHeaderCounterX = ((isSending() ? clockX: viewsX) + Screen.dp(7)), isChannelHeaderCounterY = (pTicksTop + Screen.dp(5)), Gravity.LEFT, 1f, view, R.id.theme_color_iconLight);
+        isChannelHeaderCounter.draw(c, ((isSending() ? clockX : viewsX) + Screen.dp(7)), (pTicksTop + Screen.dp(5)), Gravity.LEFT, 1f, view, ColorId.iconLight, isChannelHeaderCounterLastDrawRect);
         clockX -= isChannelHeaderCounter.getScaledWidth(Screen.dp(1));
         viewsX -= isChannelHeaderCounter.getScaledWidth(Screen.dp(1));
       }
 
       // Clock, tick and views
       if (isSending()) {
-        Drawables.draw(c, Icons.getClockIcon(R.id.theme_color_iconLight), clockX, pClockTop - Screen.dp(Icons.CLOCK_SHIFT_Y), Paints.getIconLightPorterDuffPaint());
+        Drawables.draw(c, Icons.getClockIcon(ColorId.iconLight), clockX, pClockTop - Screen.dp(Icons.CLOCK_SHIFT_Y), Paints.getIconLightPorterDuffPaint());
       } else if (isFailed()) {
         // TODO failure icon
       } else if (shouldShowTicks() && getViewCountMode() != VIEW_COUNT_MAIN) {
         boolean unread = isUnread() && !noUnread();
-        Drawables.draw(c, unread ? Icons.getSingleTick(R.id.theme_color_ticks) : Icons.getDoubleTick(R.id.theme_color_ticksRead), viewsX, pTicksTop - Screen.dp(Icons.TICKS_SHIFT_Y), unread ? Paints.getTicksPaint() : Paints.getTicksReadPaint());
+        Drawables.draw(c, unread ? Icons.getSingleTick(ColorId.ticks) : Icons.getDoubleTick(ColorId.ticksRead), viewsX, pTicksTop - Screen.dp(Icons.TICKS_SHIFT_Y), unread ? Paints.getTicksPaint() : Paints.getTicksReadPaint());
       }
 
       int right = pTicksLeft - (shouldShowTicks() ? Icons.getSingleTickWidth() + Screen.dp(2.5f) : 0); //needMetadata ? pTimeLeft - Screen.dp(4f) : pTicksLeft;
@@ -2001,14 +2167,24 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
       // Edited
       if (shouldShowEdited()) {
-        // right -= Icons.getEditedIconWidth();
-        right -= Icons.getEditedIconWidth();
         if (isBeingEdited()) {
-          Drawables.draw(c, Icons.getClockIcon(R.id.theme_color_iconLight), pTicksLeft - (shouldShowTicks() ? Icons.getSingleTickWidth() + Screen.dp(2.5f) : 0) - Icons.getEditedIconWidth() - Screen.dp(6f), pTicksTop - Screen.dp(5f), Paints.getIconLightPorterDuffPaint());
+          right -= Icons.getEditedIconWidth();
+          right -= Screen.dp(COUNTER_ADD_MARGIN);
+          Drawables.draw(c, Icons.getClockIcon(ColorId.iconLight), pTicksLeft - (shouldShowTicks() ? Icons.getSingleTickWidth() + Screen.dp(2.5f) : 0) - Icons.getEditedIconWidth() - Screen.dp(6f), pTicksTop - Screen.dp(5f), Paints.getIconLightPorterDuffPaint());
         } else {
-          Drawables.draw(c, view.getSparseDrawable(R.drawable.baseline_edit_12, 0), right, pTicksTop, Paints.getIconLightPorterDuffPaint());
+          isEdited.draw(c, right, top, Gravity.RIGHT, 1f, view, ColorId.iconLight, isEditedCounterLastDrawRect);
+          right -= isEdited.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN));
         }
-        right -= Screen.dp(COUNTER_ADD_MARGIN);
+      }
+
+      if (shouldShowMessageRestrictedWarning()) {
+        if (isRestrictedByTelegram()) {
+          isRestricted.draw(c, right, top, Gravity.RIGHT, 1f, view, ColorId.NONE, isRestrictedCounterLastDrawRect);
+          right -= isRestricted.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN));
+        } else {
+          isUnsupported.draw(c, right, top, Gravity.RIGHT, 1f, view, ColorId.iconLight, isRestrictedCounterLastDrawRect);
+          right -= isUnsupported.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN));
+        }
       }
 
       isPinned.draw(c, right, top, Gravity.RIGHT, 1f, view, getTimePartIconColorId());
@@ -2028,8 +2204,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       }
 
       if (translationStyleMode() == Settings.TRANSLATE_MODE_INLINE) {
-        isTranslatedCounter.draw(c, right, isTranslatedCounterY = top, Gravity.RIGHT, 1f);
-        isTranslatedCounterX = right - Screen.dp(10);
+        isTranslatedCounter.draw(c, right, top, Gravity.RIGHT, 1f, isTranslatedCounterLastDrawRect);
         right -= isTranslatedCounter.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN + COUNTER_ADD_MARGIN));
       }
       if (reactionsDrawMode == REACTIONS_DRAW_MODE_FLAT) {
@@ -2040,7 +2215,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         right -= Screen.dp(5) * reactionsCounter.getVisibility();
       }
       if (reactionsDrawMode == REACTIONS_DRAW_MODE_ONLY_ICON) {
-        shrinkedReactionsCounter.draw(c, right, top, Gravity.RIGHT, 1f, view, 0);
+        shrinkedReactionsCounter.draw(c, right, top, Gravity.RIGHT, 1f, view, ColorId.NONE);
         setLastDrawReactionsPosition(right, top);
         right -= shrinkedReactionsCounter.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN)) + Screen.dp(COUNTER_ADD_MARGIN);
       }
@@ -2060,7 +2235,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
         // float darkFactor = Theme.getDarkFactor();
         float transparency = manager.controller().wallpaper().getBackgroundTransparency();
-        c.drawCircle(centerX, centerY, Screen.dp(9f) + (int) (Screen.dp(1f) * (1f - transparency)), Paints.strokeBigPaint(ColorUtils.alphaColor(selectableFactor, ColorUtils.fromToArgb(Theme.getColor(R.id.theme_color_bubble_messageCheckOutline), Theme.getColor(R.id.theme_color_bubble_messageCheckOutlineNoWallpaper), transparency))));
+        c.drawCircle(centerX, centerY, Screen.dp(9f) + (int) (Screen.dp(1f) * (1f - transparency)), Paints.strokeBigPaint(ColorUtils.alphaColor(selectableFactor, ColorUtils.fromToArgb(Theme.getColor(ColorId.bubble_messageCheckOutline), Theme.getColor(ColorId.bubble_messageCheckOutlineNoWallpaper), transparency))));
         SimplestCheckBox.draw(c, centerX, centerY, selectionFactor, null);
       }
     } else if (selectionFactor > 0f) {
@@ -2081,7 +2256,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
       if ((flags & FLAG_HEADER_ENABLED) != 0) {
         if (useFullWidth()) {
-          final int color = Theme.getColor(R.id.theme_color_chatBackground);
+          final int color = Theme.getColor(ColorId.chatBackground);
           c.drawArc(rectF, 135f, 170f * selectionFactor, false, Paints.getOuterCheckPaint(color));
           c.drawArc(rectF, 305f, 195f * selectionFactor, false, Paints.getOuterCheckPaint(color));
         } else {
@@ -2106,14 +2281,20 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         if (commentButton.isVisible() && commentButton.isInline()) {
           top -= commentButton.getAnimatedHeight(-Screen.dp(2), commentButton.getVisibility());
         }
-        drawReactionsWithBubbles(c, view, xContentLeft, top - Screen.dp(9));
+        int left = centerReactions() ? (int) (view.getMeasuredWidth() / 2f - messageReactions.getAnimatedWidth() / 2f) : xContentLeft;
+        drawReactionsWithBubbles(c, view, left, top - Screen.dp(9));
       } else {
         if (useMediaBubbleReactions()) {
           drawReactionsWithBubbles(c, view, (int) bubblePathRect.left, top - Screen.dp(6));
         } else if (useStickerBubbleReactions()) {
-          int left = isOutgoingBubble() ? (useBubble() ? getContentX() : getActualRightContentEdge() - getContentWidth()) : (useBubble() && useCircleBubble() ? (int) bubblePathRect.left : getContentX());
-          if (isOutgoingBubble() && messageReactions.getAnimatedWidth() > getContentWidth()) {
-            left = (int) (getActualRightContentEdge() - messageReactions.getAnimatedWidth());
+          int left;
+          if (centerReactions()) {
+            left = (int) (view.getMeasuredWidth() / 2f - messageReactions.getAnimatedWidth() / 2f);
+          } else {
+            left = isOutgoingBubble() ? (useBubble() ? getContentX() : getActualRightContentEdge() - getContentWidth()) : (useBubble() && useCircleBubble() ? (int) bubblePathRect.left : getContentX());
+            if (isOutgoingBubble() && messageReactions.getAnimatedWidth() > getContentWidth()) {
+              left = (int) (getActualRightContentEdge() - messageReactions.getAnimatedWidth());
+            }
           }
           if (commentButton.isVisible() && commentButton.isBubble()) {
             top -= commentButton.getAnimatedHeight(Screen.dp(5), commentButton.getVisibility());
@@ -2167,13 +2348,15 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       int forwardTextTop = useBubbles ? pContentY - getBubbleForwardOffset() + Screen.dp(15f) : forwardY + Screen.dp(16f);
 
       // forward author and time
-      boolean isPsa = isPsa() && !forceForwardedInfo();
+      boolean isPsa = isPsa() && !forceForwardOrImportInfo();
       int nameColor = isPsa ? getChatAuthorPsaColor() : getChatAuthorColor();
       int forwardTextLeft = getForwardAuthorNameLeft();
 
       int forwardX = forwardTextLeft + (isPsa ? (fPsaTextT != null ? fPsaTextT.getWidth() : 0) : (fAuthorNameT != null ? fAuthorNameT.getWidth() : 0)) + Screen.dp(6f);
       TextPaint mTimePaint = useBubbles ? Paints.colorPaint(mTimeBubble(), getDecentColor()) : mTime(true);
-      c.drawText(fTime, forwardX, forwardTextTop, mTimePaint);
+      if (fTime != null) {
+        c.drawText(fTime, forwardX, forwardTextTop, mTimePaint);
+      }
       if (getViewCountMode() == VIEW_COUNT_FORWARD) {
         forwardX += Screen.dp(2f) + fTimeWidth + Screen.dp(COUNTER_ADD_MARGIN);
         int iconTop = forwardTextTop - Screen.dp(3f);
@@ -2228,8 +2411,8 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
       RectF rectF = Paints.getRectF();
       rectF.set(lineLeft, lineTop, lineRight, lineBottom);
-      final int lineColor = getVerticalLineColor();
-      c.drawRoundRect(rectF, lineWidth / 2, lineWidth / 2, Paints.fillingPaint(lineColor));
+      final int lineColor = getForwardLineColor();
+      c.drawRoundRect(rectF, lineWidth / 2f, lineWidth / 2f, Paints.fillingPaint(lineColor));
 
       if (mergeTop) {
         c.drawRect(lineLeft, lineTop, lineRight, lineTop + lineWidth, Paints.fillingPaint(lineColor));
@@ -2269,7 +2452,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         endX = viewWidth - startX;
       }
 
-      if (useBubbles && isForward() && !forceForwardedInfo()) {
+      if (useBubbles && isForward() && !forceForwardOrImportInfo()) {
         startX += xTextPadding;
       }
 
@@ -2291,10 +2474,23 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
     startSetReactionAnimationIfReady();
     highlightUnreadReactionsIfNeeded();
+    if (isHiddenFactor > 0f) {
+      drawHiddenMessage(view, c, isHiddenFactor);
+    }
+  }
+
+  public final void drawHiddenMessage (MessageView view, Canvas c, float isHiddenFactor) {
+    final int viewWidth = view.getMeasuredWidth();
+    final int viewHeight = view.getMeasuredHeight();
+    final int y = getHeaderPadding();
+
+    c.drawRect(0, y, viewWidth, viewHeight, Paints.fillingPaint(ColorUtils.alphaColor(isHiddenFactor, Theme.getColor(ColorId.filling))));
+    // c.drawRect(0, y, viewWidth, y + 1, Paints.fillingPaint(ColorUtils.alphaColor(isHiddenFactor, Theme.getColor(ColorId.separator))));
+    c.drawRect(0, viewHeight - 1, viewWidth, viewHeight, Paints.fillingPaint(ColorUtils.alphaColor(isHiddenFactor, Theme.getColor(ColorId.separator))));
   }
 
   protected final boolean needColoredNames () {
-    return !msg.isOutgoing && (TD.isMultiChat(chat) || isDemoGroupChat());
+    return !isOutgoingBubble();
   }
 
   private int getInternalBubbleStartX () {
@@ -2409,9 +2605,13 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       flags = BitwiseUtils.setFlag(flags, FLAG_ATTACHED, isAttached);
       onMessageAttachStateChange(isAttached);
       if (isAttached) {
-        manager.viewMessages();
+        manager.viewMessages(false);
       }
     }
+  }
+
+  public boolean isAttachedToView () {
+    return BitwiseUtils.hasFlag(flags, FLAG_ATTACHED);
   }
 
   protected void onMessageAttachStateChange (boolean isAttached) {
@@ -2427,6 +2627,10 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public final void onAttachedToView (@Nullable MessageView view) {
+    if (hAuthorEmojiStatus != null) {
+      hAuthorEmojiStatus.onAppear();
+    }
+
     setViewAttached(view != null || hasAttachedToAnything());
     if (currentViews.attachToView(view) && view != null) {
       onMessageAttachedToView(view, true);
@@ -2608,8 +2812,20 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     performWithViews(view -> requestTextMedia(view.getTextMediaReceiver()));
   }
 
+  public final void invalidateEmojiStatusReceiver () {
+    performWithViews(view -> requestAuthorTextMedia(view.getEmojiStatusReceiver()));
+  }
+
   public final void invalidateAvatarsReceiver () {
     performWithViews(view -> requestCommentsResources(view.getAvatarsReceiver(), true));
+  }
+
+  public final void invalidateGiveawayReceiver () {
+    performWithViews(view -> requestGiveawayAvatars(view.getGiveawayAvatarsReceiver(), true));
+  }
+
+  public final void invalidateReactionFilesReceiver () {
+    performWithViews(view -> requestReactions(view.getReactionsComplexReceiver()));
   }
 
   public final void invalidateTextMediaReceiver (@NonNull Text text, @Nullable TextMedia textMedia) {
@@ -2635,9 +2851,6 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   @CallSuper
   public boolean performLongPress (View view, float x, float y) {
-    if (isSponsored()) {
-      return false;
-    }
     boolean result = false;
     if (inlineKeyboard != null) {
       result = inlineKeyboard.performLongPress(view);
@@ -2649,6 +2862,12 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       result = footerText.performLongPress(view) || result;
     }
     clickHelper.cancel(view, x, y);
+    if (hAuthorNameT != null) {
+      hAuthorNameT.cancelTouch();
+    }
+    if (fAuthorNameT != null) {
+      fAuthorNameT.cancelTouch();
+    }
     return result;
   }
 
@@ -2656,16 +2875,35 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return e.getY() < findTopEdge();
   }
 
+  private static boolean checkClickOnRect (RectF rectF, float x, float y, float accuracy) {
+    RectF rect = Paints.getRectF();
+    rect.set(rectF);
+    rect.inset(-accuracy, -accuracy);
+    return rect.contains(x, y);
+  }
+
   private int getClickType (MessageView view, float x, float y) {
     if (isTranslated()) {
-      if (MathUtils.distance(isTranslatedCounterX, isTranslatedCounterY, x, y) < Screen.dp(8)) {
+      if (checkClickOnRect(isTranslatedCounterLastDrawRect, x, y, Screen.dp(4))) {
         return CLICK_TYPE_TRANSLATE_MESSAGE_ICON;
       }
     }
 
     if (needDrawChannelIconInHeader() && hAuthorNameT != null) {
-      if (MathUtils.distance(isChannelHeaderCounterX, isChannelHeaderCounterY, x, y) < Screen.dp(8)) {
+      if (checkClickOnRect(isChannelHeaderCounterLastDrawRect, x, y, Screen.dp(4))) {
         return CLICK_TYPE_CHANNEL_MESSAGE_ICON;
+      }
+    }
+
+    if (shouldShowMessageRestrictedWarning()) {
+      if (checkClickOnRect(isRestrictedCounterLastDrawRect, x, y, Screen.dp(4))) {
+        return CLICK_TYPE_MESSAGE_RESTRICTED_ICON;
+      }
+    }
+
+    if (shouldShowEdited()) {
+      if (checkClickOnRect(isEditedCounterLastDrawRect, x, y, Screen.dp(4))) {
+        return CLICK_TYPE_MESSAGE_EDITED_ICON;
       }
     }
 
@@ -2696,24 +2934,51 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
           openMessageFromChannel();
           break;
         }
+        case CLICK_TYPE_MESSAGE_RESTRICTED_ICON: {
+          showMessageTooltip((targetView, outRect) -> {
+            isRestrictedCounterLastDrawRect.round(outRect);
+            outRect.top -= Screen.dp(6);
+          }, Lang.getString(isRestrictedByTelegram() ?
+            R.string.MessageRestrictedByTelegram :
+            R.string.MessageUnsupportedHint), 2500);
+          break;
+        }
+        case CLICK_TYPE_MESSAGE_EDITED_ICON: {
+          showMessageTooltip((targetView, outRect) -> {
+              isEditedCounterLastDrawRect.round(outRect);
+              outRect.top -= Screen.dp(6);
+            },
+            Lang.getRelativeDate(
+              getEditDate(), TimeUnit.SECONDS,
+              tdlib.currentTimeMillis(), TimeUnit.MILLISECONDS,
+              true, 60, R.string.message_edited, false
+            ),
+            2500);
+          break;
+        }
         case CLICK_TYPE_REPLY: {
-          if (replyData != null && replyData.hasValidMessage()) {
-            if (msg.replyInChatId != msg.chatId) {
-              if (isMessageThread() && isThreadHeader()) {
-                tdlib.ui().openMessage(controller(), msg.replyInChatId, new MessageId(msg.replyInChatId, msg.replyToMessageId), openParameters());
-              } else {
-                openMessageThread(new MessageId(msg.replyInChatId, msg.replyToMessageId));
-              }
-            } else if (isScheduled()) {
-              tdlib.ui().openMessage(controller(), msg.replyInChatId, new MessageId(msg.replyInChatId, msg.replyToMessageId), openParameters());
+          if (msg.replyTo != null && msg.replyTo.getConstructor() == TdApi.MessageReplyToMessage.CONSTRUCTOR) {
+            TdApi.MessageReplyToMessage replyToMessage = (TdApi.MessageReplyToMessage) msg.replyTo;
+            if (replyData != null && replyData.getError() != null) {
+              buildContentHint(view, getReplyLocationProvider(), false).show(tdlib, replyData.toErrorText());
             } else {
-              highlightOtherMessage(msg.replyToMessageId);
+              if (replyToMessage.chatId != msg.chatId) {
+                if (replyToMessage.chatId == 0 || replyToMessage.messageId == 0) {
+                  buildContentHint(view, getReplyLocationProvider(), false).show(tdlib, Lang.getString(R.string.MessageReplyPrivate));
+                } else {
+                  tdlib.ui().openMessage(controller(), replyToMessage.chatId, new MessageId(replyToMessage), openParameters());
+                }
+              } else if (isScheduled()) {
+                tdlib.ui().openMessage(controller(), replyToMessage.chatId, new MessageId(replyToMessage), openParameters());
+              } else {
+                highlightOtherMessage(new MessageId(replyToMessage));
+              }
             }
           }
           break;
         }
         case CLICK_TYPE_AVATAR: {
-          openProfile(view, null, null, null, ((MessageView) view).getAvatarReceiver());
+          onAvatarClick(view);
           break;
         }
       }
@@ -2776,6 +3041,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   private static final int CLICK_TYPE_AVATAR = 2;
   private static final int CLICK_TYPE_CHANNEL_MESSAGE_ICON = 3;
   private static final int CLICK_TYPE_TRANSLATE_MESSAGE_ICON = 4;
+  private static final int CLICK_TYPE_MESSAGE_RESTRICTED_ICON = 5;
+  private static final int CLICK_TYPE_MESSAGE_EDITED_ICON = 6;
+  private static final int CLICK_TYPE_CHANNEL_MESSAGE_SENDER_ICON = 7;
 
   private int clickType = CLICK_TYPE_NONE;
 
@@ -2894,14 +3162,29 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     }
   }
 
-  public final boolean forceForwardedInfo () {
-    return msg.forwardInfo != null && !isOutgoing() && (
+  public final int getForwardOrImportDate () {
+    return msg.forwardInfo != null && msg.forwardInfo.date != 0 ?
+      msg.forwardInfo.date :
+    msg.importInfo != null && msg.importInfo.date != 0 ?
+      msg.importInfo.date :
+    0;
+  }
+  
+  public final boolean forceForwardOrImportInfo () {
+    if (msg.importInfo != null) {
+      return true;
+    }
+    TdApi.MessageForwardInfo forwardInfo = msg.forwardInfo;
+    return forwardInfo != null && !isOutgoing() && (
       BitwiseUtils.hasFlag(flags, FLAG_SELF_CHAT) ||
-      (isChannelAutoForward() && msg.forwardInfo.origin.getConstructor() == TdApi.MessageForwardOriginChannel.CONSTRUCTOR &&
-        msg.forwardInfo.fromChatId == ((TdApi.MessageForwardOriginChannel) msg.forwardInfo.origin).chatId) ||
-      msg.forwardInfo.origin.getConstructor() == TdApi.MessageForwardOriginMessageImport.CONSTRUCTOR ||
+      (isChannelAutoForward() && forwardInfo.origin.getConstructor() == TdApi.MessageOriginChannel.CONSTRUCTOR &&
+        forwardInfo.source != null && forwardInfo.source.chatId == ((TdApi.MessageOriginChannel) forwardInfo.origin).chatId) ||
       (isPsa() && !sender.isUser() && useBubbles()) ||
       isRepliesChat());
+  }
+
+  public boolean isImported () {
+    return msg.importInfo != null;
   }
 
   public final boolean isChannelAutoForward () {
@@ -2933,6 +3216,10 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   protected static final float LETTERS_SIZE = 16f;
   protected static final float LETTERS_SIZE_SMALL = 15f;
 
+  private boolean onAvatarClick (View view) {
+    return openProfile(view, null, null, null, ((MessageView) view).getAvatarReceiver());
+  }
+
   private boolean onNameClick (View view, Text text, TextPart part, @Nullable TdlibUi.UrlOpenParameters openParameters) {
     if (part.getEntity() != null && part.getEntity().getTag() instanceof Long) {
       manager.controller().setInputInlineBot(msg.viaBotUserId, viaBotUsername);
@@ -2945,8 +3232,10 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   private boolean openProfile (View view, @Nullable Text text, TextPart part, @Nullable TdlibUi.UrlOpenParameters openParameters, @Nullable Receiver receiver) {
-    if (forceForwardedInfo()) {
+    if (forceForwardOrImportInfo()) {
       forwardInfo.open(view, text, part, openParameters, receiver);
+    } else if (isSponsoredMessage()) {
+      openSponsoredMessage();
     } else if (sender.isUser()) {
       tdlib.ui().openPrivateProfile(controller(), sender.getUserId(), openParameters);
     } else if (sender.isChat()) {
@@ -2980,10 +3269,23 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       .build();
   }
 
-  private Text makeName (String authorName, int nameColorId, boolean available, boolean isPsa, boolean hideName, long viaBotUserId, int maxWidth, boolean isForward) {
+  private static final boolean APPLY_ACCENT_TO_FORWARDS = true;
+
+  private Text makeName (String authorName, TdlibAccentColor accentColor, boolean available, boolean isPsa, boolean hideName, long viaBotUserId, int maxWidth, boolean isForward) {
     if (maxWidth <= 0)
       return null;
     boolean hasBot = viaBotUserId != 0;
+    TdApi.User viaBot = viaBotUserId != 0 ? tdlib.cache().user(viaBotUserId) : null;
+    String viaBotUsername = "";
+    if (hasBot) {
+      if (Td.hasUsername(viaBot)) {
+        viaBotUsername = "@" + Td.primaryUsername(viaBot);
+      } else if (TD.isUserDeleted(viaBot)) {
+        viaBotUsername = Lang.getString(R.string.DeactivatedBot);
+      } else {
+        viaBotUsername = TD.getUserName(viaBot);
+      }
+    }
     int textRes = isPsa ? (hasBot ? R.string.PsaFromXViaBot : R.string.PsaFromX) : (hasBot ? hideName ? R.string.message_viaBot : R.string.message_nameViaBot : 0);
     CharSequence text;
     boolean allActive = textRes == R.string.PsaFromXViaBot || textRes == R.string.PsaFromX, allBold = false;
@@ -2991,40 +3293,54 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       if (hideName) {
         return null;
       }
-      text = authorName;
+      SpannableStringBuilder b = new SpannableStringBuilder(authorName);
+      b.setSpan(new TextEntityCustom(controller(), tdlib, authorName, 0, authorName.length(), TextEntityCustom.FLAG_CLICKABLE, openParameters()), 0, b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+      text = b;
       allActive = true;
       allBold = available;
     } else if (textRes == R.string.PsaFromXViaBot || textRes == R.string.message_nameViaBot) { // author via bot
-      text = Lang.getString(textRes, (target, argStart, argEnd, argIndex, needFakeBold) -> new TextEntityCustom(controller(), tdlib, target.toString(), argStart, argEnd, TextEntityCustom.FLAG_CLICKABLE | (argIndex == 1 || available ? TextEntityCustom.FLAG_BOLD : 0), openParameters()).setTag(argIndex == 1 ? viaBotUserId : null), authorName, "@" + tdlib.cache().userUsername(viaBotUserId));
+      text = Lang.getString(textRes, (target, argStart, argEnd, argIndex, needFakeBold) -> new TextEntityCustom(controller(), tdlib, target.toString(), argStart, argEnd, TextEntityCustom.FLAG_CLICKABLE | (argIndex == 1 || available ? TextEntityCustom.FLAG_BOLD : 0), openParameters()).setTag(argIndex == 1 ? viaBotUserId : null), authorName, viaBotUsername);
     } else if (textRes == R.string.PsaFromX) { // author
       text = Lang.getString(textRes, (target, argStart, argEnd, argIndex, needFakeBold) -> Lang.newBoldSpan(needFakeBold), authorName);
       allActive = true;
     } else { // via bot
-      text = Lang.getString(textRes, (target, argStart, argEnd, argIndex, needFakeBold) -> new TextEntityCustom(controller(), tdlib, target.toString(), argStart, argEnd, TextEntityCustom.FLAG_CLICKABLE | TextEntityCustom.FLAG_BOLD, openParameters()).setTag(viaBotUserId), "@" + tdlib.cache().userUsername(viaBotUserId));
+      text = Lang.getString(textRes, (target, argStart, argEnd, argIndex, needFakeBold) -> new TextEntityCustom(controller(), tdlib, target.toString(), argStart, argEnd, TextEntityCustom.FLAG_CLICKABLE | TextEntityCustom.FLAG_BOLD, openParameters()).setTag(viaBotUserId), viaBotUsername);
     }
     TextColorSet colorTheme;
     if (isPsa) {
       colorTheme = getChatAuthorPsaColorSet();
-    } else if (!isForward && needColoredNames() && nameColorId != 0) {
+    } else if ((APPLY_ACCENT_TO_FORWARDS || !isForward) && needColoredNames() && accentColor != null) {
       colorTheme = new TextColorSetOverride(getChatAuthorColorSet()) {
         @Override
         public int clickableTextColor (boolean isPressed) {
-          return Theme.getColor(nameColorId);
+          return accentColor.getNameColor();
+        }
+
+        @Override
+        public long mediaTextComplexColor () {
+          return accentColor.getNameComplexColor();
         }
 
         @Override
         public int backgroundColor (boolean isPressed) {
-          return isPressed ? ColorUtils.alphaColor(.2f, Theme.getColor(nameColorId)) : 0;
+          return isPressed ? ColorUtils.alphaColor(.2f, accentColor.getNameColor()) : 0;
         }
 
         @Override
         public int backgroundColorId (boolean isPressed) {
-          return isPressed ? nameColorId : 0;
+          return isPressed ? Theme.extractColorValue(accentColor.getNameComplexColor()) : 0;
         }
       };
     } else {
       colorTheme = getChatAuthorColorSet();
     }
+
+    if (!(tdlib.isSelfChat(chat) && forwardInfo != null) && !hasBot && !isForward && sender.isUser()) {
+      hAuthorEmojiStatus = EmojiStatusHelper.makeDrawable(null, tdlib, tdlib.cache().user(sender.getUserId()), colorTheme, (text1, specificMedia) -> invalidateEmojiStatusReceiver());
+      hAuthorEmojiStatus.invalidateTextMedia();
+      maxWidth -= hAuthorEmojiStatus.getWidth(Screen.dp(3));
+    }
+
     return new Text.Builder(tdlib, text, openParameters(), maxWidth, getNameStyleProvider(), colorTheme, null)
       .singleLine()
       .clipTextArea()
@@ -3037,7 +3353,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   private void layoutInfo () {
     final int reactionsDrawMode = getReactionsDrawMode();
-    boolean isPsa = isPsa() && forceForwardedInfo();
+    boolean isPsa = isPsa() && forceForwardOrImportInfo();
 
     if (useBubbles()) {
       // time part
@@ -3053,14 +3369,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         hAdminNameT = null;
       }
 
-      final String authorName;
-      if (forceForwardedInfo()) {
-        authorName = forwardInfo.getAuthorName();
-      } else {
-        authorName = sender.getName();
-      }
+      final String authorName = getDisplayAuthor();
       if (needName(true) && maxWidth > 0) {
-        if (!forceForwardedInfo() && sender.hasChatMark()) {
+        if (!forceForwardOrImportInfo() && sender.hasChatMark()) {
           hAuthorChatMark = makeChatMark(maxWidth);
           maxWidth -= hAuthorChatMark.getWidth();
         }
@@ -3068,8 +3379,10 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         if (needDrawChannelIconInHeader()) {
           maxWidth -= isChannelHeaderCounter.getScaledWidth(Screen.dp(5));
         }
-        hAuthorNameT = makeName(authorName, forceForwardedInfo() ? forwardInfo.getAuthorNameColorId() : sender.getNameColorId(), !(forceForwardedInfo() && forwardInfo instanceof TGSourceHidden), isPsa, !needName(false), msg.forwardInfo == null || forceForwardedInfo() ? msg.viaBotUserId : 0, maxWidth, false);
+        hAuthorAccentColor = forceForwardOrImportInfo() ? forwardInfo.getAuthorAccentColor() : sender.getAccentColor();
+        hAuthorNameT = makeName(authorName, hAuthorAccentColor, !(forceForwardOrImportInfo() && forwardInfo instanceof TGSourceHidden), isPsa, !needName(false), msg.forwardInfo == null || forceForwardOrImportInfo() ? msg.viaBotUserId : 0, maxWidth, false);
       } else {
+        hAuthorAccentColor = null;
         hAuthorNameT = null;
         hAuthorChatMark = null;
         isChannelHeaderCounter.showHide(false, false);
@@ -3107,17 +3420,28 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     }
 
     if (shouldShowEdited()) {
-      max -= Screen.dp(5f) + Icons.getEditedIconWidth();
+      if (isBeingEdited()) {
+        max -= Screen.dp(6f) + Icons.getEditedIconWidth();
+      } else {
+        max -= isEdited.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN)) + Screen.dp(COUNTER_ADD_MARGIN);
+      }
     }
 
     String authorName;
-    if (forceForwardedInfo()) {
+    if (forceForwardOrImportInfo()) {
       authorName = forwardInfo.getAuthorName();
     } else {
       authorName = sender.getName();
     }
 
     max -= isPinned.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN)) + Screen.dp(COUNTER_ADD_MARGIN);
+    if (shouldShowMessageRestrictedWarning()) {
+      if (isRestrictedByTelegram()) {
+        max -= isRestricted.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN)) + Screen.dp(COUNTER_ADD_MARGIN);
+      } else {
+        max -= isUnsupported.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN)) + Screen.dp(COUNTER_ADD_MARGIN);
+      }
+    }
     if (replyCounter.getVisibility() > 0f) {
       max -= replyCounter.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN + COUNTER_ADD_MARGIN));
     }
@@ -3151,7 +3475,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       nameMaxWidth = max;
     }
     if (nameMaxWidth > 0) {
-      if (!forceForwardedInfo() && sender.hasChatMark()) {
+      if (!forceForwardOrImportInfo() && sender.hasChatMark()) {
         hAuthorChatMark = makeChatMark(totalMaxWidth);
         nameMaxWidth -= hAuthorChatMark.getWidth() + Screen.dp(8f);
       }
@@ -3159,39 +3483,52 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       if (needDrawChannelIconInHeader()) {
         nameMaxWidth -= isChannelHeaderCounter.getScaledWidth(Screen.dp(1));
       }
-      hAuthorNameT = makeName(authorName, forceForwardedInfo() ? forwardInfo.getAuthorNameColorId() : sender.getNameColorId(), !(forceForwardedInfo() && forwardInfo instanceof TGSourceHidden), isPsa, !needName(false), msg.forwardInfo == null || forceForwardedInfo() ? msg.viaBotUserId : 0, nameMaxWidth, false);
+      hAuthorAccentColor = forceForwardOrImportInfo() ? forwardInfo.getAuthorAccentColor() : sender.getAccentColor();
+      hAuthorNameT = makeName(authorName, hAuthorAccentColor, !(forceForwardOrImportInfo() && forwardInfo instanceof TGSourceHidden), isPsa, !needName(false), msg.forwardInfo == null || forceForwardOrImportInfo() ? msg.viaBotUserId : 0, nameMaxWidth, false);
     } else {
       hAuthorNameT = null;
+      hAuthorAccentColor = null;
       hAuthorChatMark = null;
       isChannelHeaderCounter.showHide(false, false);
     }
   }
 
-  private void loadForward () {
-    if (msg.forwardInfo == null) {
-      return;
+  private String getDisplayAuthor () {
+    if (forceForwardOrImportInfo()) {
+      return forwardInfo.getAuthorName();
+    } else {
+      return sender.getName();
     }
-    switch (msg.forwardInfo.origin.getConstructor()) {
-      case TdApi.MessageForwardOriginUser.CONSTRUCTOR: {
-        forwardInfo = new TGSourceUser(this, (TdApi.MessageForwardOriginUser) msg.forwardInfo.origin);
-        break;
+  }
+
+  private void loadForward () {
+    if (msg.forwardInfo != null) {
+      switch (msg.forwardInfo.origin.getConstructor()) {
+        case TdApi.MessageOriginUser.CONSTRUCTOR: {
+          forwardInfo = new TGSourceUser(this, (TdApi.MessageOriginUser) msg.forwardInfo.origin);
+          break;
+        }
+        case TdApi.MessageOriginChat.CONSTRUCTOR: {
+          forwardInfo = new TGSourceChat(this, (TdApi.MessageOriginChat) msg.forwardInfo.origin);
+          break;
+        }
+        case TdApi.MessageOriginChannel.CONSTRUCTOR: {
+          forwardInfo = new TGSourceChat(this, (TdApi.MessageOriginChannel) msg.forwardInfo.origin);
+          break;
+        }
+        case TdApi.MessageOriginHiddenUser.CONSTRUCTOR: {
+          forwardInfo = new TGSourceHidden(this, (TdApi.MessageOriginHiddenUser) msg.forwardInfo.origin);
+          break;
+        }
+        default: {
+          Td.assertMessageOrigin_f2224a59();
+          throw Td.unsupported(msg.forwardInfo.origin);
+        }
       }
-      case TdApi.MessageForwardOriginChat.CONSTRUCTOR: {
-        forwardInfo = new TGSourceChat(this, (TdApi.MessageForwardOriginChat) msg.forwardInfo.origin);
-        break;
-      }
-      case TdApi.MessageForwardOriginChannel.CONSTRUCTOR: {
-        forwardInfo = new TGSourceChat(this, (TdApi.MessageForwardOriginChannel) msg.forwardInfo.origin);
-        break;
-      }
-      case TdApi.MessageForwardOriginHiddenUser.CONSTRUCTOR: {
-        forwardInfo = new TGSourceHidden(this, (TdApi.MessageForwardOriginHiddenUser) msg.forwardInfo.origin);
-        break;
-      }
-      case TdApi.MessageForwardOriginMessageImport.CONSTRUCTOR: {
-        forwardInfo = new TGSourceHidden(this, (TdApi.MessageForwardOriginMessageImport) msg.forwardInfo.origin);
-        break;
-      }
+    } else if (msg.importInfo != null) {
+      forwardInfo = new TGSourceHidden(this, msg.importInfo);
+    } else {
+      return;
     }
     buildForwardTime();
     forwardInfo.load();
@@ -3227,8 +3564,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         shareCounter.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN + COUNTER_ADD_MARGIN));
     }
 
-    boolean isPsa = isPsa() && !forceForwardedInfo();
-    fAuthorNameT = makeName(forwardInfo.getAuthorName(), 0, !(forwardInfo instanceof TGSourceHidden), isPsa, false, msg.viaBotUserId, (int) (isPsa ? totalMax : max), true);
+    boolean isPsa = isPsa() && !forceForwardOrImportInfo();
+    fAuthorNameAccentColor = forwardInfo.getAuthorAccentColor();
+    fAuthorNameT = makeName(forwardInfo.getAuthorName(), fAuthorNameAccentColor, !(forwardInfo instanceof TGSourceHidden), isPsa, false, msg.viaBotUserId, (int) (isPsa ? totalMax : max), true);
     if (isPsa) {
       CharSequence text = Lang.getPsaNotificationType(controller(), msg.forwardInfo.publicServiceAnnouncementType);
       fPsaTextT = new Text.Builder(tdlib, text, openParameters(), (int) max, getNameStyleProvider(), getChatAuthorPsaColorSet(), null)
@@ -3241,31 +3579,73 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     }
   }
 
-  private int getForwardAuthorNameLeft () {
+  public int getForwardLineColor () {
+    return APPLY_ACCENT_TO_FORWARDS && !isOutgoingBubble() && fAuthorNameAccentColor != null ? fAuthorNameAccentColor.getVerticalLineColor() : getVerticalLineColor();
+  }
+
+  public int getForwardAuthorNameLeft () {
     return useBubbles() ? getInternalBubbleStartX() + Screen.dp(11f) : xfContentLeft;
   }
 
   private void loadReply () {
     replyData = new ReplyComponent(this);
+    replyData.setUseColorize(!isOutgoingBubble());
     replyData.setViewProvider(currentViews);
     replyData.load();
   }
 
-  public final void replaceReplyContent (long messageId, TdApi.MessageContent newContent) {
-    if (msg.replyToMessageId == messageId && replyData != null) {
-      replyData.replaceMessageContent(messageId, newContent);
-    }
+  public void onReplyLoaded () {
+
   }
 
-  public final void replaceReplyTranslation (long messageId, @Nullable TdApi.FormattedText translation) {
-    if (msg.replyToMessageId == messageId && replyData != null) {
+  @MessageChangeType
+  private int performContentfulUpdate (FutureBool act) {
+    int height = getHeight();
+    int width = getWidth();
+    int contentWidth = getContentWidth();
+    boolean updated = act.getBoolValue();
+    if (updated) {
+      if (width != getWidth() || contentWidth != getContentWidth()) {
+        buildMarkup();
+      }
+      return height == getHeight() ? MESSAGE_INVALIDATED : MESSAGE_CHANGED;
+    }
+    return MESSAGE_NOT_CHANGED;
+  }
+
+  @MessageChangeType
+  public final int replaceMessagePreview (long chatId, long messageId, TdApi.MessageContent newContent) {
+    return performContentfulUpdate(() -> {
+      boolean replyUpdated = Td.equalsTo(msg.replyTo, chatId, messageId) && replyData != null;
+      if (replyUpdated) {
+        replyData.replaceMessageContent(messageId, newContent);
+      }
+      return handleMessagePreviewChange(chatId, messageId, newContent) || replyUpdated;
+    });
+  }
+
+  protected boolean handleMessagePreviewChange (long chatId, long messageId, TdApi.MessageContent newContent) {
+    return false;
+  }
+
+  @MessageChangeType
+  public final int removeMessagePreview (long chatId, long messageId) {
+    return performContentfulUpdate(() -> {
+      boolean replyUpdated = Td.equalsTo(msg.replyTo, chatId, messageId) && replyData != null;
+      if (replyUpdated) {
+        replyData.deleteMessageContent(messageId);
+      }
+      return handleMessagePreviewDelete(chatId, messageId) || replyUpdated;
+    });
+  }
+
+  protected boolean handleMessagePreviewDelete (long chatId, long messageId) {
+    return false;
+  }
+
+  public final void replaceReplyTranslation (long chatId, long messageId, @Nullable TdApi.FormattedText translation) {
+    if (Td.equalsTo(msg.replyTo, chatId, messageId) && replyData != null) {
       replyData.replaceMessageTranslation(messageId, translation);
-    }
-  }
-
-  public final void removeReply (long messageId) {
-    if (msg.replyToMessageId == messageId && replyData != null) {
-      replyData.deleteMessageContent(messageId);
     }
   }
 
@@ -3325,11 +3705,11 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return bottomLineContentWidth > 0 && (bottomLineContentWidth + bubbleTimePartWidth > maxLineWidth);
   }
 
-  protected float getBubbleExpandFactor () {
+  protected float getIntermediateBubbleExpandFactor () {
     throw new RuntimeException();
   }
 
-  protected int getAnimatedBottomLineWidth () {
+  protected int getAnimatedBottomLineWidth (int bubbleTimePartWidth) {
     throw new RuntimeException();
   }
 
@@ -3357,10 +3737,10 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
           case BOTTOM_LINE_KEEP_WIDTH:
             break;
           case BOTTOM_LINE_DEFINE_BY_FACTOR: {
-            final int extendedWidth = getAnimatedBottomLineWidth() + bubbleTimePartWidth;
-            final int fitBubbleWidth = Math.max(bubbleWidth, extendedWidth);
+            final int extendedWidth = getAnimatedBottomLineWidth(bubbleTimePartWidth);
+            final int fitBubbleWidth = Math.max(bubbleWidth, extendedWidth != -1 ? extendedWidth + bubbleTimePartWidth : bubbleWidth);
 
-            float factor = getBubbleExpandFactor();
+            float factor = getIntermediateBubbleExpandFactor();
             if (factor > 0f) {
               bubbleWidth = MathUtils.fromTo(fitBubbleWidth, expandedBubbleWidth, factor);
               int newBubbleHeight = MathUtils.fromTo(bubbleHeight, expandedBubbleHeight, factor);
@@ -3554,7 +3934,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     } else if (isTransparent) {
       return getBubbleTimeTextColor();
     } else {
-      return Theme.getColor(R.id.theme_color_bubble_mediaOverlayText);
+      return Theme.getColor(ColorId.bubble_mediaOverlayText);
     }
   }
 
@@ -3569,9 +3949,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     if (!isWhite) { // Inside bubble
       return getDecentIconColorId();
     } else if (isTransparent) { // Partially on the content
-      return R.id.theme_color_bubble_mediaTime;
+      return ColorId.bubble_mediaTime;
     } else {
-      return R.id.theme_color_bubble_mediaOverlayText;
+      return ColorId.bubble_mediaOverlayText;
     }
   }
 
@@ -3595,13 +3975,13 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       ticksReadPaint = Paints.getBubbleTicksReadPaint();
     } else if (isTransparent) { // Partially on the content
       textColor = getBubbleTimeTextColor();
-      iconColorId = R.id.theme_color_bubble_mediaTimeText;
+      iconColorId = ColorId.bubble_mediaTimeText;
       backgroundColor = getBubbleTimeColor();
       iconPaint = ticksPaint = ticksReadPaint = Paints.getBubbleTimePaint(textColor);
     } else { // Media
-      iconColorId = R.id.theme_color_bubble_mediaOverlayText;
-      textColor = Theme.getColor(R.id.theme_color_bubble_mediaOverlayText);
-      backgroundColor = Theme.getColor(R.id.theme_color_bubble_mediaOverlay);
+      iconColorId = ColorId.bubble_mediaOverlayText;
+      textColor = Theme.getColor(ColorId.bubble_mediaOverlayText);
+      backgroundColor = Theme.getColor(ColorId.bubble_mediaOverlay);
       iconPaint = ticksPaint = ticksReadPaint = Paints.getBubbleOverlayTimePaint(textColor);
     }
 
@@ -3664,18 +4044,28 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     isPinned.draw(c, startX, counterY, Gravity.LEFT, 1f, view, iconColorId);
     startX += isPinned.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN));
 
+    if (shouldShowMessageRestrictedWarning()) {
+      if (isRestrictedByTelegram()) {
+        isRestricted.draw(c, startX, counterY, Gravity.LEFT, 1f, view, ColorId.NONE, isRestrictedCounterLastDrawRect);
+        startX += isRestricted.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN));
+      } else {
+        isUnsupported.draw(c, startX, counterY, Gravity.LEFT, 1f, view, iconColorId, isRestrictedCounterLastDrawRect);
+        startX += isUnsupported.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN));
+      }
+    }
+
     if (shouldShowEdited()) {
       if (isBeingEdited()) {
         Drawables.draw(c, Icons.getClockIcon(iconColorId), startX - Screen.dp(6f), startY + Screen.dp(4.5f) - Screen.dp(5f), iconPaint);
+        startX += Icons.getEditedIconWidth() + Screen.dp(3f);
       } else {
-        Drawables.draw(c, view.getSparseDrawable(R.drawable.baseline_edit_12, 0), startX, startY + Screen.dp(4.5f), iconPaint);
+        isEdited.draw(c, startX, counterY, Gravity.LEFT, 1f, view, iconColorId, isEditedCounterLastDrawRect);
+        startX += isEdited.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN));
       }
-      startX += Icons.getEditedIconWidth() + Screen.dp(2f);
     }
 
     if (translationStyleMode() == Settings.TRANSLATE_MODE_INLINE) {
-      isTranslatedCounter.draw(c, startX, isTranslatedCounterY = counterY, Gravity.LEFT, 1f);
-      isTranslatedCounterX = startX + Screen.dp(7);
+      isTranslatedCounter.draw(c, startX, counterY, Gravity.LEFT, 1f, isTranslatedCounterLastDrawRect);
       startX += isTranslatedCounter.getScaledWidth(Screen.dp(COUNTER_ICON_MARGIN + COUNTER_ADD_MARGIN));
     }
 
@@ -3726,7 +4116,11 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       width = (int) U.measureText(time, mTimeBubble());
     }
     if (shouldShowEdited()) {
-      width += Icons.getEditedIconWidth() + Screen.dp(2f);
+      if (isBeingEdited()) {
+        width += Icons.getEditedIconWidth() + Screen.dp(2f);
+      } else {
+        width += isEdited.getScaledOrTargetWidth(Screen.dp(COUNTER_ICON_MARGIN), isTarget);
+      }
     }
     if (translationStyleMode() == Settings.TRANSLATE_MODE_INLINE) {
       width += isTranslatedCounter.getScaledOrTargetWidth(Screen.dp(COUNTER_ICON_MARGIN + COUNTER_ADD_MARGIN), isTarget);
@@ -3746,6 +4140,13 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       width += replyCounter.getScaledOrTargetWidth(Screen.dp(COUNTER_ICON_MARGIN + COUNTER_ADD_MARGIN), isTarget);
     }
     width += isPinned.getScaledOrTargetWidth(Screen.dp(COUNTER_ICON_MARGIN), isTarget);
+    if (shouldShowMessageRestrictedWarning()) {
+      if (isRestrictedByTelegram()) {
+        width += isRestricted.getScaledOrTargetWidth(Screen.dp(COUNTER_ICON_MARGIN), isTarget);
+      } else {
+        width += isUnsupported.getScaledOrTargetWidth(Screen.dp(COUNTER_ICON_MARGIN), isTarget);
+      }
+    }
     if (reactionsDrawMode == REACTIONS_DRAW_MODE_FLAT) {
       width += reactionsCounterDrawable.getMinimumWidth() + messageReactions.getVisibility() * Screen.dp(3);
       width += reactionsCounter.getScaledOrTargetWidth(Screen.dp(COUNTER_ICON_MARGIN + COUNTER_ADD_MARGIN), isTarget);
@@ -3832,8 +4233,15 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   public final void requestAvatar (AvatarReceiver receiver, boolean force) {
     if (hasAvatar || force) {
-      final float avatarRadiusDp = useBubbles() ? BUBBLE_AVATAR_RADIUS : AVATAR_RADIUS;
-      if (forceForwardedInfo()) {
+      if (isSponsoredMessage()) {
+        if (sponsoredMessage.sponsor.photo != null) {
+          receiver.requestSpecific(tdlib, TD.toChatPhotoInfo(sponsoredMessage.sponsor.photo), AvatarReceiver.Options.NONE);
+        } else if (needAvatar()) {
+          receiver.requestPlaceholder(tdlib, sender.getPlaceholderMetadata(), AvatarReceiver.Options.NONE);
+        } else {
+          receiver.clear();
+        }
+      } else if (forceForwardOrImportInfo()) {
         forwardInfo.requestAvatar(receiver);
       } else if (sender.isDemo()) {
         receiver.requestPlaceholder(tdlib, sender.getPlaceholderMetadata(), AvatarReceiver.Options.NONE);
@@ -3849,7 +4257,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   public final void requestReactions (ComplexReceiver complexReceiver) {
     currentComplexReceiver = complexReceiver;
-    messageReactions.setReceiversPool(complexReceiver);
+    messageReactions.requestReactionFiles(complexReceiver);
     computeQuickButtons();
   }
 
@@ -3859,8 +4267,20 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     }
   }
 
+  public void requestGiveawayAvatars (ComplexReceiver complexReceiver, boolean isUpdate) {
+
+  }
+
+  public final void requestReactionsResources (ComplexReceiver complexReceiver, boolean isUpdate) {
+    if (messageReactions != null) {
+      messageReactions.requestAvatarFiles(complexReceiver, isUpdate);
+    }
+  }
+
+
   public final void requestAllTextMedia (MessageView view) {
     requestTextMedia(view.getTextMediaReceiver());
+    requestAuthorTextMedia(view.getEmojiStatusReceiver());
 
     if (footerText != null) {
       footerText.requestMedia(view.getFooterTextMediaReceiver(true));
@@ -3869,6 +4289,14 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       if (receiver != null) {
         receiver.clear();
       }
+    }
+  }
+
+  public final void requestAuthorTextMedia (ComplexReceiver textMediaReceiver) {
+    if (hAuthorEmojiStatus != null) {
+      hAuthorEmojiStatus.requestMedia(textMediaReceiver);
+    } else {
+      textMediaReceiver.clear();
     }
   }
 
@@ -3975,7 +4403,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   private int getForwardHeight () {
-    return getContentHeight() + getForwardHeaderHeight() + (isPsa() && !forceForwardedInfo() ? getPsaTitleHeight() : 0);
+    return getContentHeight() + getForwardHeaderHeight() + (isPsa() && !forceForwardOrImportInfo() ? getPsaTitleHeight() : 0);
   }
 
   public int getHeaderPadding () {
@@ -4004,6 +4432,22 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   public TdApi.Message getMessage () {
     return msg;
+  }
+
+  public int forumTopicId () {
+    return forumTopicKey != null ? forumTopicKey.forumTopicId : 0;
+  }
+
+  public void getMessageWithProperties (RunnableData<MessageWithProperties> act) {
+    getMessageWithProperties(getMessage(), act);
+  }
+
+  public void getMessageWithProperties (TdApi.Message message, RunnableData<MessageWithProperties> act) {
+    getMessageProperties(message.id, properties -> {
+      if (properties != null) {
+        act.runWithData(new MessageWithProperties(message, properties));
+      }
+    });
   }
 
   @Nullable
@@ -4094,6 +4538,23 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return new TdApi.Message[] {msg};
   }
 
+  public MessageWithProperties[] getAllMessagesAndProperties () {
+    synchronized (this) {
+      if (combinedMessages != null && !combinedMessages.isEmpty()) {
+        MessageWithProperties[] result = new MessageWithProperties[combinedMessages.size()];
+        for (int i = 0; i < result.length; i++) {
+          TdApi.Message message = combinedMessages.get(i);
+          TdApi.MessageProperties properties = lastMessageProperties(message.id);
+          result[i] = new MessageWithProperties(message, properties);
+        }
+        return result;
+      }
+    }
+    return new MessageWithProperties[] {
+      new MessageWithProperties(msg, lastMessageProperties(msg.id))
+    };
+  }
+
   protected final ArrayList<TdApi.Message> getCombinedMessagesUnsafely () {
     return combinedMessages;
   }
@@ -4142,6 +4603,10 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return replyData != null ? replyData.getAuthor() : null;
   }
 
+  public final TdApi.MessageSender getInReplyToSender () {
+    return replyData != null ? replyData.getSender() : null;
+  }
+
   public final int getViewCount () {
     if (isSending() || isFailed()) {
       return 0;
@@ -4170,12 +4635,16 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return new MessageId(msg.chatId, msg.id, getOtherMessageIds(msg.id));
   }
 
+  public final boolean isRealMessage () {
+    return msg != null && !isFakeMessage() && !isSponsoredMessage();
+  }
+
   public boolean isFakeMessage () {
     //noinspection WrongConstant
     if (msg.content.getConstructor() == TdApiExt.MessageChatEvent.CONSTRUCTOR) {
       return true;
     }
-    return isSponsored() || isDemoChat();
+    return isDemoChat();
   }
 
   public final void getIds (@NonNull LongSet ids, long afterMessageId, long beforeMessageId) {
@@ -4211,11 +4680,16 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public final boolean isMessageThreadRoot () {
-    return canGetMessageThread() && (isChannel() || (isMessageThread() && isThreadHeader()) || (msg.messageThreadId != 0 && msg.replyToMessageId == 0));
+    return canGetMessageThread() && (
+      isChannel() ||
+      (isMessageThread() && isThreadHeader()) ||
+      (Td.messageThreadId(msg.topicId) == msg.id || msg.topicId == null /*FIXME TDLib*/)
+    );
   }
 
-  public final long getMessageThreadId () {
-    return getOldestMessage().messageThreadId;
+  @Nullable
+  public final TdApi.MessageTopic getMessageTopicId () {
+    return getOldestMessage().topicId;
   }
 
   public final long[] getOtherMessageIds (long exceptMessageId) {
@@ -4285,17 +4759,6 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return msg.unreadReactions != null && msg.unreadReactions.length > 0;
   }
 
-  public final void readReactions () {
-    synchronized (this) {
-      if (combinedMessages != null) {
-        for (TdApi.Message message : combinedMessages) {
-          message.unreadReactions = new TdApi.UnreadReaction[0];
-        }
-      }
-      msg.unreadReactions = new TdApi.UnreadReaction[0];
-    }
-  }
-
   public final boolean containsUnreadMention () {
     synchronized (this) {
       if (combinedMessages != null) {
@@ -4343,7 +4806,11 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   @AnyThread
   public final boolean wouldCombineWith (TdApi.Message message) {
-    if (msg.mediaAlbumId == 0 || msg.mediaAlbumId != message.mediaAlbumId || msg.selfDestructTime != message.selfDestructTime || isHot() || isEventLog() || isSponsored()) {
+    if (msg.mediaAlbumId == 0 || msg.mediaAlbumId != message.mediaAlbumId ||
+      !Td.equalsTo(msg.selfDestructType, message.selfDestructType) ||
+      ((msg.forwardInfo == null) != (message.forwardInfo == null)) ||
+      ((msg.forwardInfo != null && message.forwardInfo != null && !Td.equalsTo(msg.forwardInfo.origin, message.forwardInfo.origin, false))) ||
+      isHot() || isEventLog() || isSponsoredMessage()) {
       return false;
     }
     int combineMode = TD.getCombineMode(msg);
@@ -4438,11 +4905,19 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return msg.chatId;
   }
 
+  public final TdApi.MessageSender getChatSenderId () {
+    if (ChatId.isUserChat(msg.chatId)) {
+      return new TdApi.MessageSenderUser(tdlib.chatUserId(msg.chatId));
+    } else {
+      return new TdApi.MessageSenderChat(msg.chatId);
+    }
+  }
+
   private TdApi.ChatAdministrator administrator;
 
   private String getAdministratorSign () {
     String result = null;
-    if (isSponsored()) {
+    if (isSponsoredMessage()) {
       return null;
     } else if (administrator != null) {
       if (!StringUtils.isEmpty(administrator.customTitle))
@@ -4525,10 +5000,6 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     boolean isTransparent = !useBubble() || useCircleBubble();
     boolean isWhite = isTransparent || (drawBubbleTimeOverContent() && !useForward());
     return (isWhite && isTransparent);
-  }
-
-  public boolean isSponsored () {
-    return false;
   }
 
   public final int getPinnedMessageCount () {
@@ -4618,13 +5089,13 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         for (TdApi.Message msg : combinedMessages) {
           if (msg.sendingState instanceof TdApi.MessageSendingStateFailed) {
             TdApi.MessageSendingStateFailed failed = (TdApi.MessageSendingStateFailed) msg.sendingState;
-            errors.add(TD.toErrorString(new TdApi.Error(failed.errorCode, failed.errorMessage)));
+            errors.add(TD.toErrorString(failed.error));
           }
         }
       } else {
         if (msg.sendingState instanceof TdApi.MessageSendingStateFailed) {
           TdApi.MessageSendingStateFailed failed = (TdApi.MessageSendingStateFailed) msg.sendingState;
-          errors.add(TD.toErrorString(new TdApi.Error(failed.errorCode, failed.errorMessage)));
+          errors.add(TD.toErrorString(failed.error));
         }
       }
     }
@@ -4640,67 +5111,73 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public final boolean canBeDeletedForSomebody () {
-    return (msg.canBeDeletedOnlyForSelf || msg.canBeDeletedForAllUsers) && allowInteraction();
+    TdApi.MessageProperties properties = lastMessageProperties();
+    return (properties.canBeDeletedOnlyForSelf || properties.canBeDeletedForAllUsers) && allowInteraction();
   }
 
   public final boolean canBeReported () {
-    return !isSelfChat() && msg.sendingState == null && !msg.isOutgoing && tdlib.canReportChatSpam(msg.chatId) && !isEventLog();
+    if (isSponsoredMessage()) {
+      return sponsoredMessage.canBeReported;
+    } else {
+      return !isSelfChat() && msg.sendingState == null && !msg.isOutgoing && tdlib.canReportChatSpam(msg.chatId) && !isEventLog();
+    }
   }
 
   public final boolean canViewStatistics () {
-    return msg.canGetStatistics;
+    TdApi.MessageProperties properties = lastMessageProperties();
+    return properties.canGetStatistics;
   }
 
   public final boolean canGetViewers () {
-    return msg.canGetViewers;
+    TdApi.MessageProperties properties = lastMessageProperties();
+    return properties.canGetViewers;
+  }
+
+  public final TdApi.Message getAnchorMessageThreadMessage () {
+    return getOldestMessage();
   }
 
   public final boolean canGetMessageThread () {
-    return getOldestMessage().canGetMessageThread;
+    TdApi.MessageProperties properties = lastMessageProperties(getAnchorMessageThreadMessage().id);
+    return properties.canGetMessageThread;
   }
 
   public final boolean canGetAddedReactions () {
     synchronized (this) {
       if (combinedMessages != null) {
         for (TdApi.Message message : combinedMessages) {
-          if (message.canGetAddedReactions) {
+          if (Td.canGetAddedReactions(message)) {
             return true;
           }
         }
       }
     }
 
-    return msg.canGetAddedReactions;
+    return Td.canGetAddedReactions(msg);
 
-    //return !isChannel() && messageReactions.getTotalCount() > 0 && (msg.forwardInfo == null || msg.forwardInfo.origin.getConstructor() != TdApi.MessageForwardOriginChannel.CONSTRUCTOR);
-  }
-
-  public final boolean canBeDeletedOnlyForSelf () {
-    return msg.canBeDeletedOnlyForSelf;
-  }
-
-  public final boolean canBeDeletedForEveryone () {
-    return msg.canBeDeletedForAllUsers;
+    //return !isChannel() && messageReactions.getTotalCount() > 0 && (msg.forwardInfo == null || msg.forwardInfo.origin.getConstructor() != TdApi.MessageOriginChannel.CONSTRUCTOR);
   }
 
   public boolean canBeSelected () {
-    return (!isNotSent() || canResend()) && (flags & FLAG_UNSUPPORTED) == 0 && allowInteraction() && !isSponsored() && !messagesController().inSearchMode();
+    return (!isNotSent() || canResend()) && (flags & FLAG_UNSUPPORTED) == 0 && allowInteraction() && !isSponsoredMessage() && !messagesController().inSearchMode();
   }
 
   public boolean canBePinned () {
-    return !isNotSent() && allowInteraction() && !isSponsored();
+    return !isNotSent() && allowInteraction() && !isSponsoredMessage();
   }
 
   public boolean canEditText () {
-    return msg.canBeEdited && TD.canEditText(msg.content) && allowInteraction() && messagesController().canWriteMessages();
+    TdApi.MessageProperties properties = lastMessageProperties();
+    return properties.canBeEdited && TD.canEditText(msg.content) && allowInteraction() && messagesController().canWriteMessages();
   }
 
   public boolean canBeForwarded () {
-    return msg.canBeForwarded && (msg.content.getConstructor() != TdApi.MessageLocation.CONSTRUCTOR || ((TdApi.MessageLocation) msg.content).expiresIn == 0) && !isEventLog();
+    TdApi.MessageProperties properties = lastMessageProperties();
+    return properties.canBeForwarded && !isEventLog();
   }
 
   public boolean canBeReacted () {
-    return !isSponsored() && !isEventLog() && !(msg.content instanceof TdApi.MessageCall) && !Td.isEmpty(messageAvailableReactions);
+    return !isSponsoredMessage() && !isEventLog() && !Td.isEmpty(messageAvailableReactions) && (tdlib.hasPremium() || Td.hasNonPremiumReactions(messageAvailableReactions));
   }
 
   public boolean canBeSaved () {
@@ -4770,27 +5247,40 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       }
       result = true;
     }
-    if (containsUnreadReactions()) {
-      if (!BitwiseUtils.hasFlag(flags, FLAG_IGNORE_REACTIONS_VIEW)) {
-        highlightUnreadReactions();
-        highlight(true);
-        tdlib.ui().postDelayed(() -> {
-          flags = BitwiseUtils.setFlag(flags, FLAG_IGNORE_REACTIONS_VIEW, false);
-        }, 500L);
-        tdlib().ui().post(this::readReactions);
-      }
+    if (containsUnreadReactions() && !BitwiseUtils.hasFlag(flags, FLAG_IGNORE_REACTIONS_VIEW)) {
       flags |= FLAG_IGNORE_REACTIONS_VIEW;
+
+      highlightUnreadReactions();
+      highlight(true);
+      tdlib.ui().postDelayed(() -> {
+        flags = BitwiseUtils.setFlag(flags, FLAG_IGNORE_REACTIONS_VIEW, false);
+      }, 500L);
+
       result = true;
     }
     return result;
   }
 
   public boolean needRefreshViewCount () {
-    return viewCounter != null && !isSending();
+    return !isSponsoredMessage() && viewCounter != null && !isSending();
   }
 
   public void markAsUnread () {
     flags &= ~FLAG_VIEWED;
+  }
+
+  public int getEditDate () {
+    synchronized (this) {
+      if (combinedMessages != null && !combinedMessages.isEmpty()) {
+        int result = 0;
+        for (TdApi.Message message : combinedMessages) {
+          result = Math.max(result, message.editDate);
+        }
+        return result;
+      }
+    }
+
+    return msg.editDate;
   }
 
   public boolean isEdited () {
@@ -4807,6 +5297,24 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       }
     }
     return false;
+  }
+
+  public boolean isRestrictedByTelegram () {
+    return isRestrictedByTelegram(Settings.instance().needRestrictContent());
+  }
+
+  public boolean isRestrictedByTelegram (boolean restrictSensitiveContent) {
+    synchronized (this) {
+      if (combinedMessages != null) {
+        for (TdApi.Message message : combinedMessages) {
+          if (Td.hasRestriction(message.restrictionInfo, restrictSensitiveContent)) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return Td.hasRestriction(msg.restrictionInfo, restrictSensitiveContent);
   }
 
   protected boolean replaceTimeWithEditTime () {
@@ -4889,17 +5397,17 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public final boolean needMessageButton () {
-    return ((flags & FLAG_SELF_CHAT) != 0 || isChannelAutoForward() || isRepliesChat()) && msg.forwardInfo != null && msg.forwardInfo.fromChatId != 0 && msg.forwardInfo.fromMessageId != 0 && msg.forwardInfo.fromChatId != msg.chatId;
+    return ((flags & FLAG_SELF_CHAT) != 0 || isChannelAutoForward() || isRepliesChat()) && Td.hasMessageSource(msg.forwardInfo) && msg.forwardInfo.source.chatId != msg.chatId;
   }
 
   public final void openSourceMessage () {
-    if (msg.forwardInfo != null) {
+    if (Td.hasMessageSource(msg.forwardInfo)) {
       if (isRepliesChat()) {
-        MessageId replyMessageId = new MessageId(msg.forwardInfo.fromChatId, msg.forwardInfo.fromMessageId);
-        MessageId replyToMessageId = new MessageId(msg.replyInChatId, msg.replyToMessageId);
+        MessageId replyMessageId = new MessageId(msg.forwardInfo.source);
+        MessageId replyToMessageId = Td.toMessageId(msg.replyTo);
         openMessageThread(replyMessageId, replyToMessageId);
       } else {
-        tdlib.ui().openMessage(controller(), msg.forwardInfo.fromChatId, new MessageId(msg.forwardInfo.fromChatId, msg.forwardInfo.fromMessageId), openParameters());
+        tdlib.ui().openMessage(controller(), msg.forwardInfo.source.chatId, new MessageId(msg.forwardInfo.source), openParameters());
       }
     }
   }
@@ -4940,8 +5448,15 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return message.content.getConstructor() == messageContent.getConstructor();
   }
 
+  protected boolean isSupportedMessagePendingContent (@NonNull MessageEditMediaPending pending) {
+    return false;
+  }
+
   @MessageChangeType
-  public int setMessageContent (long messageId, TdApi.MessageContent newContent) {
+  public int replaceMessageContent (long chatId, long messageId, TdApi.MessageContent newContent) {
+    if (msg.chatId != chatId || !isDescendantOrSelf(messageId)) {
+      return replaceMessagePreview(chatId, messageId, newContent);
+    }
     TdApi.Message message;
     boolean isBottomMessage;
     synchronized (this) {
@@ -4953,8 +5468,12 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         message = msg;
         isBottomMessage = true;
       } else {
-        return MESSAGE_NOT_CHANGED;
+        message = null;
+        isBottomMessage = false;
       }
+    }
+    if (message == null) {
+      return MESSAGE_NOT_CHANGED;
     }
     if ((flags & FLAG_UNSUPPORTED) != 0) {
       if (message.content.getConstructor() == TdApi.MessageUnsupported.CONSTRUCTOR && newContent.getConstructor() != TdApi.MessageUnsupported.CONSTRUCTOR) {
@@ -4972,6 +5491,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       if (width != getWidth() || contentWidth != getContentWidth()) {
         buildMarkup();
       }
+      updateReactionAvatars(UI.inUiThread());
       return height == getHeight() ? MESSAGE_INVALIDATED : MESSAGE_CHANGED;
     }
     return MESSAGE_REPLACE_REQUIRED;
@@ -5047,8 +5567,20 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     // return msg.ttl > 0 && ((chat != null && chat.type.getConstructor() == TdApi.ChatTypePrivate.CONSTRUCTOR) || msg.ttl <= 60) && (flags & FLAG_EVENT_LOG) == 0 && !isEventLog();
   }
 
+  public boolean isViewOnce () {
+    return msg.selfDestructType != null && msg.selfDestructType.getConstructor() == TdApi.MessageSelfDestructTypeImmediately.CONSTRUCTOR;
+  }
+
   public boolean isHotDone () {
-    return isOutgoing() && msg.selfDestructIn < msg.selfDestructTime;
+    return isOutgoing() && isHotOpened();
+  }
+
+  public boolean isHotOpened () {
+    if (msg.selfDestructType != null && msg.selfDestructType.getConstructor() == TdApi.MessageSelfDestructTypeTimer.CONSTRUCTOR) {
+      TdApi.MessageSelfDestructTypeTimer timer = (TdApi.MessageSelfDestructTypeTimer) msg.selfDestructType;
+      return msg.selfDestructIn != 0 && msg.selfDestructIn < timer.selfDestructTime;
+    }
+    return false;
   }
 
   protected boolean needHotTimer () {
@@ -5064,7 +5596,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   public void readContent () {
     if (!isEventLog()) {
-      tdlib.client().send(new TdApi.OpenMessageContent(msg.chatId, msg.id), tdlib.okHandler());
+      tdlib.send(new TdApi.OpenMessageContent(msg.chatId, msg.id), tdlib.typedOkHandler());
       if (!isOutgoing()) {
         startHotTimer(true);
       }
@@ -5072,7 +5604,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public boolean isContentRead () {
-    return TD.isMessageOpened(msg);
+    return Td.isListenedOrViewed(msg.content);
   }
 
   private static @Nullable HotHandler __hotHandler;
@@ -5091,7 +5623,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   private void startHotTimer (boolean byEvent) {
     if (isHot() && needHotTimer() && hotTimerStart == 0) {
       HotHandler hotHandler = getHotHandler();
-      hotTimerStart = System.currentTimeMillis();
+      hotTimerStart = SystemClock.uptimeMillis();
       hotHandler.sendMessageDelayed(Message.obtain(hotHandler, HotHandler.MSG_HOT_CHECK, this), HOT_CHECK_DELAY);
       onHotTimerStarted(byEvent);
     }
@@ -5113,12 +5645,16 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   private void checkHotTimer () {
-    long now = System.currentTimeMillis();
-    long elapsed = now - hotTimerStart;
-    double prevTtl = msg.selfDestructIn;
+    if (msg.selfDestructType == null || msg.selfDestructType.getConstructor() != TdApi.MessageSelfDestructTypeTimer.CONSTRUCTOR) {
+      return;
+    }
+    TdApi.MessageSelfDestructTypeTimer timer = (TdApi.MessageSelfDestructTypeTimer) msg.selfDestructType;
+    double preSelfDestructIn = msg.selfDestructIn != 0 ? msg.selfDestructIn : timer.selfDestructTime;
+    long now = SystemClock.uptimeMillis();
+    long elapsedMs = now - hotTimerStart;
     hotTimerStart = now;
-    msg.selfDestructIn = Math.max(0, prevTtl - (double) elapsed / 1000.0d);
-    boolean secondsChanged = Math.round(prevTtl) != Math.round(msg.selfDestructIn);
+    msg.selfDestructIn = Math.max(0, preSelfDestructIn - (double) elapsedMs / 1000.0d);
+    boolean secondsChanged = Math.round(preSelfDestructIn) != Math.round(msg.selfDestructIn);
     onHotInvalidate(secondsChanged);
     if (hotListener != null) {
       hotListener.onHotInvalidate(secondsChanged);
@@ -5130,11 +5666,33 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public float getHotExpiresFactor () {
-    return (float) (msg.selfDestructIn / msg.selfDestructTime);
+    if (msg.selfDestructType != null && msg.selfDestructType.getConstructor() == TdApi.MessageSelfDestructTypeTimer.CONSTRUCTOR) {
+      TdApi.MessageSelfDestructTypeTimer timer = (TdApi.MessageSelfDestructTypeTimer) msg.selfDestructType;
+      return msg.selfDestructIn == 0 ? 1f : (float) (msg.selfDestructIn / timer.selfDestructTime);
+    }
+    return 0f;
   }
 
   public String getHotTimerText () {
-    return TdlibUi.getDuration((int) Math.round(msg.selfDestructIn), TimeUnit.SECONDS, false);
+    double selfDestructIn = msg.selfDestructIn;
+    if (msg.selfDestructType != null) {
+      switch (msg.selfDestructType.getConstructor()) {
+        case TdApi.MessageSelfDestructTypeImmediately.CONSTRUCTOR:
+          return Lang.getString(R.string.ViewOnce);
+        case TdApi.MessageSelfDestructTypeTimer.CONSTRUCTOR: {
+          TdApi.MessageSelfDestructTypeTimer timer = (TdApi.MessageSelfDestructTypeTimer) msg.selfDestructType;
+          if (selfDestructIn == 0) {
+            selfDestructIn = timer.selfDestructTime;
+          }
+          break;
+        }
+        default: {
+          Td.assertMessageSelfDestructType_58882d8c();
+          throw Td.unsupported(msg.selfDestructType);
+        }
+      }
+    }
+    return TdlibUi.getDuration(Math.round(selfDestructIn), TimeUnit.SECONDS, false);
   }
 
   public interface HotListener {
@@ -5186,7 +5744,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public boolean allowInteraction () {
-    return !isEventLog() && !isThreadHeader();
+    return !isFakeMessage() && !isEventLog() && !isThreadHeader();
   }
 
   public boolean canReplyTo () {
@@ -5202,7 +5760,27 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return false;
   }
 
+  private boolean isMediaPending;
+
+  protected TGMessage setIsMediaPending () {
+    isMediaPending = true;
+    return this;
+  }
+
   public final int setMessagePendingContentChanged (long chatId, long messageId) {
+    final MessageEditMediaPending pending = tdlib.getPendingMessageMedia(chatId, messageId);
+    if (pending != null && pending.getFile() != null && !isSupportedMessagePendingContent(pending)) {
+      return MESSAGE_REPLACE_REQUIRED;
+    }
+
+    if (isMediaPending && pending == null) {
+      isMediaPending = false;
+      final TdApi.Message message = getMessage(messageId);
+      if (!isSupportedMessageContent(message, message.content)) {
+        return MESSAGE_REPLACE_REQUIRED;
+      }
+    }
+
     int oldHeight = getHeight();
     return onMessagePendingContentChanged(chatId, messageId, oldHeight);
   }
@@ -5302,7 +5880,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     }
     if (reactionsCounter != null) {
       int count = messageReactions.getTotalCount();
-      if (tdlib.isUserChat(msg.chatId) && messageReactions.getReactions() != null && (count == 1 || messageReactions.getReactions().length > 1)) {
+      if (tdlib.isUserChat(msg.chatId) && messageReactions.getReactions() != null && (count == 1 || Td.reactionTypesCount(messageReactions.getReactions()) > 1)) {
         count = 0;
       }
       reactionsCounter.setCount(count, !messageReactions.hasChosen(), animated);
@@ -5330,19 +5908,11 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     dst.id = src.id;
     dst.date = src.date;
     dst.sendingState = src.sendingState;
+    dst.schedulingState = src.schedulingState;
 
-    dst.canBeDeletedOnlyForSelf = src.canBeDeletedOnlyForSelf;
-    dst.canBeDeletedForAllUsers = src.canBeDeletedForAllUsers;
-    dst.canGetMessageThread = src.canGetMessageThread;
-    dst.canBeForwarded = src.canBeForwarded;
     dst.canBeSaved = src.canBeSaved;
-    dst.canBeEdited = src.canBeEdited;
-    dst.canGetAddedReactions = src.canGetAddedReactions;
-    dst.canGetStatistics = src.canGetStatistics;
-    dst.canGetViewers = src.canGetViewers;
-    dst.canReportReactions = src.canReportReactions;
-    dst.canGetMediaTimestampLinks = src.canGetMediaTimestampLinks;
     dst.hasTimestampedMedia = src.hasTimestampedMedia;
+    dst.restrictionInfo = src.restrictionInfo;
 
     dst.editDate = src.editDate;
     dst.isChannelPost = src.isChannelPost;
@@ -5698,6 +6268,10 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   public final void onDestroy () {
     isDestroyed = true;
+    if (topicObserverRegistered) {
+      tdlib.topics().stopObserving(forumTopicKey, this);
+      topicObserverRegistered = false;
+    }
     stopHotTimer();
     if (forwardInfo != null)
       forwardInfo.destroy();
@@ -5725,14 +6299,14 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   public int getSelectionColor (float factor) {
     final boolean useBubbles = useBubbles();
     if (useBubbles) {
-      return ColorUtils.alphaColor(factor, ColorUtils.fromToArgb(Theme.getColor(R.id.theme_color_bubble_messageSelection), Theme.getColor(R.id.theme_color_bubble_messageSelectionNoWallpaper), manager.controller().wallpaper().getBackgroundTransparency()));
+      return ColorUtils.alphaColor(factor, ColorUtils.fromToArgb(Theme.getColor(ColorId.bubble_messageSelection), Theme.getColor(ColorId.bubble_messageSelectionNoWallpaper), manager.controller().wallpaper().getBackgroundTransparency()));
     } else {
-      // manager.controller().wallpaper().getOverlayColor(R.id.theme_color_chatTransparentColor)
+      // manager.controller().wallpaper().getOverlayColor(ColorId.chatTransparentColor)
       final int color = Theme.chatSelectionColor();
-      return ColorUtils.alphaColor(factor, ColorUtils.compositeColor(Theme.getColor(R.id.theme_color_chatBackground), color));
+      return ColorUtils.alphaColor(factor, ColorUtils.compositeColor(Theme.getColor(ColorId.chatBackground), color));
     }
-    /*final int color = useBubbles ? Theme.getColor(R.id.theme_color_messageBubbleSelection) : Theme.chatSelectionColor();
-    return U.alphaColor(factor, useBubbles ? color : U.compositeColor(Theme.getColor(R.id.theme_color_chatPlainBackground), color));*/
+    /*final int color = useBubbles ? Theme.getColor(ColorId.messageBubbleSelection) : Theme.chatSelectionColor();
+    return U.alphaColor(factor, useBubbles ? color : U.compositeColor(Theme.getColor(ColorId.chatPlainBackground), color));*/
   }
 
   private int findBottomEdge () {
@@ -6036,7 +6610,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   @Override
   public void onCounterAppearanceChanged (Counter counter, boolean sizeChanged) {
-    if (sizeChanged && BitwiseUtils.hasFlag(flags, FLAG_LAYOUT_BUILT)) {
+    if ((sizeChanged || (counter == reactionsCounter && !useBubbles())) && BitwiseUtils.hasFlag(flags, FLAG_LAYOUT_BUILT)) {
       if (counter == viewCounter) {
         switch (getViewCountMode()) {
           case VIEW_COUNT_FORWARD:
@@ -6068,6 +6642,20 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     } else {
       postInvalidate();
     }
+  }
+
+  @Override
+  public void onSizeChanged () {
+    if (UI.inUiThread()) { // FIXME remove this after reworking combineWith method
+      invalidate();
+    } else {
+      postInvalidate();
+    }
+  }
+
+  @Override
+  public void onInvalidateMedia (TGAvatars avatars) {
+    performWithViews(view -> requestReactionsResources(view.getReactionAvatarsReceiver(), true));
   }
 
   @Override
@@ -6199,7 +6787,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       android.util.Log.i("HIGHLIGHT", "UPDATE");
     }
 
-    return searchResultsHighlightPool.isMostRelevant(key) ? highlight: null;
+    return searchResultsHighlightPool.isMostRelevant(key) ? highlight : null;
   }
 
   public void checkHighlightedText () {
@@ -6525,7 +7113,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     }
 
     int positionOffset = -(int) (verticalFactor * height);
-    c.save();
+    final int restoreToCount = Views.save(c);
     c.clipRect(0, startY, view.getMeasuredWidth(), endY);
     for (int a = 0; a < actions.size(); a++) {
       SwipeQuickAction action = actions.get(a);
@@ -6538,7 +7126,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         height > Screen.dp(256) ? (int) (mInitialTouchY - getHeaderPadding() + xHeaderPadding) : (height / 2)
       );
     }
-    c.restore();
+    Views.restore(c, restoreToCount);
   }
 
   private float getTranslatePositionFactor (boolean isLeft, int position) {
@@ -6565,19 +7153,19 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     c.drawCircle(cx, cy, radius2, Paints.fillingPaint(ColorUtils.alphaColor(alpha, getBubbleButtonBackgroundColor())));
 
     if (icon != null) {
-      c.save();
+      final int restoreToCount = Views.save(c);
       c.scale((Lang.rtl() ? -.8f : .8f) * scale, .8f * scale, cx, cy);
       icon.setAlpha((int) (alpha * 255));
       Paint paint = Paints.getInlineBubbleIconPaint(ColorUtils.alphaColor(alpha, getBubbleButtonTextColor()));
       Drawables.draw(c, icon, cx - icon.getMinimumWidth() / 2f, cy - icon.getMinimumHeight() / 2f, paint);
-      c.restore();
+      Views.restore(c, restoreToCount);
     }
   }
 
   private void drawTranslateRect (Canvas c, float x, float y, int width, int height, float positionFactor, int quickColor, Drawable icon, String text, int textWidth, int textY) {
     final Paint iconPaint = Paints.getInlineBubbleIconPaint(
       ColorUtils.alphaColor((float) mQuickText.getAlpha() / 255f,
-      Theme.getColor(R.id.theme_color_messageSwipeContent)));
+      Theme.getColor(ColorId.messageSwipeContent)));
 
     final int iconWidth = icon != null ? icon.getMinimumWidth() : 0;
     final int iconHeight = icon != null ? icon.getMinimumHeight() : 0;
@@ -6697,7 +7285,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   private boolean needHideEventDate () {
     //noinspection WrongConstant
-    return (event != null & event.hideDate) || (msg.content.getConstructor() == TdApiExt.MessageChatEvent.CONSTRUCTOR && ((TdApiExt.MessageChatEvent) msg.content).hideDate);
+    return (event != null && event.hideDate) || (msg.content.getConstructor() == TdApiExt.MessageChatEvent.CONSTRUCTOR && ((TdApiExt.MessageChatEvent) msg.content).hideDate);
   }
 
   public final boolean isEventLog () {
@@ -6793,16 +7381,74 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return pick(TextColorSets.Regular.LIGHT, TextColorSets.BubbleOut.LIGHT, TextColorSets.BubbleIn.LIGHT);
   }
 
+  @Nullable
+  public final TdlibAccentColor getContentAccentColor () {
+    if (true) {
+      return null;
+    }
+    if (needColoredNames()) {
+      if (fAuthorNameAccentColor != null) {
+        return fAuthorNameAccentColor;
+      } else if (forwardInfo != null) {
+        return forwardInfo.getAuthorAccentColor();
+      }
+      if (hAuthorAccentColor != null) {
+        return hAuthorAccentColor;
+      } else {
+        return forceForwardOrImportInfo() ? forwardInfo.getAuthorAccentColor() : sender.getAccentColor();
+      }
+    }
+    return null;
+  }
+
+  public final TextColorSet overrideWithAccent (TextColorSet colorSet, boolean onlyClickable) {
+    TdlibAccentColor accentColor = getContentAccentColor();
+    if (accentColor != null) {
+      return new TextColorSetOverride(colorSet) {
+        @Override
+        public int defaultTextColor () {
+          return onlyClickable ? super.defaultTextColor() : accentColor.getNameColor();
+        }
+
+        @Override
+        public int clickableTextColor (boolean isPressed) {
+          return accentColor.getNameColor();
+        }
+
+        @Override
+        public int backgroundColor (boolean isPressed) {
+          return isPressed ? ColorUtils.alphaColor(.2f, accentColor.getNameColor()) : super.backgroundColor(false);
+        }
+
+        @Override
+        public int backgroundColorId (boolean isPressed) {
+          long complexColor = accentColor.getNameComplexColor();
+          return Theme.extractColorValue(complexColor);
+        }
+      };
+    }
+    return colorSet;
+  }
+
   public final TextColorSet getLinkColorSet () {
-    return pick(TextColorSets.Regular.LINK, TextColorSets.BubbleOut.LINK, TextColorSets.BubbleIn.LINK);
+    return overrideWithAccent(
+      pick(TextColorSets.Regular.LINK, TextColorSets.BubbleOut.LINK, TextColorSets.BubbleIn.LINK),
+      false
+    );
   }
 
   public final TextColorSet getTextColorSet () {
-    return pick(TextColorSets.Regular.NORMAL, TextColorSets.BubbleOut.NORMAL, TextColorSets.BubbleIn.NORMAL);
+    return overrideWithAccent(
+      pick(TextColorSets.Regular.NORMAL, TextColorSets.BubbleOut.NORMAL, TextColorSets.BubbleIn.NORMAL),
+      true
+    );
   }
 
   public final TextColorSet getChatAuthorColorSet () {
-    return pick(TextColorSets.Regular.MESSAGE_AUTHOR, TextColorSets.BubbleOut.MESSAGE_AUTHOR, TextColorSets.BubbleIn.MESSAGE_AUTHOR);
+    return overrideWithAccent(
+      pick(TextColorSets.Regular.MESSAGE_AUTHOR, TextColorSets.BubbleOut.MESSAGE_AUTHOR, TextColorSets.BubbleIn.MESSAGE_AUTHOR),
+      false
+    );
   }
 
   public final TextColorSet getChatAuthorPsaColorSet () {
@@ -6817,38 +7463,38 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   public final @ColorInt int getContentBackgroundColor () {
     if (useBubbles()) {
-      return Theme.getColor(isOutgoingBubble() ? R.id.theme_color_bubbleOut_background : R.id.theme_color_bubbleIn_background);
+      return Theme.getColor(isOutgoingBubble() ? ColorId.bubbleOut_background : ColorId.bubbleIn_background);
     } else {
-      return ColorUtils.compositeColor(Theme.getColor(R.id.theme_color_chatBackground), getSelectionColor(selectionFactor));
+      return ColorUtils.compositeColor(Theme.getColor(ColorId.chatBackground), getSelectionColor(selectionFactor));
     }
   }
 
-  public final @ThemeColorId int getDecentColorId (@ThemeColorId int defaultColorId) {
-    return useBubbles() ? (isOutgoingBubble() ? R.id.theme_color_bubbleOut_time : R.id.theme_color_bubbleIn_time) : defaultColorId;
+  public final @PorterDuffColorId int getDecentColorId (@ColorId int defaultColorId) {
+    return useBubbles() ? (isOutgoingBubble() ? ColorId.bubbleOut_time : ColorId.bubbleIn_time) : defaultColorId;
   }
 
-  public final @ThemeColorId int getProgressColorId () {
-    return useBubbles() ? (isOutgoingBubble() ? R.id.theme_color_bubbleOut_progress : R.id.theme_color_bubbleIn_progress) : R.id.theme_color_progress;
+  public final @ColorId int getProgressColorId () {
+    return useBubbles() ? (isOutgoingBubble() ? ColorId.bubbleOut_progress : ColorId.bubbleIn_progress) : ColorId.progress;
   }
 
   public final int getProgressColor () {
     return Theme.getColor(getProgressColorId());
   }
 
-  public final @ThemeColorId int getDecentColorId () {
-    return getDecentColorId(R.id.theme_color_textLight);
+  public final @ColorId int getDecentColorId () {
+    return getDecentColorId(ColorId.textLight);
   }
 
-  public final @ThemeColorId int getSeparatorColorId () {
-    return useBubbles() ? (isOutgoingBubble() ? R.id.theme_color_bubbleOut_separator : R.id.theme_color_bubbleIn_separator) : R.id.theme_color_separator;
+  public final @ColorId int getSeparatorColorId () {
+    return useBubbles() ? (isOutgoingBubble() ? ColorId.bubbleOut_separator : ColorId.bubbleIn_separator) : ColorId.separator;
   }
 
-  public final @ThemeColorId int getPressColorId () {
-    return useBubbles() ? (isOutgoingBubble() ? R.id.theme_color_bubbleOut_pressed : R.id.theme_color_bubbleIn_pressed) : R.id.theme_color_messageSelection;
+  public final @ColorId int getPressColorId () {
+    return useBubbles() ? (isOutgoingBubble() ? ColorId.bubbleOut_pressed : ColorId.bubbleIn_pressed) : ColorId.messageSelection;
   }
 
-  public final @ThemeColorId int getDecentIconColorId () {
-    return getDecentColorId(R.id.theme_color_iconLight);
+  public final @PorterDuffColorId int getDecentIconColorId () {
+    return getDecentColorId(ColorId.iconLight);
   }
 
   public final @ColorInt int getDecentColor () {
@@ -6868,19 +7514,19 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public final int getTextColor () {
-    return Theme.getColor(useBubbles() ? (isOutgoingBubble() ? R.id.theme_color_bubbleOut_text : R.id.theme_color_bubbleIn_text) : R.id.theme_color_text);
+    return Theme.getColor(useBubbles() ? (isOutgoingBubble() ? ColorId.bubbleOut_text : ColorId.bubbleIn_text) : ColorId.text);
   }
 
   public final int getOutlineColor () {
-    return Theme.getColor(useBubbles() ? (isOutgoingBubble() ? R.id.theme_color_bubbleOut_outline : R.id.theme_color_bubbleIn_outline) : R.id.theme_color_separator);
+    return Theme.getColor(useBubbles() ? (isOutgoingBubble() ? ColorId.bubbleOut_outline : ColorId.bubbleIn_outline) : ColorId.separator);
   }
 
   public final int getTextLinkColor () {
-    return Theme.getColor(useBubbles() ? (isOutgoingBubble() ? R.id.theme_color_bubbleOut_textLink : R.id.theme_color_bubbleIn_textLink) : R.id.theme_color_textLink);
+    return Theme.getColor(useBubbles() ? (isOutgoingBubble() ? ColorId.bubbleOut_textLink : ColorId.bubbleIn_textLink) : ColorId.textLink);
   }
 
   public final int getTextLinkHighlightColor () {
-    return Theme.getColor(useBubbles() ? (isOutgoingBubble() ? R.id.theme_color_bubbleOut_textLinkPressHighlight : R.id.theme_color_bubbleIn_textLinkPressHighlight) : R.id.theme_color_textLinkPressHighlight);
+    return Theme.getColor(useBubbles() ? (isOutgoingBubble() ? ColorId.bubbleOut_textLinkPressHighlight : ColorId.bubbleIn_textLinkPressHighlight) : ColorId.textLinkPressHighlight);
   }
 
   protected final int getTextTopOffset () {
@@ -6888,35 +7534,42 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   protected final int getVerticalLineColor () {
-    return Theme.getColor(isOutgoingBubble() ? R.id.theme_color_bubbleOut_chatVerticalLine : R.id.theme_color_messageVerticalLine);
+    if (isOutgoingBubble()) {
+      return Theme.getColor(ColorId.bubbleOut_chatVerticalLine);
+    }
+    TdlibAccentColor accentColor = getContentAccentColor();
+    if (accentColor != null) {
+      return accentColor.getVerticalLineColor();
+    }
+    return Theme.getColor(ColorId.messageVerticalLine);
   }
 
   protected final int getVerticalLineContentColor () {
-    return Theme.getColor(isOutgoingBubble() ? R.id.theme_color_bubbleOut_chatNeutralFillingContent : R.id.theme_color_messageNeutralFillingContent);
+    return Theme.getColor(isOutgoingBubble() ? ColorId.bubbleOut_chatNeutralFillingContent : ColorId.messageNeutralFillingContent);
   }
 
   protected final int getCorrectLineColor (boolean isPersonal) {
     return Theme.getColor(
             isPersonal ?
-            isOutgoingBubble() ? R.id.theme_color_bubbleOut_chatCorrectChosenFilling : R.id.theme_color_messageCorrectChosenFilling :
-            isOutgoingBubble() ? R.id.theme_color_bubbleOut_chatCorrectFilling : R.id.theme_color_messageCorrectFilling
+            isOutgoingBubble() ? ColorId.bubbleOut_chatCorrectChosenFilling : ColorId.messageCorrectChosenFilling :
+            isOutgoingBubble() ? ColorId.bubbleOut_chatCorrectFilling : ColorId.messageCorrectFilling
     );
   }
 
   protected final int getCorrectLineContentColor (boolean isPersonal) {
     return Theme.getColor(
             isPersonal ?
-            isOutgoingBubble() ? R.id.theme_color_bubbleOut_chatCorrectChosenFillingContent : R.id.theme_color_messageCorrectChosenFillingContent :
-            isOutgoingBubble() ? R.id.theme_color_bubbleOut_chatCorrectFillingContent : R.id.theme_color_messageCorrectFillingContent
+            isOutgoingBubble() ? ColorId.bubbleOut_chatCorrectChosenFillingContent : ColorId.messageCorrectChosenFillingContent :
+            isOutgoingBubble() ? ColorId.bubbleOut_chatCorrectFillingContent : ColorId.messageCorrectFillingContent
     );
   }
 
   protected final int getNegativeLineColor () {
-    return Theme.getColor(isOutgoingBubble() ? R.id.theme_color_bubbleOut_chatNegativeFilling : R.id.theme_color_messageNegativeLine);
+    return Theme.getColor(isOutgoingBubble() ? ColorId.bubbleOut_chatNegativeFilling : ColorId.messageNegativeLine);
   }
 
   protected final int getNegativeLineContentColor () {
-    return Theme.getColor(isOutgoingBubble() ? R.id.theme_color_bubbleOut_chatNegativeFillingContent : R.id.theme_color_messageNegativeLineContent);
+    return Theme.getColor(isOutgoingBubble() ? ColorId.bubbleOut_chatNegativeFillingContent : ColorId.messageNegativeLineContent);
   }
 
   protected final int getChatAuthorColor () {
@@ -6924,11 +7577,11 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   protected final int getChatAuthorColorId () {
-    return isOutgoingBubble() ? R.id.theme_color_bubbleOut_messageAuthor : R.id.theme_color_messageAuthor;
+    return isOutgoingBubble() ? ColorId.bubbleOut_messageAuthor : ColorId.messageAuthor;
   }
 
   protected final int getChatAuthorPsaColor () {
-    return Theme.getColor(isOutgoingBubble() ? R.id.theme_color_bubbleOut_messageAuthorPsa : R.id.theme_color_messageAuthorPsa);
+    return Theme.getColor(isOutgoingBubble() ? ColorId.bubbleOut_messageAuthorPsa : ColorId.messageAuthorPsa);
   }
 
   private void drawFooter (MessageView view, Canvas c) {
@@ -6948,7 +7601,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     // int textY = contentY; // + Screen.dp(14f); //  + getFooterFontSizeOffset() / 2;
     TextStyleProvider provider = getSmallerTextStyleProvider();
     TextPaint paint = provider.getBoldPaint();
-    paint.setColor(Theme.getColor(R.id.theme_color_textNeutral));
+    paint.setColor(Theme.getColor(ColorId.textNeutral));
     c.drawText(trimmedFooterTitle != null ? trimmedFooterTitle : footerTitle, contentX, contentY + Screen.dp(15f), paint);
 
     footerText.draw(c, contentX, contentY + Screen.dp(22f), null, 1f, view.getFooterTextMediaReceiver(true));
@@ -7003,14 +7656,27 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public TooltipOverlayView.TooltipInfo showContentHint (View view, TooltipOverlayView.LocationProvider locationProvider, TdApi.FormattedText text) {
-    return buildContentHint(view, locationProvider).show(tdlib, text);
+    return buildContentHint(view, locationProvider, true).show(tdlib, text);
   }
 
-  public TooltipOverlayView.TooltipBuilder buildContentHint (View view, TooltipOverlayView.LocationProvider locationProvider) {
+  public TooltipOverlayView.TooltipBuilder buildContentHint (View view, TooltipOverlayView.LocationProvider locationProvider, boolean applyContentOffset) {
     return context().tooltipManager().builder(view, currentViews)
       .locate((v, outRect) -> {
-        locationProvider.getTargetBounds(v, outRect);
-        outRect.offset(getContentX(), getContentY());
+        if (locationProvider != null) {
+          locationProvider.getTargetBounds(v, outRect);
+          if (applyContentOffset) {
+            outRect.offset(getContentX(), getContentY());
+          }
+        } else {
+          if (applyContentOffset) {
+            outRect.left = getContentX();
+            outRect.top = getContentY();
+          } else {
+            outRect.left = outRect.top = 0;
+          }
+          outRect.right = outRect.left + getContentWidth();
+          outRect.bottom = outRect.top + getContentHeight();
+        }
       })
       .chatTextSize(-2f)
       .click(clickCallback())
@@ -7021,7 +7687,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   private Text.ClickCallback clickCallback;
 
   @Nullable
-  protected TdApi.WebPage findLinkPreview (String link) {
+  protected TdApi.LinkPreview findLinkPreview (String link) {
     return null;
   }
 
@@ -7041,7 +7707,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
           TdApi.Message m = getMessage();
           TdApi.User user;
           if (m.forwardInfo != null) {
-            user = m.forwardInfo.origin.getConstructor() == TdApi.MessageForwardOriginUser.CONSTRUCTOR ? ((TGSourceUser) getForwardInfo()).getUser() : null;
+            user = m.forwardInfo.origin.getConstructor() == TdApi.MessageOriginUser.CONSTRUCTOR ? ((TGSourceUser) getForwardInfo()).getUser() : null;
           } else {
             user = sender.isUser() ? tdlib.cache().user(sender.getUserId()) : null;
           }
@@ -7051,13 +7717,54 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       }
 
       @Override
-      public TdApi.WebPage findWebPage (String link) {
-        return findLinkPreview(link);
+      public TdApi.LinkPreview findLinkPreview (String link) {
+        return TGMessage.this.findLinkPreview(link);
       }
 
       @Override
       public boolean forceInstantView (String link) {
         return hasInstantView(link);
+      }
+
+      @Override
+      public boolean onUsernameClick (String username) {
+        if (isSponsoredMessage()) {
+          TdApi.Usernames usernames = sender.getUsernames();
+          if (usernames != null && Td.findUsername(usernames, username.substring(1), true)) {
+            openSponsoredMessage();
+            return true;
+          }
+        }
+        trackSponsoredMessageClicked();
+        return false;
+      }
+
+      @Override
+      public boolean onUserClick (long userId) {
+        if (isSponsoredMessage() && userId != 0 && sender.getUserId() == userId) {
+          openSponsoredMessage();
+          return true;
+        }
+        trackSponsoredMessageClicked();
+        return false;
+      }
+
+      @Override
+      public boolean onEmailClick (String email) {
+        trackSponsoredMessageClicked();
+        return false;
+      }
+
+      @Override
+      public boolean onPhoneNumberClick (String phoneNumber) {
+        trackSponsoredMessageClicked();
+        return false;
+      }
+
+      @Override
+      public boolean onUrlClick (View view, String link, boolean promptUser, @NonNull TdlibUi.UrlOpenParameters openParameters) {
+        trackSponsoredMessageClicked();
+        return false;
       }
     };
   }
@@ -7111,7 +7818,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   protected static TextPaint mTime (boolean willDraw) {
     TextPaint paint = Paints.getRegularTextPaint(12f);
     if (willDraw)
-      paint.setColor(Theme.getColor(R.id.theme_color_textLight));;
+      paint.setColor(Theme.getColor(ColorId.textLight));;
     return paint;
   }
 
@@ -7119,7 +7826,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     if (mQuickText == null) {
       mQuickText = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG | Paint.FILTER_BITMAP_FLAG);
       mQuickText.setColor(Theme.chatQuickActionTextColor());
-      ThemeManager.addThemeListener(mQuickText, R.id.theme_color_messageSwipeContent);
+      ThemeManager.addThemeListener(mQuickText, ColorId.messageSwipeContent);
       mQuickText.setTypeface(Fonts.getRobotoRegular());
       mQuickText.setTextSize(Screen.dp(16f));
     }
@@ -7218,7 +7925,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   protected static int xViewsPaddingRight, xViewsOffset, xViewsPaddingLeft;
 
-  protected static int xQuickPadding, xQuickTextPadding, xQuickTextOffset, xQuickShareWidth, xQuickReplyWidth;
+  protected static int xQuickPadding, xQuickTextPadding, xQuickTextOffset, xQuickShareWidth, xQuickReplyWidth, xQuickTranslateWidth, xQuickTranslateStopWidth;
 
   // protected static int xCaptionTouchOffset, xCaptionAddition;
 
@@ -7310,8 +8017,8 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   // Icons
 
-  private static Drawable iQuickReply, iQuickShare, iBadge;
-  private static String shareText, replyText;
+  private static Drawable iQuickTranslate, iQuickStopTranslate, iQuickReply, iQuickShare, iBadge;
+  private static String shareText, replyText, translateText, translateStopText;
   private static boolean initialized;
 
   private static void initResources () {
@@ -7319,6 +8026,8 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     iBadge = Drawables.get(res, R.drawable.baseline_keyboard_arrow_down_20);
     iQuickReply = Drawables.get(res, R.drawable.baseline_reply_24);
     iQuickShare = Drawables.get(res, R.drawable.baseline_forward_24);
+    iQuickTranslate = Drawables.get(res, R.drawable.baseline_translate_24);
+    iQuickStopTranslate = Drawables.get(res, R.drawable.baseline_translate_off_24);
     initBubbleResources();
   }
 
@@ -7326,18 +8035,17 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     if (mQuickText != null) {
       shareText = Lang.getString(R.string.SwipeShare);
       replyText = Lang.getString(R.string.SwipeReply);
+      translateText = Lang.getString(R.string.Translate);
+      translateStopText = Lang.getString(R.string.TranslateOff);
       xQuickReplyWidth = (int) U.measureText(replyText, mQuickText);
       xQuickShareWidth = (int) U.measureText(shareText, mQuickText);
+      xQuickTranslateWidth = (int) U.measureText(translateText, mQuickText);
+      xQuickTranslateStopWidth = (int) U.measureText(translateStopText, mQuickText);
     }
   }
 
   private static boolean isStaticText (int res) {
-    switch (res) {
-      case R.string.SwipeShare:
-      case R.string.SwipeReply:
-        return true;
-    }
-    return false;
+    return res == R.string.SwipeShare || res == R.string.SwipeReply;
   }
 
   public static void processLanguageEvent (@Lang.EventType int eventType, int arg1) {
@@ -7368,6 +8076,41 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
   // Other
 
+  public static TdApi.Message toFakeMessage (MessagesManager manager, long inChatId, TdApi.SponsoredMessage sponsoredMessage) {
+    Tdlib tdlib = manager.controller().tdlib();
+    TdApi.Message fakeMessage = new TdApi.Message();
+    fakeMessage.chatId = inChatId;
+    fakeMessage.id = sponsoredMessage.messageId;
+    fakeMessage.canBeSaved = true;
+    fakeMessage.content = sponsoredMessage.content;
+    fakeMessage.authorSignature = Lang.getString(sponsoredMessage.isRecommended ? R.string.RecommendedSign : R.string.SponsoredSign);
+    fakeMessage.isChannelPost = tdlib.isChannel(inChatId);
+    TdApi.InlineKeyboardButtonType type;
+    if (tdlib.isTmeUrl(sponsoredMessage.sponsor.url)) {
+      type = new TdApi.InlineKeyboardButtonTypeCallback();
+    } else {
+      type = new TdApi.InlineKeyboardButtonTypeUrl();
+    }
+    fakeMessage.replyMarkup = new TdApi.ReplyMarkupInlineKeyboard(new TdApi.InlineKeyboardButton[][]{
+      new TdApi.InlineKeyboardButton[] {
+        new TdApi.InlineKeyboardButton(sponsoredMessage.buttonText, 0, new TdApi.ButtonStyleDefault(), type)
+      }
+    }, false);
+    return fakeMessage;
+  }
+
+  public static TGMessage valueOf (MessagesManager manager, long inChatId, TdApi.SponsoredMessage sponsoredMessage, boolean isBelowAllMessages) {
+    switch (sponsoredMessage.content.getConstructor()) {
+      case TdApi.MessageText.CONSTRUCTOR:
+        return new TGMessageText(manager, sponsoredMessage, inChatId, isBelowAllMessages);
+      case TdApi.MessageAnimation.CONSTRUCTOR:
+      case TdApi.MessagePhoto.CONSTRUCTOR:
+      case TdApi.MessageVideo.CONSTRUCTOR:
+        return new TGMessageMedia(manager, sponsoredMessage, inChatId, isBelowAllMessages);
+    }
+    throw new UnsupportedOperationException(sponsoredMessage.content.toString());
+  }
+
   public static TGMessage valueOf (MessagesManager context, TdApi.Message msg, TdApi.Chat chat, @Nullable ThreadInfo messageThread, @Nullable LongSparseArray<TdApi.ChatAdministrator> chatAdmins) {
     return valueOf(context, msg, chat, messageThread, msg.senderId.getConstructor() == TdApi.MessageSenderUser.CONSTRUCTOR && chatAdmins != null ? chatAdmins.get(((TdApi.MessageSenderUser) msg.senderId).userId) : null);
   }
@@ -7388,14 +8131,52 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return valueOf(context, msg, msg.content);
   }
 
+  @Nullable
+  private static TGMessage checkPendingContent (MessagesManager context, TdApi.Message msg, TdApi.MessageContent oldContent, @Nullable TdApi.MessageContent pendingContent, boolean allowAnimatedEmoji, boolean allowNonBubbleEmoji) {
+    if (pendingContent == null || oldContent.getConstructor() != TdApi.MessageAnimatedEmoji.CONSTRUCTOR && oldContent.getConstructor() != TdApi.MessageText.CONSTRUCTOR) {
+      return null;
+    }
+
+    final @EmojiMessageContentType int emojiPendingContentType = getEmojiMessageContentType(pendingContent, allowAnimatedEmoji, allowNonBubbleEmoji);
+    if (emojiPendingContentType == EmojiMessageContentType.NOT_EMOJI) {
+      final TdApi.MessageText oldMessageText;
+      if (oldContent.getConstructor() == TdApi.MessageAnimatedEmoji.CONSTRUCTOR) {
+        TdApi.MessageAnimatedEmoji oldEmoji = nonNull((TdApi.MessageAnimatedEmoji) oldContent);
+        oldMessageText = new TdApi.MessageText(Td.textOrCaption(oldEmoji), null, null);
+      } else if (oldContent.getConstructor() == TdApi.MessageText.CONSTRUCTOR) {
+        oldMessageText = nonNull((TdApi.MessageText) oldContent);
+      } else {
+        throw new IllegalArgumentException("Wrong content type");
+      }
+
+      final TdApi.MessageText newMessageText;
+      if (pendingContent.getConstructor() == TdApi.MessageAnimatedEmoji.CONSTRUCTOR) {
+        TdApi.MessageAnimatedEmoji newEmoji = nonNull((TdApi.MessageAnimatedEmoji) pendingContent);
+        newMessageText = new TdApi.MessageText(Td.textOrCaption(newEmoji), null, null);
+      } else if (pendingContent.getConstructor() == TdApi.MessageText.CONSTRUCTOR) {
+        newMessageText = (TdApi.MessageText) pendingContent;
+      } else {
+        throw new IllegalArgumentException("Wrong content type");
+      }
+
+      return new TGMessageText(context, msg, oldMessageText, newMessageText);
+    } else {
+      return new TGMessageSticker(context, msg, oldContent, pendingContent);
+    }
+  }
+
   public static TGMessage valueOf (MessagesManager context, TdApi.Message msg, TdApi.MessageContent content) {
     final Tdlib tdlib = context.controller().tdlib();
+    int unsupportedStringRes = R.string.UnsupportedMessage;
     try {
       if (content == null) {
         return new TGMessageText(context, msg, new TdApi.FormattedText(Lang.getString(R.string.DeletedMessage), null));
       }
-      if (!StringUtils.isEmpty(msg.restrictionReason) && Settings.instance().needRestrictContent()) {
-        TGMessageText text = new TGMessageText(context, msg, new TdApi.FormattedText(msg.restrictionReason, null));
+      if (Td.hasRestriction(msg.restrictionInfo, Settings.instance().needRestrictContent())) {
+        String restrictionText = Lang.getRestrictionText(msg.restrictionInfo);
+        TGMessageText text = new TGMessageText(context, msg, new TdApi.FormattedText(restrictionText, new TdApi.TextEntity[]{
+          new TdApi.TextEntity(0, restrictionText.length(), new TdApi.TextEntityTypeItalic())
+        }));
         text.addMessageFlags(FLAG_UNSUPPORTED);
         return text;
       }
@@ -7405,33 +8186,48 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         return ChatEventUtil.newMessage(context, msg, (TdApiExt.MessageChatEvent) content);
       }
 
-      int unsupportedStringRes = R.string.UnsupportedMessage;
+      final boolean allowAnimatedEmoji = !Settings.instance().getNewSetting(Settings.SETTING_FLAG_NO_ANIMATED_EMOJI);
+      final boolean allowNonBubbleEmoji = Settings.instance().useBigEmoji();
+      final MessageEditMediaPending pendingMedia = tdlib.getPendingMessageMedia(msg.chatId, msg.id);
+      final TdApi.MessageContent pendingContent = tdlib.getPendingMessageText(msg.chatId, msg.id);
+
+      if (pendingMedia != null && pendingMedia.getFile() != null) {
+        if (pendingMedia.isPhoto()) {
+          TdApi.MessagePhoto messagePhoto = pendingMedia.getMessagePhoto();
+          return new TGMessageMedia(context, msg, messagePhoto, messagePhoto.caption).setIsMediaPending();
+        } else if (pendingMedia.isVideo()) {
+          TdApi.MessageVideo messageVideo = pendingMedia.getMessageVideo();
+          return new TGMessageMedia(context, msg, messageVideo, messageVideo.caption).setIsMediaPending();
+        } else if (pendingMedia.isAnimation()) {
+          TdApi.MessageAnimation messageAnimation = pendingMedia.getMessageAnimation();
+          return new TGMessageMedia(context, msg, messageAnimation, messageAnimation.caption).setIsMediaPending();
+        } else if (pendingMedia.isDocument()) {
+          return new TGMessageFile(context, msg, pendingMedia.getMessageDocument()).setIsMediaPending();
+        } else if (pendingMedia.isAudio()) {
+          return new TGMessageFile(context, msg, pendingMedia.getMessageAudio()).setIsMediaPending();
+        }
+      }
+
+      TGMessage message = checkPendingContent(context, msg, content, pendingContent, allowAnimatedEmoji, allowNonBubbleEmoji);
+      if (message != null) {
+        return message;
+      }
 
       switch (content.getConstructor()) {
         case TdApi.MessageAnimatedEmoji.CONSTRUCTOR: {
           TdApi.MessageAnimatedEmoji emoji = nonNull((TdApi.MessageAnimatedEmoji) content);
-          TdApi.MessageContent pendingContent = tdlib.getPendingMessageText(msg.chatId, msg.id);
-          if (pendingContent != null) {
-            if (pendingContent.getConstructor() == TdApi.MessageAnimatedEmoji.CONSTRUCTOR && !Settings.instance().getNewSetting(Settings.SETTING_FLAG_NO_ANIMATED_EMOJI)) {
-              return new TGMessageSticker(context, msg, emoji, (TdApi.MessageAnimatedEmoji) pendingContent);
-            } else {
-              return new TGMessageText(context, msg, new TdApi.MessageText(Td.textOrCaption(emoji), null), new TdApi.MessageText(Td.textOrCaption(pendingContent), null));
-            }
-          }
-          if (Settings.instance().getNewSetting(Settings.SETTING_FLAG_NO_ANIMATED_EMOJI)) {
-            return new TGMessageText(context, msg, new TdApi.MessageText(Td.textOrCaption(emoji), null), null);
+          if (getEmojiMessageContentType(content, allowAnimatedEmoji, allowNonBubbleEmoji) == EmojiMessageContentType.NOT_EMOJI) {
+            return new TGMessageText(context, msg, new TdApi.MessageText(Td.textOrCaption(emoji), null, null), null);
           } else {
             return new TGMessageSticker(context, msg, emoji, null);
           }
         }
-
         case TdApi.MessageText.CONSTRUCTOR: {
-          TdApi.MessageContent pendingContent = tdlib.getPendingMessageText(msg.chatId, msg.id);
-          if (pendingContent != null && pendingContent.getConstructor() == TdApi.MessageAnimatedEmoji.CONSTRUCTOR) {
-            TdApi.MessageAnimatedEmoji animatedEmoji = (TdApi.MessageAnimatedEmoji) pendingContent;
-            return new TGMessageSticker(context, msg, null, animatedEmoji);
+          TdApi.MessageText messageText = nonNull((TdApi.MessageText) content);
+          if (getEmojiMessageContentType(content, allowAnimatedEmoji, allowNonBubbleEmoji) != EmojiMessageContentType.NOT_EMOJI) {
+            return new TGMessageSticker(context, msg, messageText, null);
           }
-          return new TGMessageText(context, msg, nonNull((TdApi.MessageText) content), (TdApi.MessageText) pendingContent);
+          return new TGMessageText(context, msg, nonNull((TdApi.MessageText) content), null);
         }
         case TdApi.MessageCall.CONSTRUCTOR: {
           return new TGMessageCall(context, msg, nonNull(((TdApi.MessageCall) content)));
@@ -7466,8 +8262,10 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
           return new TGMessagePoll(context, msg, nonNull((TdApi.MessagePoll) content).poll);
         }
         case TdApi.MessageLocation.CONSTRUCTOR: {
-          TdApi.MessageLocation location = (TdApi.MessageLocation) content;
-          return new TGMessageLocation(context, msg, nonNull(location.location), location.livePeriod, location.expiresIn);
+          return new TGMessageLocation(context, msg, (TdApi.MessageLocation) content);
+        }
+        case TdApi.MessageLiveLocation.CONSTRUCTOR: {
+          return new TGMessageLocation(context, msg, (TdApi.MessageLiveLocation) content);
         }
         case TdApi.MessageVenue.CONSTRUCTOR: {
           return new TGMessageLocation(context, msg, ((TdApi.MessageVenue) content).venue);
@@ -7484,6 +8282,12 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         case TdApi.MessageExpiredVideo.CONSTRUCTOR: {
           return new TGMessageService(context, msg, (TdApi.MessageExpiredVideo) content);
         }
+        case TdApi.MessageExpiredVoiceNote.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageExpiredVoiceNote) content);
+        }
+        case TdApi.MessageExpiredVideoNote.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageExpiredVideoNote) content);
+        }
         case TdApi.MessagePinMessage.CONSTRUCTOR: {
           return new TGMessageService(context, msg, (TdApi.MessagePinMessage) content);
         }
@@ -7492,6 +8296,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         }
         case TdApi.MessageGiftedPremium.CONSTRUCTOR: {
           return new TGMessageService(context, msg, (TdApi.MessageGiftedPremium) content);
+        }
+        case TdApi.MessageGiftedStars.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageGiftedStars) content);
         }
         case TdApi.MessageChatSetTheme.CONSTRUCTOR: {
           return new TGMessageService(context, msg, (TdApi.MessageChatSetTheme) content);
@@ -7514,6 +8321,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         case TdApi.MessagePaymentSuccessful.CONSTRUCTOR: {
           return new TGMessageService(context, msg, (TdApi.MessagePaymentSuccessful) content);
         }
+        case TdApi.MessagePaymentRefunded.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessagePaymentRefunded) content);
+        }
         case TdApi.MessageWebAppDataSent.CONSTRUCTOR: {
           return new TGMessageService(context, msg, (TdApi.MessageWebAppDataSent) content);
         }
@@ -7534,6 +8344,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         }
         case TdApi.MessageChatJoinByLink.CONSTRUCTOR: {
           return new TGMessageService(context, msg, (TdApi.MessageChatJoinByLink) content);
+        }
+        case TdApi.MessageChatJoinFromCommunity.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageChatJoinFromCommunity) content);
         }
         case TdApi.MessageChatJoinByRequest.CONSTRUCTOR: {
           return new TGMessageService(context, msg, (TdApi.MessageChatJoinByRequest) content);
@@ -7556,8 +8369,11 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         case TdApi.MessageSupergroupChatCreate.CONSTRUCTOR: {
           return new TGMessageService(context, msg, (TdApi.MessageSupergroupChatCreate) content);
         }
-        case TdApi.MessageWebsiteConnected.CONSTRUCTOR: {
-          return new TGMessageService(context, msg, (TdApi.MessageWebsiteConnected) content);
+        case TdApi.MessageDirectMessagePriceChanged.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageDirectMessagePriceChanged) content);
+        }
+        case TdApi.MessageBotWriteAccessAllowed.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageBotWriteAccessAllowed) content);
         }
         case TdApi.MessageChatUpgradeTo.CONSTRUCTOR: {
           return new TGMessageService(context, msg, (TdApi.MessageChatUpgradeTo) content);
@@ -7577,41 +8393,130 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         case TdApi.MessageForumTopicIsHiddenToggled.CONSTRUCTOR: {
           return new TGMessageService(context, msg, (TdApi.MessageForumTopicIsHiddenToggled) content);
         }
+        case TdApi.MessageGiveawayCreated.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageGiveawayCreated) content);
+        }
+        case TdApi.MessageGiveawayCompleted.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageGiveawayCompleted) content);
+        }
+        case TdApi.MessageChatBoost.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageChatBoost) content);
+        }
+        case TdApi.MessagePollOptionAdded.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessagePollOptionAdded) content);
+        }
+        case TdApi.MessagePollOptionDeleted.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessagePollOptionDeleted) content);
+        }
+        case TdApi.MessagePaidMessagesRefunded.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessagePaidMessagesRefunded) content);
+        }
+        case TdApi.MessagePaidMessagePriceChanged.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessagePaidMessagePriceChanged) content);
+        }
+        case TdApi.MessageChecklistTasksAdded.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageChecklistTasksAdded) content);
+        }
+        case TdApi.MessageChecklistTasksDone.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageChecklistTasksDone) content);
+        }
+        case TdApi.MessageChatHasProtectedContentDisableRequested.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageChatHasProtectedContentDisableRequested) content);
+        }
+        case TdApi.MessageChatHasProtectedContentToggled.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageChatHasProtectedContentToggled) content);
+        }
+        case TdApi.MessageChatOwnerChanged.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageChatOwnerChanged) content);
+        }
+        case TdApi.MessageChatOwnerLeft.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageChatOwnerLeft) content);
+        }
+        case TdApi.MessageManagedBotCreated.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageManagedBotCreated) content);
+        }
+        case TdApi.MessageChatAddedToCommunity.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageChatAddedToCommunity) content);
+        }
+        case TdApi.MessageChatRemovedFromCommunity.CONSTRUCTOR: {
+          return new TGMessageService(context, msg, (TdApi.MessageChatRemovedFromCommunity) content);
+        }
+
+        case TdApi.MessagePremiumGiftCode.CONSTRUCTOR: {
+          return new TGMessageGift(context, msg, (TdApi.MessagePremiumGiftCode) content);
+        }
+        case TdApi.MessageGiveawayWinners.CONSTRUCTOR: {
+          return new TGMessageGiveawayWinners(context, msg, (TdApi.MessageGiveawayWinners) content);
+        }
+        case TdApi.MessageGiveaway.CONSTRUCTOR: {
+          return new TGMessageGiveaway(context, msg, (TdApi.MessageGiveaway) content);
+        }
         // unsupported
+        case TdApi.MessageRichMessage.CONSTRUCTOR:
         case TdApi.MessageInvoice.CONSTRUCTOR:
         case TdApi.MessagePassportDataSent.CONSTRUCTOR:
+        case TdApi.MessageStory.CONSTRUCTOR:
+        case TdApi.MessageChatSetBackground.CONSTRUCTOR:
+        case TdApi.MessageSuggestProfilePhoto.CONSTRUCTOR:
+        case TdApi.MessageSuggestBirthdate.CONSTRUCTOR:
+        case TdApi.MessageUsersShared.CONSTRUCTOR:
+        case TdApi.MessageChatShared.CONSTRUCTOR:
+        case TdApi.MessagePaidMedia.CONSTRUCTOR:
+        case TdApi.MessageGiveawayPrizeStars.CONSTRUCTOR:
+        case TdApi.MessageGift.CONSTRUCTOR:
+        case TdApi.MessageUpgradedGift.CONSTRUCTOR:
+        case TdApi.MessageUpgradedGiftPurchaseOffer.CONSTRUCTOR:
+        case TdApi.MessageUpgradedGiftPurchaseOfferRejected.CONSTRUCTOR:
+        case TdApi.MessageRefundedUpgradedGift.CONSTRUCTOR:
+        case TdApi.MessageStakeDice.CONSTRUCTOR:
+
+        case TdApi.MessageGroupCall.CONSTRUCTOR: // TODO TGMessageCall
+        case TdApi.MessageChecklist.CONSTRUCTOR: // TODO TGMessagePoll
+        case TdApi.MessageSuggestedPostApprovalFailed.CONSTRUCTOR:
+        case TdApi.MessageSuggestedPostApproved.CONSTRUCTOR:
+        case TdApi.MessageSuggestedPostDeclined.CONSTRUCTOR:
+        case TdApi.MessageSuggestedPostPaid.CONSTRUCTOR:
+        case TdApi.MessageSuggestedPostRefunded.CONSTRUCTOR:
+        case TdApi.MessageGiftedGrams.CONSTRUCTOR:
+        case TdApi.MessagePaymentSuccessfulBot.CONSTRUCTOR:
           break;
+
         case TdApi.MessageUnsupported.CONSTRUCTOR:
           unsupportedStringRes = R.string.UnsupportedMessageType;
           break;
         // bots only
         case TdApi.MessagePassportDataReceived.CONSTRUCTOR:
-        case TdApi.MessagePaymentSuccessfulBot.CONSTRUCTOR:
-        case TdApi.MessageWebAppDataReceived.CONSTRUCTOR:
+        case TdApi.MessageWebAppDataReceived.CONSTRUCTOR: {
           Log.e("Received bot message for a regular user:\n%s", msg);
           break;
+        }
         default: {
-          Log.i("Weird content type: %s", msg.content.getClass().getName());
-          break;
+          Td.assertMessageContent_af730a78();
+          throw Td.unsupported(msg.content);
         }
       }
-      TGMessageText text = new TGMessageText(context, msg, new TdApi.FormattedText(Lang.getString(unsupportedStringRes), null));
-      text.addMessageFlags(FLAG_UNSUPPORTED);
-      return text;
+    } catch (UnsupportedOperationException e) {
+      Log.v("Unsupported message (app-level)", e);
     } catch (Throwable t) {
       Log.e("Cannot parse message", t);
       return valueOfError(context, msg, t);
     }
+    String unsupportedText = Lang.getString(unsupportedStringRes);
+    TGMessageText text = new TGMessageText(context, msg, new TdApi.FormattedText(unsupportedText, new TdApi.TextEntity[]{
+      new TdApi.TextEntity(0, unsupportedText.length(), new TdApi.TextEntityTypeItalic())
+    }));
+    text.addMessageFlags(FLAG_UNSUPPORTED);
+    return text;
   }
 
   public static TGMessage valueOfError (MessagesManager context, TdApi.Message msg, Throwable error) {
     String text = Lang.getString(R.string.FailureMessageText);
 
-    TdApi.Object entitiesObject = Client.execute(new TdApi.GetTextEntities(text));
     TdApi.TextEntity[] entities = null;
-    if (entitiesObject != null && entitiesObject.getConstructor() == TdApi.TextEntities.CONSTRUCTOR) {
-      entities = ((TdApi.TextEntities) entitiesObject).entities;
-    }
+    try {
+      TdApi.TextEntities result = Client.execute(new TdApi.GetTextEntities(text));
+      entities = result.entities;
+    } catch (Client.ExecutionException ignored) { }
 
     TdApi.TextEntity logEntity = new TdApi.TextEntity(-1, -1, new TdApi.TextEntityTypePreCode());
 
@@ -7649,7 +8554,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     }
     b.append("\n");
 
-    Log.toStringBuilder(error, 2, b);
+    Log.toStringBuilder(error, 2, true, b);
 
     logEntity.length = b.length() - logEntity.offset;
 
@@ -7683,69 +8588,174 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   public final boolean useBubbles () {
     return manager().useBubbles();
   }
-  /*public static boolean useBubbles () {
-    return ThemeManager.getChatStyle() == ThemeManager.CHAT_STYLE_BUBBLES;
-  }*/
 
   public final boolean useReactionBubbles () {
-    return manager().useReactionBubbles();
+    return manager().useReactionBubbles() || forceReactionBubbles();
+  }
+
+  protected final boolean forceReactionBubbles () {
+    return (this instanceof TGMessageService) || (this instanceof TGMessageCall);
   }
 
   //
 
-  public final void checkAvailableReactions (Runnable after) {
-    tdlib().client().send(new TdApi.GetMessageAvailableReactions(msg.chatId, getSmallestId(), 25), result -> {
-      switch (result.getConstructor()) {
-        case TdApi.AvailableReactions.CONSTRUCTOR: {
-          TdApi.AvailableReactions availableReactions = (TdApi.AvailableReactions) result;
-          tdlib.ensureReactionsAvailable(availableReactions, reactionsUpdated -> {
-            messageAvailableReactions = availableReactions;
-            computeQuickButtons();
-            runOnUiThreadOptional(after);
-          });
-          break;
-        }
-        case TdApi.Error.CONSTRUCTOR: {
-          runOnUiThreadOptional(after);
-          break;
-        }
+  private TdApi.MessageReadDate readDate;
+
+  public final void checkReadDate (RunnableBool after, long timeoutMs) {
+    if (readDate != null || (isUnread() && !noUnread())) {
+      after.runWithBool(false);
+      return;
+    }
+    getMessageProperties(msg.id, properties -> {
+      if (properties.canGetReadDate) {
+        loadReadDate(after, timeoutMs);
+      } else {
+        runOnUiThreadOptional(() ->
+          after.runWithBool(false)
+        );
       }
     });
   }
 
-  public final void checkMessageFlags (Runnable r) {
-    TdApi.Message msg = getMessage(getSmallestId());
-    if (msg == null || isFakeMessage()) {
-      r.run();
-      return;
+  private void loadReadDate (RunnableBool after, long timeoutMs) {
+    final AtomicBoolean callbackInvoked = new AtomicBoolean();
+    if (timeoutMs > 0) {
+      runOnUiThreadOptional(() -> {
+        if (!callbackInvoked.getAndSet(true)) {
+          after.runWithBool(true);
+        }
+      }, timeoutMs);
     }
+    tdlib.send(new TdApi.GetMessageReadDate(msg.chatId, msg.id), (readDate, error) -> {
+      if (readDate != null) {
+        this.readDate = readDate;
+      }
+      runOnUiThreadOptional(() -> {
+        callbackInvoked.set(true);
+        after.runWithBool(false);
+      });
+    });
+  }
 
-    tdlib().client().send(new TdApi.GetMessageLocally(msg.chatId, msg.id), (TdApi.Object object) -> {
-      if (object.getConstructor() == TdApi.Message.CONSTRUCTOR) {
-        TdApi.Message message = (TdApi.Message) object;
-        copyFlags(message, msg);
-        tdlib().ui().post(r);
+  public TdApi.MessageReadDate getReadDate () {
+    return readDate;
+  }
+
+  public final void loadAvailableReactions (Runnable after) {
+    tdlib.send(new TdApi.GetMessageAvailableReactions(msg.chatId, getSmallestId(), 25), (availableReactions, error) -> {
+      if (error != null) {
+        runOnUiThreadOptional(after);
+      } else {
+        tdlib.ensureReactionsAvailable(availableReactions, reactionsUpdated -> {
+          messageAvailableReactions = availableReactions;
+          computeQuickButtons();
+          runOnUiThreadOptional(after);
+        });
       }
     });
+  }
+
+  @AnyThread
+  @NonNull
+  public TdApi.MessageProperties lastMessageProperties (long messageId) {
+    TdApi.MessageProperties properties = cachedProperties != null ? cachedProperties.get(messageId) : null;
+    if (properties == null) {
+      if (tdlib.inTdlibThread()) {
+        Tracer.onTdlibHandlerError(new AssertionError("Can't access message properties here"));
+        throw new IllegalStateException();
+      }
+      properties = tdlib.getMessagePropertiesSync(getChatId(), messageId);
+      cacheMessageProperties(messageId, properties);
+    }
+    return properties;
+  }
+
+  private LongSparseArray<TdApi.MessageProperties> cachedProperties;
+
+  @TdlibThread
+  private void cacheMessageProperties (long messageId, TdApi.MessageProperties properties) {
+    if (cachedProperties == null) {
+      cachedProperties = new LongSparseArray<>();
+    }
+    cachedProperties.put(messageId, properties);
+  }
+
+  public void loadAllMessageProperties (@Nullable Runnable after) {
+    long[] messageIds = getIds();
+    AtomicInteger remaining = new AtomicInteger(messageIds.length);
+    for (long messageId : messageIds) {
+      getMessageProperties(messageId, properties -> {
+        if (remaining.decrementAndGet() <= 0 && after != null) {
+          LongSet set = new LongSet(getIds());
+          set.removeAll(messageIds);
+          if (set.isEmpty()) {
+            runOnUiThreadOptional(after);
+          } else {
+            // Covering the edge-case when album messages were added during the MessageOptions fetch
+            loadAllMessageProperties(after);
+          }
+        }
+      });
+    }
+  }
+
+  @AnyThread
+  @NonNull
+  public TdApi.MessageProperties lastMessageProperties () {
+    return lastMessageProperties(msg.id);
+  }
+
+  public final void getMessageProperties (long messageId, @Nullable RunnableData<TdApi.MessageProperties> callback) {
+    TdApi.Message msg = getMessage(messageId);
+    if (!isRealMessage()) {
+      if (callback != null) {
+        callback.runWithData(new TdApi.MessageProperties());
+      }
+      return;
+    }
+    tdlib().send(new TdApi.GetMessageProperties(msg.chatId, msg.id), (properties, error) -> {
+      if (properties != null) {
+        cacheMessageProperties(msg.id, properties);
+        runOnUiThread(() -> {
+          if (callback != null) {
+            callback.runWithData(properties);
+          }
+        });
+      }
+    });
+  }
+
+  public final boolean isCustomEmojiReactionsAvailable () {
+    if (messageAvailableReactions == null)
+      return false;
+
+    return messageAvailableReactions.allowCustomEmoji;
   }
 
   public final TdApi.AvailableReaction[] getMessageAvailableReactions () {
-    if (messageAvailableReactions == null)
-      return null;
     boolean hasPremium = tdlib.hasPremium();
+    TdApi.AvailableReactions availableReactions = messageAvailableReactions;
+    if (availableReactions == null)
+      return null;
     Set<String> addedReactions = new HashSet<>();
     List<TdApi.AvailableReaction> reactions = new ArrayList<>();
-    for (TdApi.AvailableReaction reaction : messageAvailableReactions.popularReactions) {
+    for (TdApi.AvailableReaction reaction : availableReactions.popularReactions) {
+      if (TdExt.isUnsupported(reaction.type))
+        continue;
       if ((!reaction.needsPremium || hasPremium) && addedReactions.add(TD.makeReactionKey(reaction.type))) {
         reactions.add(reaction);
       }
     }
-    for (TdApi.AvailableReaction reaction : messageAvailableReactions.topReactions) {
+    for (TdApi.AvailableReaction reaction : availableReactions.topReactions) {
+      if (TdExt.isUnsupported(reaction.type))
+        continue;
       if ((!reaction.needsPremium || hasPremium) && addedReactions.add(TD.makeReactionKey(reaction.type))) {
         reactions.add(reaction);
       }
     }
-    for (TdApi.AvailableReaction reaction : messageAvailableReactions.recentReactions) {
+    for (TdApi.AvailableReaction reaction : availableReactions.recentReactions) {
+      if (TdExt.isUnsupported(reaction.type))
+        continue;
       if ((!reaction.needsPremium || hasPremium) && addedReactions.add(TD.makeReactionKey(reaction.type))) {
         reactions.add(reaction);
       }
@@ -7753,33 +8763,79 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     if (reactions.isEmpty()) {
       return null;
     }
-    String[] activeEmojiReactions = tdlib.getActiveEmojiReactions();
-    if (activeEmojiReactions != null && activeEmojiReactions.length > 0) {
-      Collections.sort(reactions, (a, b) -> {
-        boolean aIsEmoji = a.type.getConstructor() == TdApi.ReactionTypeEmoji.CONSTRUCTOR;
-        boolean bIsEmoji = b.type.getConstructor() == TdApi.ReactionTypeEmoji.CONSTRUCTOR;
-        if (aIsEmoji != bIsEmoji) {
-          return aIsEmoji ? -1 : 1;
+    List<TdApi.AvailableReaction> sortedReactions = new ArrayList<>(reactions);
+    Set<String> activeEmojiReactions = tdlib.getActiveEmojiReactions();
+    if (activeEmojiReactions != null && !activeEmojiReactions.isEmpty()) {
+      Collections.sort(sortedReactions, (a, b) -> {
+        int aPriority = getPriority(a.type);
+        int bPriority = getPriority(b.type);
+        if (aPriority != bPriority) {
+          return aPriority < bPriority ? -1 : 1;
         }
-        if (!aIsEmoji) {
-          return 0;
-        }
-        String aEmoji = ((TdApi.ReactionTypeEmoji) a.type).emoji;
-        String bEmoji = ((TdApi.ReactionTypeEmoji) b.type).emoji;
-        int aIndex = ArrayUtils.indexOf(activeEmojiReactions, aEmoji);
-        int bIndex = ArrayUtils.indexOf(activeEmojiReactions, bEmoji);
-        boolean aAvailable = aIndex != -1;
-        boolean bAvailable = bIndex != -1;
-        if (aAvailable != bAvailable) {
-          return aAvailable ? -1 : 1;
-        }
-        if (aIndex != bIndex) {
-          return aIndex < bIndex ? -1 : 1;
+        if (a.type.getConstructor() == TdApi.ReactionTypeEmoji.CONSTRUCTOR) {
+          String aEmoji = ((TdApi.ReactionTypeEmoji) a.type).emoji;
+          String bEmoji = ((TdApi.ReactionTypeEmoji) b.type).emoji;
+          int aIndex = ArrayUtils.indexOf(activeEmojiReactions, aEmoji);
+          int bIndex = ArrayUtils.indexOf(activeEmojiReactions, bEmoji);
+          boolean aAvailable = aIndex != -1;
+          boolean bAvailable = bIndex != -1;
+          if (aAvailable != bAvailable) {
+            return aAvailable ? -1 : 1;
+          }
+          if (aIndex != bIndex) {
+            return aIndex < bIndex ? -1 : 1;
+          }
         }
         return 0;
       });
     }
-    return reactions.toArray(new TdApi.AvailableReaction[0]);
+    return prioritizeElements(sortedReactions.toArray(new TdApi.AvailableReaction[0]), messageReactions.getChosen());
+  }
+
+  private static int getPriority (TdApi.ReactionType type) {
+    switch (type.getConstructor()) {
+      case TdApi.ReactionTypePaid.CONSTRUCTOR:
+        return 0;
+      case TdApi.ReactionTypeEmoji.CONSTRUCTOR:
+        return 1;
+      case TdApi.ReactionTypeCustomEmoji.CONSTRUCTOR:
+        return 2;
+      default:
+        Td.assertReactionType_43844388();
+        throw Td.unsupported(type);
+    }
+  }
+
+  private static TdApi.AvailableReaction[] prioritizeElements(TdApi.AvailableReaction[] inputArray, Set<String> set) {
+    if (inputArray == null) {
+      return null;
+    }
+
+    List<TdApi.AvailableReaction> resultList = new ArrayList<>();
+
+    for (TdApi.AvailableReaction element : inputArray) {
+      if (set.contains(TD.makeReactionKey(element.type))) {
+        resultList.add(element);
+      }
+    }
+
+    for (TdApi.AvailableReaction element : inputArray) {
+      if (!set.contains(TD.makeReactionKey(element.type))) {
+        resultList.add(element);
+      }
+    }
+
+    TdApi.AvailableReaction[] resultArray = new TdApi.AvailableReaction[resultList.size()];
+    resultList.toArray(resultArray);
+
+    return resultArray;
+  }
+
+  public final boolean needShowReactionPopupPicker () {
+    return messageAvailableReactions != null && (
+      messageAvailableReactions.allowCustomEmoji ||
+        (messageAvailableReactions.popularReactions.length + messageAvailableReactions.recentReactions.length + messageAvailableReactions.topReactions.length > 25)
+    );
   }
 
   // Utils
@@ -7789,15 +8845,23 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   }
 
   public void runOnUiThread (Runnable act, long delayMillis) {
-    tdlib.ui().postDelayed(act, delayMillis);
+    if (delayMillis > 0) {
+      tdlib.ui().postDelayed(act, delayMillis);
+    } else {
+      tdlib.ui().post(act);
+    }
   }
 
   public void runOnUiThreadOptional (Runnable act) {
+    runOnUiThreadOptional(act, 0);
+  }
+
+  public void runOnUiThreadOptional (Runnable act, long delayMs) {
     runOnUiThread(() -> {
       if (!isDestroyed()) {
         act.run();
       }
-    });
+    }, delayMs);
   }
 
   public void executeOnUiThreadOptional (Runnable act) {
@@ -7847,7 +8911,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       return;
     }
 
-    final boolean canReply = Settings.instance().needChatQuickReply() && messagesController().canWriteMessages() && !messagesController().needTabs() && canReplyTo();
+    final boolean canReply = Settings.instance().needChatQuickReply() && messagesController().canWriteMessagesOrWaitingForReply() && !messagesController().needTabs() && canReplyTo();
     final boolean canShare = Settings.instance().needChatQuickShare() && !messagesController().isSecretChat() && canBeForwarded();
 
     leftActions.clear();
@@ -7857,9 +8921,26 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     SwipeQuickAction replyButton = null;
     if (canReply) {
       replyButton = new SwipeQuickAction(replyText, iQuickReply, () -> {
-        messagesController().showReply(getNewestMessage(), true, true);
+        TdApi.Message message = getNewestMessage();
+        getMessageProperties(message.id, properties -> {
+          runOnUiThreadOptional(() -> {
+            messagesController().showReply(new MessageWithProperties(message, properties), null, 0, "", true, true);
+          });
+        });
       }, true, false);
       rightActions.add(replyButton);
+    }
+
+    if (Settings.instance().needUseQuickTranslation()) {
+      if (isTranslated()) {
+        rightActions.add(new SwipeQuickAction(translateStopText, iQuickStopTranslate, () -> {
+          stopTranslated();
+        }, true, false));
+      } else if (isTranslatable() && translationStyleMode() != Settings.TRANSLATE_MODE_NONE) {
+        rightActions.add(new SwipeQuickAction(translateText, iQuickTranslate, () -> {
+          messagesController().startTranslateMessages(this);
+        }, true, false));
+      }
     }
 
     final String[] quickReactions = Settings.instance().getQuickReactions(tdlib);
@@ -7875,7 +8956,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         final boolean isOdd = a % 2 == 1;
         final SwipeQuickAction quickReaction = new SwipeQuickAction(reactionObj.getTitle(), reactionDrawable, () -> {
           boolean hasReaction = messageReactions.hasReaction(reactionType);
-          if (hasReaction || !canGetAddedReactions() || messagesController().callNonAnonymousProtection(getId() + reactionObj.hashCode(), null)) {
+          if (Config.DISABLE_ANONYMOUS_NON_OWNER_REACTIONS && !hasReaction && tdlib.isAnonymousAdminNonCreator(msg.chatId)) {
+            showContentHint(findCurrentView(), null, R.string.error_ANONYMOUS_REACTIONS_DISABLED);
+          } else if (!Config.PROTECT_ANONYMOUS_REACTIONS || hasReaction || !canGetAddedReactions() || messagesController().callNonAnonymousProtection(getId() + reactionObj.hashCode(), null)) {
             if (messageReactions.toggleReaction(reactionType, false, false, handler(findCurrentView(), null, () -> {}))) {
               scheduleSetReactionAnimation(new NextReactionAnimation(reactionObj, NextReactionAnimation.TYPE_QUICK));
             }
@@ -7895,7 +8978,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
 
     if (canShare) {
       leftActions.add(new SwipeQuickAction(shareText, iQuickShare, () -> {
-        messagesController().shareMessages(getChatId(), getAllMessages());
+        messagesController().shareMessages(getAllMessages(), false);
       }, true, false));
     }
   }
@@ -7988,7 +9071,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       .noBackground()
       .allBold(false)
       .callback(this)
-      .colorSet(() -> messageReactions.hasChosen() ? Theme.getColor(R.id.theme_color_badge) : Theme.getColor(R.id.theme_color_iconLight))
+      .colorSet(() -> messageReactions.hasChosen() ? Theme.getColor(ColorId.badge) : Theme.getColor(ColorId.iconLight))
       .drawable(R.drawable.baseline_favorite_14, 14f, 0f, Gravity.CENTER_HORIZONTAL)
       .build();
 
@@ -8008,11 +9091,11 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       .allBold(false)
       .callback(this)
       .textSize(useBubbles() ? 11f : 12f)
-      .colorSet(() -> messageReactions.hasChosen() ? Theme.getColor(R.id.theme_color_badge) : this.getTimePartTextColor())
+      .colorSet(() -> messageReactions.hasChosen() ? Theme.getColor(ColorId.badge) : this.getTimePartTextColor())
       .build();
 
     int count = messageReactions.getTotalCount();
-    if (tdlib.isUserChat(msg.chatId) && messageReactions.getReactions() != null && (count == 1 || messageReactions.getReactions().length > 1)) {
+    if (tdlib.isUserChat(msg.chatId) && messageReactions.getReactions() != null && (count == 1 || Td.reactionTypesCount(messageReactions.getReactions()) > 1)) {
       count = 0;
     }
     reactionsCounter.setCount(count, !messageReactions.hasChosen(), false);
@@ -8137,6 +9220,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         new ReactionsOverlayView.ReactionInfo(context().reactionsOverlayManager())
           .setSticker(nextSetReactionAnimation.reaction.staticCenterAnimationSicker(), false)
           .setAnimationEndListener(this::onQuickReactionAnimationFinish)
+          .setRepaintingColorIds(ColorId.text, ColorId.text)
           .setAnimatedPosition(
             new Point(startX, startY),
             new Point(finishX, finishY),
@@ -8154,6 +9238,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         new ReactionsOverlayView.ReactionInfo(context().reactionsOverlayManager())
           .setSticker(nextSetReactionAnimation.reaction.staticCenterAnimationSicker(), false)
           .setAnimationEndListener(this::onQuickReactionAnimationFinish)
+          .setRepaintingColorIds(ColorId.text, ColorId.text)
           .setAnimatedPosition(
             new Point(startX, startY),
             new Point(finishX, finishY),
@@ -8205,6 +9290,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
         }
 
         TGStickerObj activateAnimation = nextSetReactionAnimation.reaction.activateAnimationSicker();
+        final GifFile activateFullAnimation = activateAnimation.getFullAnimation();
         if (activateAnimation.getFullAnimation() != null) {
           if (!activateAnimation.isCustomReaction()) {
             activateAnimation.getFullAnimation().setPlayOnce(true);
@@ -8212,6 +9298,15 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
           }
           activateAnimation.getFullAnimation().addLoopListener(() -> {
             if (nextSetReactionAnimation != null) {
+              nextSetReactionAnimation.fullscreenEmojiFinished = true;
+              if (nextSetReactionAnimation.fullscreenEffectFinished) {
+                finishAnimation.cancel();
+                tdlib().ui().postDelayed(finishRunnable, 180l);
+              }
+            }
+          });
+          activateFullAnimation.setOnTotalFrameCountLoadListener(() -> {
+            if (nextSetReactionAnimation != null && !activateFullAnimation.hasFrame(1)) {
               nextSetReactionAnimation.fullscreenEmojiFinished = true;
               if (nextSetReactionAnimation.fullscreenEffectFinished) {
                 finishAnimation.cancel();
@@ -8265,7 +9360,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       context().reactionsOverlayManager().addOverlay(
         new ReactionsOverlayView.ReactionInfo(context().reactionsOverlayManager())
           .setSticker(overlaySticker, true)
+          .setRepaintingColorIds(ColorId.text, ColorId.text)
           .setUseDefaultSprayAnimation(tgReaction.isCustom())
+          .setEmojiStatusEffect(tgReaction.isCustom() ? tgReaction.newCenterAnimationSicker() : null)
           .setPosition(new Point(bubbleX, bubbleY), Screen.dp(90))
           .setAnimatedPositionOffsetProvider(new QuickReactionAnimatedPositionOffsetProvider())
       );
@@ -8358,7 +9455,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     }
   }
 
-  private static class QuickReactionAnimatedPositionProvider implements ReactionsOverlayView.AnimatedPositionProvider {
+  public static class QuickReactionAnimatedPositionProvider implements ReactionsOverlayView.AnimatedPositionProvider {
     private final int jumpHeight;
 
     public QuickReactionAnimatedPositionProvider () {
@@ -8445,13 +9542,20 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     };
   }
 
+  private TooltipOverlayView.LocationProvider getReplyLocationProvider () {
+    return (targetView, outRect) -> {
+      if (replyData == null) {
+        return;
+      }
+      outRect.left = replyData.getLastX();
+      outRect.top = replyData.getLastY();
+      outRect.right = outRect.left + replyData.width(!useBubble());
+      outRect.bottom = outRect.top + ReplyComponent.height();
+    };
+  }
+
   private boolean openMessageFromChannel () {
-    TooltipOverlayView.TooltipBuilder tooltipBuilder = context().tooltipManager().builder(findCurrentView()).locate((targetView, outRect) -> {
-      outRect.left = (int) (isChannelHeaderCounterX - Screen.dp(7));
-      outRect.top = (int) (isChannelHeaderCounterY - Screen.dp(7));
-      outRect.right = (int) (isChannelHeaderCounterX + Screen.dp(7));
-      outRect.bottom = (int) (isChannelHeaderCounterY + Screen.dp(7));
-    });
+    TooltipOverlayView.TooltipBuilder tooltipBuilder = context().tooltipManager().builder(findCurrentView()).locate((targetView, outRect) -> isChannelHeaderCounterLastDrawRect.round(outRect));
 
     tdlib().ui().openChat(this, sender.getChatId(), new TdlibUi.ChatOpenParameters()
       .urlOpenParameters(new TdlibUi.UrlOpenParameters().tooltip(tooltipBuilder)).keepStack()
@@ -8466,24 +9570,21 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   private TooltipOverlayView.TooltipInfo languageSelectorTooltip;
 
   private void openLanguageSelectorInlineMode () {
-    TooltipOverlayView.TooltipBuilder tooltipBuilder = context().tooltipManager().builder(findCurrentView()).locate((targetView, outRect) -> {
-      outRect.left = (int) (isTranslatedCounterX - Screen.dp(7));
-      outRect.top = (int) (isTranslatedCounterY - Screen.dp(7));
-      outRect.right = (int) (isTranslatedCounterX + Screen.dp(7));
-      outRect.bottom = (int) (isTranslatedCounterY + Screen.dp(7));
-    });
+    TooltipOverlayView.TooltipBuilder tooltipBuilder = context().tooltipManager().builder(findCurrentView())
+      .locate((targetView, outRect) -> isTranslatedCounterLastDrawRect.round(outRect));
 
     languageSelectorTooltip = tooltipBuilder.show(this, this::showLanguageSelectorInlineMode);//.hideDelayed(3500, TimeUnit.MILLISECONDS);
   }
 
   private void showTranslateErrorMessageBubbleMode (String message) {
-    TooltipOverlayView.TooltipBuilder tooltipBuilder = context().tooltipManager().builder(findCurrentView()).locate((targetView, outRect) -> {
-      outRect.left = (int) (isTranslatedCounterX - Screen.dp(7));
-      outRect.top = (int) (isTranslatedCounterY - Screen.dp(7));
-      outRect.right = (int) (isTranslatedCounterX + Screen.dp(7));
-      outRect.bottom = (int) (isTranslatedCounterY + Screen.dp(7));
-    });
+    TooltipOverlayView.TooltipBuilder tooltipBuilder = context().tooltipManager().builder(findCurrentView())
+      .locate((targetView, outRect) -> isTranslatedCounterLastDrawRect.round(outRect));
     languageSelectorTooltip = tooltipBuilder.show(tdlib, message).hideDelayed(3500, TimeUnit.MILLISECONDS);
+  }
+
+  private TooltipOverlayView.TooltipInfo showMessageTooltip (TooltipOverlayView.LocationProvider locate, String message, long msDuration) {
+    TooltipOverlayView.TooltipBuilder tooltipBuilder = context().tooltipManager().builder(findCurrentView()).locate(locate);
+    return tooltipBuilder.show(tdlib, message).hideDelayed(msDuration, TimeUnit.MILLISECONDS);
   }
 
   private void showLanguageSelectorInlineMode (View v) {
@@ -8508,7 +9609,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
       }
     }
 
-    TranslationControllerV2.LanguageSelectorPopup languagePopupLayout = new TranslationControllerV2.LanguageSelectorPopup(v.getContext(), this::onLanguageChanged, mTranslationsManager.getCurrentTranslatedLanguage(), getOriginalMessageLanguage());
+    TranslationControllerV2.LanguageSelectorPopup languagePopupLayout = new TranslationControllerV2.LanguageSelectorPopup(v.getContext(), null, this::onLanguageChanged, mTranslationsManager.getCurrentTranslatedLanguage(), getOriginalMessageLanguage());
     // languagePopupLayout.languageRecyclerWrap.setAnchorMode(MenuMoreWrap.ANCHOR_MODE_RIGHT);
     languagePopupLayout.languageRecyclerWrap.setTranslationX(x);
     languagePopupLayout.languageRecyclerWrap.setTranslationY(y);
@@ -8567,6 +9668,15 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     return mTranslationsManager.getCurrentTranslatedLanguage() != null || translatedCounterForceShow;
   }
 
+  public final boolean canCopyText () {
+    if (this instanceof TGMessageMedia) {
+      long messageId = ((TGMessageMedia) this).getCaptionMessageId();
+      TdApi.Message message = messageId != 0 ? getMessage(messageId) : null;
+      return TD.canCopyText(message);
+    }
+    return TD.canCopyText(getNewestMessage());
+  }
+
   public boolean isTranslatable () {
     return !Td.isEmpty(textToTranslate) && (flags & FLAG_UNSUPPORTED) == 0 && !Settings.instance().isNotTranslatableLanguage(textToTranslateOriginalLanguage);
   }
@@ -8579,7 +9689,7 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   public void checkTranslatableText (Runnable after) {
     final TdApi.FormattedText textToTranslate = getTextToTranslateImpl();
     this.textToTranslate = textToTranslate;
-    textToTranslateOriginalLanguage = textToTranslate != null ? mTranslationsManager.getCachedTextLanguage(textToTranslate.text): null;
+    textToTranslateOriginalLanguage = textToTranslate != null ? mTranslationsManager.getCachedTextLanguage(textToTranslate.text) : null;
     if (textToTranslate != null && textToTranslateOriginalLanguage == null && translationStyleMode() != Settings.TRANSLATE_MODE_NONE) {
       LanguageDetector.detectLanguage(context(), textToTranslate.text, lang -> {
         mTranslationsManager.saveCachedTextLanguage(textToTranslate.text, textToTranslateOriginalLanguage = lang);
@@ -8593,15 +9703,13 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     }
   }
 
-
-
   protected @Nullable TdApi.FormattedText getTextToTranslateImpl () {
     return null; // override
   }
 
   private void setTranslatedStatus (int status, boolean animated) {
     boolean show = status != TranslationCounterDrawable.TRANSLATE_STATUS_DEFAULT || translatedCounterForceShow;
-    isTranslatedCounterDrawable.setInvalidateCallback(show? this::invalidate: null);
+    isTranslatedCounterDrawable.setInvalidateCallback(show ? this::invalidate : null);
     isTranslatedCounterDrawable.setStatus(status, animated);
     if (show) {
       isTranslatedCounter.show(animated);
@@ -8614,16 +9722,271 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
   private void checkSelectLanguageWarning (boolean force) {
     String current = mTranslationsManager.getCurrentTranslatedLanguage();
     if (current == null || StringUtils.equalsOrBothEmpty(current, getOriginalMessageLanguage()) || force) {
-      context().tooltipManager().builder(findCurrentView()).locate((targetView, outRect) -> {
-        outRect.left = (int) (isTranslatedCounterX - Screen.dp(7));
-        outRect.top = (int) (isTranslatedCounterY - Screen.dp(7));
-        outRect.right = (int) (isTranslatedCounterX + Screen.dp(7));
-        outRect.bottom = (int) (isTranslatedCounterY + Screen.dp(7));
-      }).show(tdlib, Lang.getString(R.string.TapToSelectLanguage)).hideDelayed(3500, TimeUnit.MILLISECONDS);;
+      context().tooltipManager().builder(findCurrentView())
+        .locate((targetView, outRect) -> isTranslatedCounterLastDrawRect.round(outRect))
+        .show(tdlib, Lang.getString(R.string.TapToSelectLanguage)).hideDelayed(3500, TimeUnit.MILLISECONDS);;
     }
   }
 
   protected void setTranslationResult (@Nullable TdApi.FormattedText text) {
     manager.updateMessageTranslation(getChatId(), getSmallestId(), text);
   };
+
+  /*  */
+
+  public long getFirstEmojiId () {
+    TdApi.FormattedText text = getTextToTranslate();
+    if (text == null || text.text == null || text.entities == null || text.entities.length == 0) return -1;
+
+    for (TdApi.TextEntity entity : text.entities) {
+      if (Td.isCustomEmoji(entity.type)) {
+        return ((TdApi.TextEntityTypeCustomEmoji) entity.type).customEmojiId;
+      }
+    }
+
+    return -1;
+  }
+
+  public long[] getUniqueEmojiPackIdList () {
+    long[] emojiIds = TD.getUniqueEmojiIdList(getTextToTranslate());
+
+    LongSet emojiSets = new LongSet();
+    for (long emojiId : emojiIds) {
+      TdlibEmojiManager.Entry entry = tdlib().emoji().find(emojiId);
+      if (entry == null || entry.value == null) continue;
+      emojiSets.add(entry.value.setId);
+    }
+
+    return emojiSets.toArray();
+  }
+  
+  /* Reaction Avatars */
+
+  // todo: update when supergroup updated
+
+  public void updateReactionAvatars (boolean animated) {
+    messageReactions.updateCounterAnimators(animated);
+    if (BitwiseUtils.hasFlag(flags, FLAG_LAYOUT_BUILT)) {
+      buildReactions(animated);
+    }
+  }
+
+  public boolean matchesReactionSenderAvatarFilter (TdApi.FormattedText messageText, TdApi.MessageReaction reaction, TdApi.MessageSender sender) {
+    final long currentChatId = getChatId();
+
+    if (Td.equalsTo(reaction.usedSenderId, sender)) {
+      return true;
+    }
+    if (tdlib.isSelfSender(sender)
+      || getChatId() == Td.getSenderId(sender)
+      || Td.equalsTo(sender, getInReplyToSender())) {
+      return true;
+    }
+
+    long userId = Td.getSenderUserId(sender);
+    final TdApi.User user = userId != 0 ? tdlib.cache().user(userId) : null;
+    if (user != null && (user.isContact || user.isCloseFriend || TD.containsMention(messageText, user))) {
+      return true;
+    }
+
+    final TdApi.Supergroup supergroup = tdlib.chatToSupergroup(currentChatId);
+    if (tdlib.chatMemberCount(currentChatId) < 50 && (supergroup == null || (!supergroup.hasLocation && !supergroup.hasLinkedChat && Td.isEmpty(supergroup.usernames)))) {
+      return true;
+    }
+
+    return false;
+  }
+
+  // Sponsored-related tools
+
+  public final boolean isSponsoredMessage () {
+    return sponsoredMessage != null;
+  }
+
+  public void trackSponsoredMessageClicked () {
+    if (isSponsoredMessage()) {
+      tdlib.client().send(new TdApi.ClickChatSponsoredMessage(msg.chatId, sponsoredMessage.messageId, false, false), tdlib.silentHandler());
+    }
+  }
+
+  public void openSponsoredMessage () {
+    openSponsoredMessage(null);
+  }
+
+  public void openSponsoredMessage (@Nullable Runnable onFinishProgress) {
+    if (!isSponsoredMessage()) {
+      return;
+    }
+    final RunnableBool after = ok -> {
+      if (onFinishProgress != null) {
+        onFinishProgress.run();
+      }
+      if (ok) {
+        trackSponsoredMessageClicked();
+      }
+    };
+    TdlibUi.UrlOpenParameters openParameters = openParameters()
+      .requireOpenPrompt();
+    if (onFinishProgress != null) {
+      openParameters.openPromptCancellationCallback = onFinishProgress;
+    }
+    tdlib.ui().openUrl(this, sponsoredMessage.sponsor.url, openParameters, after);
+  }
+
+  public TdApi.SponsoredMessage getSponsoredMessage () {
+    return sponsoredMessage;
+  }
+
+  public String getSponsoredMessageUrl () {
+    if (!isSponsoredMessage() || !Config.ALLOW_SPONSORED_MESSAGE_LINK_COPY) {
+      return null;
+    }
+    return sponsoredMessage.sponsor.url;
+  }
+
+  /* * */
+
+  @Nullable
+  public final TdApi.FormattedText getMessageText () {
+    synchronized (this) {
+      if (combinedMessages != null && !combinedMessages.isEmpty()) {
+        final TdApi.FormattedText sep = new TdApi.FormattedText(" ", new TdApi.TextEntity[0]);
+        TdApi.FormattedText result = new TdApi.FormattedText("", new TdApi.TextEntity[0]);
+        for (TdApi.Message msg : combinedMessages) {
+          final TdApi.FormattedText textPart = msg.content != null ? Td.textOrCaption(msg.content) : null;
+          if (!Td.isEmpty(textPart)) {
+            if (!Td.isEmpty(result)) {
+              result = Td.concat(result, sep);
+            }
+            result = Td.concat(result, textPart);
+          }
+        }
+        return !Td.isEmpty(result) ? result : null;
+      }
+    }
+    return msg.content != null ? Td.textOrCaption(msg.content) : null;
+  }
+
+
+  /* * */
+
+  public static @EmojiMessageContentType int getEmojiMessageContentType (TdApi.MessageContent content) {
+    final boolean allowAnimatedEmoji = !Settings.instance().getNewSetting(Settings.SETTING_FLAG_NO_ANIMATED_EMOJI);
+    final boolean allowNonBubbleEmoji = Settings.instance().useBigEmoji();
+    return getEmojiMessageContentType(content, allowAnimatedEmoji, allowNonBubbleEmoji);
+  }
+
+  public static @EmojiMessageContentType int getEmojiMessageContentType (TdApi.MessageContent content, boolean allowAnimatedEmoji, boolean allowNonBubbleEmoji) {
+    if (content == null) {
+      return EmojiMessageContentType.NOT_EMOJI;
+    }
+
+    if (content.getConstructor() == TdApi.MessageAnimatedEmoji.CONSTRUCTOR) {
+      if (allowAnimatedEmoji && TD.isStickerFromAnimatedEmojiPack(content)) {
+        return EmojiMessageContentType.ANIMATED_EMOJI;
+      } else if (allowNonBubbleEmoji) {
+        return EmojiMessageContentType.NON_BUBBLE_EMOJI;
+      }
+    } else if (content.getConstructor() == TdApi.MessageText.CONSTRUCTOR) {
+      if (allowNonBubbleEmoji && NonBubbleEmojiLayout.isValidEmojiText(((TdApi.MessageText) content).text)) {
+        return EmojiMessageContentType.NON_BUBBLE_EMOJI;
+      }
+    }
+    return EmojiMessageContentType.NOT_EMOJI;
+  }
+
+  // Topics
+
+  private List<RunnableBool> postponedTopicInfoCallbacks;
+
+  protected final void withTopicInfo (RunnableBool after) {
+    if (forumTopicKey == null) {
+      return;
+    }
+    boolean needRegister;
+    boolean hasTopicInfo;
+    synchronized (forumTopicKey) {
+      needRegister = !topicObserverRegistered;
+      if (needRegister) {
+        topicObserverRegistered = true;
+      }
+      hasTopicInfo = topicInfo != null;
+    }
+    if (hasTopicInfo) {
+      after.runWithBool(true);
+    }
+    if (needRegister) {
+      TdlibForumTopicManager.Entry entry =
+        tdlib.topics().findAndObserve(forumTopicKey, this);
+
+      if (entry != null) {
+        after.runWithBool(true);
+      } else {
+        synchronized (forumTopicKey) {
+          if (topicInfo != null) {
+            hasTopicInfo = true;
+          } else {
+            if (postponedTopicInfoCallbacks == null) {
+              postponedTopicInfoCallbacks = new ArrayList<>();
+            }
+            postponedTopicInfoCallbacks.add(after);
+          }
+        }
+        if (hasTopicInfo) {
+          after.runWithBool(true);
+        }
+      }
+    }
+  }
+
+  @NonNull
+  protected final TdApi.ForumTopicInfo topicInfo () {
+    if (forumTopicKey == null)
+      throw new IllegalStateException();
+    synchronized (forumTopicKey) {
+      if (topicInfo == null) {
+        throw new NullPointerException();
+      }
+      return topicInfo;
+    }
+  }
+
+  private void setTopicInfo (TdApi.ForumTopicInfo topicInfo) {
+    List<RunnableBool> postponedCallbacks;
+    synchronized (forumTopicKey) {
+      if (this.topicInfo == null) {
+        postponedCallbacks = this.postponedTopicInfoCallbacks;
+        this.postponedTopicInfoCallbacks = null;
+      } else {
+        postponedCallbacks = null;
+      }
+      this.topicInfo = topicInfo;
+    }
+    if (postponedCallbacks != null) {
+      for (RunnableBool postponedCallback : postponedCallbacks) {
+        postponedCallback.runWithBool(false);
+      }
+    }
+    onTopicInfoUpdated();
+  }
+
+  @AnyThread
+  protected void onTopicInfoUpdated () {
+    // override
+  }
+
+  @Override
+  public final void onTopicFound (@NonNull TdlibForumTopicManager.Key key, @NonNull TdApi.ForumTopic topic, boolean inPlace) {
+    setTopicInfo(topic.info);
+  }
+
+  @Override
+  public final void onTopicInfoUpdated (@NonNull TdlibForumTopicManager.Key key, @NonNull TdApi.ForumTopicInfo topicInfo) {
+    setTopicInfo(topicInfo);
+  }
+
+  @Override
+  public final void onTopicUpdated (@NonNull TdlibForumTopicManager.Key key, @NonNull TdApi.UpdateForumTopic update) {
+    // TODO?
+  }
 }

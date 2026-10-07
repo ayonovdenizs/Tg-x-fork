@@ -21,7 +21,7 @@ import androidx.collection.SparseArrayCompat;
 
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.core.Background;
-import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 
 import java.io.File;
@@ -76,23 +76,22 @@ public class PaintState {
     }
   }
 
+  public static void forgetPaintState (int paintId) {
+    synchronized (PaintState.class) {
+      if (pendingPaints != null) {
+        pendingPaints.remove(paintId);
+      }
+    }
+  }
+
   public static PaintState obtainPaintState (int paintId) {
     synchronized (PaintState.class) {
-      if (pendingPaints == null) {
-        return null;
-      }
-      int i = pendingPaints.indexOfKey(paintId);
-      if (i >= 0) {
-        PaintState painting = pendingPaints.valueAt(i);
-        pendingPaints.removeAt(i);
-        return painting;
-      }
-      return null;
+      return pendingPaints != null ? pendingPaints.get(paintId) : null;
     }
   }
 
   public static File getPaintsDir () {
-    return new File(UI.getAppContext().getFilesDir(), "paints");
+    return new File(AppContext.get().getFilesDir(), "paints");
   }
 
   public static PaintState parse (String in) {
@@ -176,7 +175,7 @@ public class PaintState {
 
     if (size >= 256) {
       int paintId = Settings.instance().getPaintId();
-      File paintCacheDirectory = new File(UI.getAppContext().getFilesDir(), "paints");
+      File paintCacheDirectory = new File(AppContext.get().getFilesDir(), "paints");
       if (FileUtils.createDirectory(paintCacheDirectory)) {
         File file;
         do {
@@ -189,6 +188,7 @@ public class PaintState {
         b.writeVarint(paintId);
 
         putPaintState(paintId, this);
+        final int paintIdFinal = paintId;
         final File fileFinal = file;
         final int sizeFinal = size;
 
@@ -208,6 +208,7 @@ public class PaintState {
               for (SimpleDrawing drawing : drawingsList) {
                 drawing.save(f);
               }
+              forgetPaintState(paintIdFinal);
             } catch (Throwable t) {
               Log.w("Cannot save paint file: %s", t, fileFinal.getName());
             }
@@ -230,8 +231,7 @@ public class PaintState {
     return b.toByteArray();
   }
 
-  @Override
-  public String toString () {
+  public String saveAndSerializeToString () {
     if (isEmpty()) {
       return "";
     }

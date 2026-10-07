@@ -14,22 +14,17 @@
  */
 package org.thunderdog.challegram.helper;
 
-import android.content.Context;
-import android.content.res.Resources;
 import android.location.Location;
-import android.os.Build;
-import android.os.LocaleList;
 import android.os.SystemClock;
-import android.view.inputmethod.InputMethodManager;
-import android.view.inputmethod.InputMethodSubtype;
+import android.text.Spanned;
 
 import androidx.annotation.IntRange;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.UiThread;
 
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.N;
@@ -60,24 +55,20 @@ import org.thunderdog.challegram.util.CancellableResultHandler;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
-import me.vkryl.android.LocaleUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.CancellableRunnable;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.Td;
+import tgx.td.ChatId;
+import tgx.td.Td;
 
 public class InlineSearchContext implements LocationHelper.LocationChangeListener, InlineResultsWrap.LoadMoreCallback {
-  public static final int WARNING_OK = 0;
-  public static final int WARNING_CONFIRM = 1;
-  public static final int WARNING_BLOCK = 2;
-
   public interface Callback {
     long provideInlineSearchChatId ();
     TdApi.Chat provideInlineSearchChat ();
-    TdApi.WebPage provideExistingWebPage (TdApi.FormattedText currentText);
     long provideInlineSearchChatUserId ();
     boolean isDisplayingItems ();
     void updateInlineMode (boolean isInInlineMode, boolean isInProgress);
@@ -85,15 +76,14 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
     void showInlineResults (ArrayList<InlineResult<?>> items, boolean isContent);
     void addInlineResults (ArrayList<InlineResult<?>> items);
     void hideInlineResults ();
-    void showInlineStickers (ArrayList<TGStickerObj> stickers, boolean isMore);
-    boolean needsLinkPreview ();
-    boolean showLinkPreview (@Nullable String link, @Nullable TdApi.WebPage webPage);
+    void showInlineStickers (ArrayList<TGStickerObj> stickers, String foundByEmoji, boolean isEmoji, boolean isMore);
+
+    boolean enableLinkPreview ();
+    void showLinkPreview (@Nullable FoundUrls foundUrls);
 
     boolean needsInlineBots ();
 
     TdApi.FormattedText getOutputText (boolean applyMarkdown);
-
-    int showLinkPreviewWarning (int contextId, @Nullable String link);
   }
 
   public interface CommandListProvider {
@@ -108,9 +98,10 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
   public static final int MODE_MENTION = 1;
   public static final int MODE_HASHTAGS = 2;
   public static final int MODE_EMOJI_SUGGESTION = 3;
-  public static final int MODE_STICKERS = 4;
+  public static final int MODE_STICKERS_AND_EMOJI = 4;
   public static final int MODE_COMMAND = 5;
   public static final int MODE_INLINE_SEARCH = 6;
+  public static final int MODE_EMOJI = 7;
 
   private static final int FLAG_CAPTION = 1;
   private static final int FLAG_DISALLOW_INLINE_RESULTS = 1 << 1;
@@ -131,7 +122,7 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
   private boolean canHandlePositionChange;
   private int lastHandledPosition;
   private int lastKnownCursorPosition;
-  private ViewController<?> boundController;
+  private final ViewController<?> boundController;
 
   public InlineSearchContext (BaseActivity context, Tdlib tdlib, @NonNull Callback callback, ViewController<?> boundController) {
     this.context = context;
@@ -192,7 +183,12 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
   // Public entry
 
   public void forceCheck () {
-    onQueryResultsChanged(currentText);
+    if (!currentText.isEmpty()) {
+      String oCurrentText = currentText;
+      CharSequence oCurrentCs = currentCs;
+      currentText = ""; currentCs = "";
+      onTextChanged(oCurrentCs, oCurrentText, lastKnownCursorPosition);
+    }
   }
 
   public void onQueryResultsChanged (String queryText) {
@@ -208,6 +204,11 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
       cancelPendingQueries();
       searchOther(newPosition);
     }
+  }
+
+  public void reset () {
+    cancelPendingQueries();
+    setCurrentMode(MODE_NONE);
   }
 
   public void onTextChanged (CharSequence newCs, String newText, @IntRange(from = -1, to = Integer.MAX_VALUE) int cursorPosition) {
@@ -232,12 +233,20 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
       probablyHasWebPagePreview = false;
       clearInlineMode();
 
-      // Display stickers in case of a single emoji
+      final boolean canSearchCustomEmoji = canSearchCustomEmoji();
       if (isCaption() || disallowInlineResults()) {
-        setCurrentMode(MODE_NONE);
+        if (canSearchCustomEmoji) {
+          setCurrentMode(MODE_EMOJI);
+          searchStickers(newText, false, true, null);
+        } else {
+          setCurrentMode(MODE_NONE);
+        }
       } else {
-        setCurrentMode(MODE_STICKERS);
-        searchStickers(newText, false, null);
+        setCurrentMode(MODE_STICKERS_AND_EMOJI);
+        searchStickers(newText, false, false, null);
+        if (canSearchCustomEmoji) {
+          searchStickers(newText, false, true, null);
+        }
       }
     } else {
       final String inlineUsername = getInlineUsername();
@@ -250,7 +259,7 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
       }
     }
 
-    processLinkPreview(probablyHasWebPagePreview ? newText : "");
+    processLinkPreview(probablyHasWebPagePreview);
   }
 
   // Common UI
@@ -384,24 +393,59 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
   // Stickers
 
   private CancellableResultHandler stickerRequest;
+  private CancellableResultHandler emojiRequest;
 
   private void cancelStickerRequest () {
     if (stickerRequest != null) {
       stickerRequest.cancel();
       stickerRequest = null;
     }
+    if (emojiRequest != null) {
+      emojiRequest.cancel();
+      emojiRequest = null;
+    }
   }
 
-  private void searchStickers (final String emoji, final boolean more, @Nullable final int[] ignoreStickerIds) {
-    final int stickerMode = Settings.instance().getStickerMode();
+  private void searchStickers (final String emoji, final boolean more, final boolean isEmoji, @Nullable final int[] ignoreStickerIds) {
+    if (isEmoji) {
+      emojiRequest = searchStickersImpl(emoji, true, more, ignoreStickerIds);
+    } else {
+      stickerRequest = searchStickersImpl(emoji, false, more, ignoreStickerIds);
+    }
+  }
+
+  private int getSearchStickersMode (boolean isEmoji) {
+    if (isEmoji) {
+      return Settings.instance().getEmojiMode();
+    } else {
+      return Settings.instance().getStickerMode();
+    }
+  }
+
+  private @Nullable CancellableResultHandler searchStickersImpl (final String emoji, final boolean isEmoji, final boolean more, @Nullable final int[] ignoreStickerIds) {
+    final int stickerMode = getSearchStickersMode(isEmoji);
     if (stickerMode == Settings.STICKER_MODE_NONE) {
-      return;
+      return null;
     }
     if (stickerMode == Settings.STICKER_MODE_ALL && !more && tdlib.suggestOnlyApiStickers()) {
-      searchStickers(emoji, true, ignoreStickerIds);
-      return;
+      return searchStickersImpl(emoji, isEmoji, true, ignoreStickerIds);
     }
-    stickerRequest = new CancellableResultHandler() {
+    final long chatId = callback.provideInlineSearchChatId();
+    final TdApi.StickerType type = isEmoji ? new TdApi.StickerTypeCustomEmoji() : new TdApi.StickerTypeRegular();
+    TdApi.Function<?> function;
+    if (more) {
+      function = new TdApi.SearchStickers(type, emoji, null, U.getInputLanguages(), 0, 1000);
+    } else {
+      function = new TdApi.GetStickers(type, emoji, 1000, chatId);
+    }
+    CancellableResultHandler handler = stickersHandler(emoji, isEmoji, stickerMode, more, ignoreStickerIds);
+    tdlib.client().send(function, handler);
+
+    return handler;
+  }
+
+  private CancellableResultHandler stickersHandler (final String emoji, final boolean isEmoji, final int stickerMode, final boolean more, @Nullable final int[] ignoreStickerIds) {
+    return new CancellableResultHandler() {
       @Override
       public void processResult (TdApi.Object object) {
         switch (object.getConstructor()) {
@@ -434,9 +478,9 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
             }
             tdlib.ui().post(() -> {
               if (!isCancelled()) {
-                displayStickers(displayingStickers, emoji, more);
+                displayStickers(displayingStickers, isEmoji, emoji, more);
                 if (!more && stickerMode == Settings.STICKER_MODE_ALL) {
-                  searchStickers(emoji, true, futureIgnoreStickerIds);
+                  searchStickers(emoji, true, isEmoji, futureIgnoreStickerIds);
                 }
               }
             });
@@ -445,23 +489,15 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
         }
       }
     };
-    final long chatId = callback.provideInlineSearchChatId();
-    TdApi.Function<?> function;
-    if (more) {
-      function = new TdApi.SearchStickers(new TdApi.StickerTypeRegular(), emoji, 1000);
-    } else {
-      function = new TdApi.GetStickers(new TdApi.StickerTypeRegular(), emoji, 1000, chatId);
-    }
-    tdlib.client().send(function, stickerRequest);
   }
 
   @UiThread
-  private void displayStickers (TdApi.Sticker[] stickers, String foundByEmoji, boolean isMore) {
+  private void displayStickers (TdApi.Sticker[] stickers, boolean isEmoji, String foundByEmoji, boolean isMore) {
     ArrayList<TGStickerObj> list = new ArrayList<>(stickers.length);
     for (TdApi.Sticker sticker : stickers) {
       list.add(new TGStickerObj(tdlib, sticker, foundByEmoji, sticker.fullType));
     }
-    callback.showInlineStickers(list, isMore);
+    callback.showInlineStickers(list, foundByEmoji, isEmoji, isMore);
   }
 
   // Inline query
@@ -472,7 +508,7 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
   private CancellableResultHandler inlineBotHandler;
 
   private void processInlineQueryOrOther (final String username, final String inlineQuery, final int cursorPosition) {
-    if (lastInlineUsername == null || !lastInlineUsername.toLowerCase().equals(username.toLowerCase())) {
+    if (lastInlineUsername == null || !lastInlineUsername.toLowerCase(Locale.ROOT).equals(username.toLowerCase(Locale.ROOT))) {
       lastInlineUsername = username;
 
       if (inlineBotHandler != null) {
@@ -480,7 +516,7 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
         inlineBotHandler = null;
       }
 
-      TdApi.User user = tdlib.cache().searchUser(username.toLowerCase());
+      TdApi.User user = tdlib.cache().searchUser(username);
 
       if (user != null) {
         if (user.type.getConstructor() == TdApi.UserTypeBot.CONSTRUCTOR && ((TdApi.UserTypeBot) user.type).isInline) {
@@ -653,7 +689,7 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
         return null;
       }
 
-      int contentType = fromMessage.content.getConstructor();
+      @TdApi.MessageContent.Constructors int contentType = fromMessage.content.getConstructor();
       ArrayList<TdApi.Message> items = null;
       int foundIndex = -1;
 
@@ -714,6 +750,7 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
     inlineQueryHandler = new CancellableResultHandler() {
       @Override
       public void processResult (TdApi.Object object) {
+        boolean fallback = false;
         switch (object.getConstructor()) {
           case TdApi.InlineQueryResults.CONSTRUCTOR: {
             final TdApi.InlineQueryResults results = (TdApi.InlineQueryResults) object;
@@ -733,17 +770,21 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
             if (TD.errorCode(object) == 502) {
               UI.showBotDown(botUsername);
             }
-            // else go to default:
-          }
-          default: {
-            tdlib.ui().post(() -> {
-              if (!isCancelled() && getInlineUsername() != null) {
-                setInProgress(false);
-                hideResults();
-              }
-            });
+            fallback = true;
             break;
           }
+          default: {
+            fallback = true;
+            break;
+          }
+        }
+        if (fallback) {
+          tdlib.ui().post(() -> {
+            if (!isCancelled() && getInlineUsername() != null) {
+              setInProgress(false);
+              hideResults();
+            }
+          });
         }
       }
     };
@@ -855,6 +896,21 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
   private boolean searchOther (int cursorPosition) {
     this.canHandlePositionChange = true;
     this.lastHandledPosition = cursorPosition;
+
+    if (cursorPosition > 0 && canSearchCustomEmoji() && cursorPosition <= currentCs.length()) {
+      final String singleEmoji;
+      if (currentCs instanceof Spanned) {
+        singleEmoji = Emoji.extractPrecedingEmoji((Spanned) currentCs, cursorPosition, false);
+      } else {
+        singleEmoji = null;
+      }
+      if (!StringUtils.isEmpty(singleEmoji)) {
+        setCurrentMode(MODE_EMOJI);
+        searchStickers(singleEmoji, false, true, null);
+        return true;
+      }
+    }
+
     if (currentText.charAt(0) == '/') {
       boolean isOk = true;
 
@@ -1184,105 +1240,15 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
     }
   }
 
-  private static String toLanguageCode (InputMethodSubtype ims) {
-    if (ims != null) {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-        String languageTag = ims.getLanguageTag();
-        if (!StringUtils.isEmpty(languageTag)) {
-          return languageTag;
-        }
-      }
-      String locale = ims.getLocale();
-      if (!StringUtils.isEmpty(locale)) {
-        Locale l = U.getDisplayLocaleOfSubtypeLocale(locale);
-        if (l != null) {
-          return LocaleUtils.toBcp47Language(l);
-        }
-      }
-    }
-    return null;
-  }
-
   private void searchEmoji (final int startIndex, final int endIndex, final String currentInput, final String suggestionQuery) {
     if (lastInlineResultsType != TYPE_EMOJI_SUGGESTIONS) {
       hideResults();
     }
 
-    final List<String> inputLanguages = new ArrayList<>();
-    InputMethodManager imm = (InputMethodManager) UI.getAppContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-    if (imm != null) {
-      String inputLanguageCode = null;
-      try {
-        inputLanguageCode = toLanguageCode(imm.getCurrentInputMethodSubtype());
-      } catch (Throwable ignored) { }
-      if (StringUtils.isEmpty(inputLanguageCode)) {
-        try {
-          inputLanguageCode = toLanguageCode(imm.getLastInputMethodSubtype());
-        } catch (Throwable ignored) { }
-      }
-      if (!StringUtils.isEmpty(inputLanguageCode)) {
-        inputLanguages.add(inputLanguageCode);
-      }
-
-      /*if (Strings.isEmpty(inputLanguageCode)) {
-        try {
-          String id = android.provider.Settings.Secure.getString(
-            UI.getAppContext().getContentResolver(),
-            android.provider.Settings.Secure.DEFAULT_INPUT_METHOD
-          );
-          if (!Strings.isEmpty(id)) {
-            List<InputMethodInfo> list = imm.getInputMethodList();
-            lookup:
-            for (InputMethodInfo info : list) {
-              if (id.equals(info.getId())) {
-                List<InputMethodSubtype> subtypes = imm.getEnabledInputMethodSubtypeList(info, true);
-                for (InputMethodSubtype subtype : subtypes) {
-                  String languageCode = toLanguageCode(subtype);
-                  if (!Strings.isEmpty(languageCode)) {
-                    inputLanguageCode = languageCode;
-                    break lookup;
-                  }
-                }
-              }
-            }
-          }
-        } catch (Throwable ignored) { }
-      }
-      if (Strings.isEmpty(inputLanguageCode) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-        try {
-          LocaleList localeList = ((InputView) callback).getImeHintLocales();
-          if (localeList != null) {
-            for (int i = 0; i < localeList.size(); i++) {
-              inputLanguageCode = U.toBcp47Language(localeList.get(i));
-              if (!Strings.isEmpty(inputLanguageCode))
-                break;
-            }
-          }
-        } catch (Throwable ignored) { }
-      }*/
-    }
-    if (inputLanguages.isEmpty()) {
-      try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-          LocaleList locales = Resources.getSystem().getConfiguration().getLocales();
-          for (int i = 0; i < locales.size(); i++) {
-            String code = LocaleUtils.toBcp47Language(locales.get(i));
-            if (!StringUtils.isEmpty(code) && !inputLanguages.contains(code))
-              inputLanguages.add(code);
-          }
-        } else {
-          String code = LocaleUtils.toBcp47Language(Resources.getSystem().getConfiguration().locale);
-          if (!StringUtils.isEmpty(code)) {
-            inputLanguages.add(code);
-          }
-        }
-      } catch (Throwable ignored) { }
-    }
-
     Background.instance().post(new CancellableRunnable() {
       @Override
       public void act () {
-        String query = suggestionQuery.toLowerCase();
+        String query = suggestionQuery.toLowerCase(Locale.ROOT);
         if (suggestionQuery.length() == 1 && Character.isUpperCase(suggestionQuery.charAt(0))) {
           char c = suggestionQuery.charAt(0);
           switch (c) {
@@ -1312,31 +1278,31 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
         }
 
         if (!StringUtils.isEmpty(query)) {
-          tdlib.client().send(new TdApi.SearchEmojis(query, false, inputLanguages.isEmpty() ? null : inputLanguages.toArray(new String[0])), result -> {
-            if (result.getConstructor() == TdApi.Emojis.CONSTRUCTOR) {
-              TdApi.Emojis emojis = (TdApi.Emojis) result;
-              ArrayList<InlineResult<?>> addedResults = new ArrayList<>(emojis.emojis.length);
-              for (String emoji : emojis.emojis) {
-                boolean found = false;
-                if (inlineResults != null) {
-                  for (InlineResult<?> existingResult : inlineResults) {
-                    if (existingResult instanceof InlineResultEmojiSuggestion && Emoji.equals(emoji, ((InlineResultEmojiSuggestion) existingResult).getEmoji())) {
-                      found = true;
-                      break;
-                    }
-                  }
-                }
-                if (!found) {
-                  addedResults.add(new InlineResultEmojiSuggestion(context, tdlib, new N.Suggestion(emoji, null, null), null).setTarget(startIndex, endIndex));
+          final String searchQuery = query;
+          Set<String> addedEmojis = new LinkedHashSet<>();
+          if (inlineResults != null) {
+            for (InlineResult<?> existingResult : inlineResults) {
+              if (existingResult instanceof InlineResultEmojiSuggestion) {
+                String emoji = ((InlineResultEmojiSuggestion) existingResult).getEmoji();
+                addedEmojis.add(Emoji.cleanupEmoji(emoji));
+              }
+            }
+          }
+          tdlib.send(new TdApi.SearchEmojis(searchQuery, U.getInputLanguages()), (keywords, error) -> {
+            if (keywords != null) {
+              ArrayList<InlineResult<?>> extraResults = new ArrayList<>(keywords.emojiKeywords.length);
+              for (TdApi.EmojiKeyword keyword : keywords.emojiKeywords) {
+                if (addedEmojis.add(Emoji.cleanupEmoji(keyword.emoji))) {
+                  extraResults.add(new InlineResultEmojiSuggestion(context, tdlib, new N.Suggestion(keyword.emoji, !StringUtils.isEmpty(keyword.keyword) ? keyword.keyword : null, null), searchQuery).setTarget(startIndex, endIndex));
                 }
               }
-              if (!addedResults.isEmpty()) {
+              if (!extraResults.isEmpty()) {
                 tdlib.ui().post(() -> {
                   if (isPending() && StringUtils.equalsOrBothEmpty(currentInput, currentText)) {
                     if (inlineResults == null || inlineResults.isEmpty()) {
-                      showEmojiSuggestions(addedResults);
+                      showEmojiSuggestions(extraResults);
                     } else {
-                      inlineResults.addAll(addedResults);
+                      inlineResults.addAll(extraResults);
                       showEmojiSuggestions(inlineResults);
                     }
                   }
@@ -1362,105 +1328,57 @@ public class InlineSearchContext implements LocationHelper.LocationChangeListene
 
   // Links processor
 
-  private final ArrayList<String> lastLinks = new ArrayList<>(5);
-  private final ArrayList<String> currentLinks = new ArrayList<>(5);
+  private FoundUrls lastFoundUrls;
   private int linkContextId;
 
-  private void processLinkPreview (String input) {
-    currentLinks.clear();
+  private void processLinkPreview (boolean allowLinkPreview) {
+    allowLinkPreview = allowLinkPreview && callback.enableLinkPreview();
 
-    if (!StringUtils.isEmpty(input)) {
-      List<String> links = TD.findUrls(callback.getOutputText(true));
-      if (links != null && !links.isEmpty()) {
-        currentLinks.addAll(links);
-      }
+    boolean isPrivacyCritical = ChatId.isSecret(callback.provideInlineSearchChatId());
+    boolean needPrivacyPrompt = isPrivacyCritical && Settings.instance().needTutorial(Settings.TUTORIAL_SECRET_LINK_PREVIEWS);
+    if (allowLinkPreview && isPrivacyCritical && !needPrivacyPrompt && !Settings.instance().needSecretLinkPreviews()) {
+      // As an optimization, do not look up for any URLs at all in secret chats when link previews are forbidden.
+      allowLinkPreview = false;
     }
 
-    int size = currentLinks.size();
-    if (lastLinks.size() == size) {
-      if (size == 0) {
-        return;
-      }
-      boolean changed = false;
-      int j = 0;
-      for (String str : lastLinks) {
-        if (!currentLinks.get(j++).equals(str)) {
-          changed = true;
-          break;
-        }
-      }
-      if (!changed) {
-        return;
-      }
-    }
+    TdApi.FormattedText formattedText = allowLinkPreview ? callback.getOutputText(true) : null;
+    FoundUrls foundUrls = !Td.isEmpty(formattedText) ? new FoundUrls(formattedText) : null;
 
-    lastLinks.clear();
-    lastLinks.addAll(currentLinks);
+    boolean wasEmpty = (lastFoundUrls == null || lastFoundUrls.isEmpty());
+    boolean nowEmpty = foundUrls == null || foundUrls.isEmpty();
+
+    if (wasEmpty == nowEmpty && (foundUrls == null || foundUrls.equals(lastFoundUrls))) {
+      // Nothing changed
+      return;
+    }
 
     final int contextId = ++linkContextId;
-    if (size == 0 || !callback.needsLinkPreview()) {
-      closeLinkPreview();
-    } else {
-      processLinkPreview(contextId, lastLinks.get(0));
-    }
-  }
+    this.lastFoundUrls = foundUrls;
 
-  public final void processLinkPreview (final int contextId, final String link) {
-    int result = WARNING_BLOCK;
-    if (!StringUtils.isEmpty(link)) {
-      result = callback.showLinkPreviewWarning(contextId, link);
+    if (nowEmpty) {
+      callback.showLinkPreview(null);
+      return;
     }
-    if (result != WARNING_CONFIRM && callback.showLinkPreview(link, null)) {
-      switch (result) {
-        case WARNING_BLOCK: {
-          dispatchLinkPreview(contextId, null, null);
-          break;
+
+    if (needPrivacyPrompt) {
+      callback.showLinkPreview(null);
+      boundController.openSecretLinkPreviewAlert(isAccepted -> {
+        if (linkContextId == contextId && isAccepted) {
+          callback.showLinkPreview(foundUrls);
         }
-        case WARNING_OK: {
-          TdApi.WebPage webPage = callback.provideExistingWebPage(callback.getOutputText(false));
-          if (webPage != null) {
-            dispatchLinkPreview(contextId, link, webPage);
-            return;
-          }
-          UI.post(() -> {
-            if (linkContextId == contextId) {
-              tdlib.client().send(new TdApi.GetWebPagePreview(callback.getOutputText(true)), object -> {
-                switch (object.getConstructor()) {
-                  case TdApi.WebPage.CONSTRUCTOR: {
-                    dispatchLinkPreview(contextId, link, (TdApi.WebPage) object);
-                    break;
-                  }
-                  case TdApi.Error.CONSTRUCTOR: {
-                    TdApi.Error error = (TdApi.Error) object;
-                    if (error.code != 404) { // 404 is "Web page is empty". Maybe something interesting
-                      Log.w("Cannot load link preview: %s", TD.toErrorString(object));
-                    }
-                    dispatchLinkPreview(contextId, null, null);
-                    break;
-                  }
-                  default: {
-                    Log.unexpectedTdlibResponse(object, TdApi.GetWebPagePreview.class, TdApi.WebPage.class);
-                    break;
-                  }
-                }
-              });
-            }
-          }, 400l);
-          break;
-        }
-      }
+      });
+      return;
     }
+
+    callback.showLinkPreview(foundUrls);
   }
 
-  private void dispatchLinkPreview (final int contextId, final @Nullable String link, final @Nullable TdApi.WebPage webPage) {
-    UI.post(() -> {
-      if (linkContextId == contextId) {
-        callback.showLinkPreview(link, webPage);
-      }
-    });
+  private boolean isInSelfChat () {
+    long chatId = callback.provideInlineSearchChatId();
+    return chatId != 0 && tdlib.isSelfChat(chatId);
   }
 
-  private void closeLinkPreview () {
-    callback.showLinkPreview(null, null);
+  private boolean canSearchCustomEmoji () {
+    return tdlib.account().isPremium() || isInSelfChat();
   }
 }

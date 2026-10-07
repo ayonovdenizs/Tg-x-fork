@@ -25,10 +25,12 @@ import android.os.CancellationSignal;
 import android.os.Looper;
 import android.widget.Toast;
 
+import androidx.annotation.IntDef;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
+import org.thunderdog.challegram.BuildConfig;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
@@ -41,15 +43,18 @@ import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Intents;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.ui.CallController;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
-import org.thunderdog.challegram.util.ActivityPermissionResult;
-import org.thunderdog.challegram.voip.VoIPController;
+import org.thunderdog.challegram.voip.VoIP;
 import org.thunderdog.challegram.voip.VoIPServerConfig;
 import org.thunderdog.challegram.voip.gui.CallSettings;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayDeque;
 import java.util.Queue;
 
+import me.vkryl.android.SdkVersion;
 import me.vkryl.core.reference.ReferenceList;
 
 public class CallManager implements GlobalCallListener {
@@ -86,7 +91,7 @@ public class CallManager implements GlobalCallListener {
     if (currentCall == null || call == null) {
       this.currentCallTdlib = tdlib;
       this.currentCall = call;
-      this.currentCallAcknowledged = call == null || UI.getUiState() != UI.STATE_RESUMED || UI.isNavigationBusyWithSomething();
+      this.currentCallAcknowledged = call == null || UI.getUiState() != UI.State.RESUMED || UI.isNavigationBusyWithSomething();
       if (currentCallAcknowledged) {
         notifyCallListeners();
       }
@@ -95,11 +100,11 @@ public class CallManager implements GlobalCallListener {
         serviceCancellationSignal = null;
       }
       if (call != null) {
-        Intent intent = new Intent(UI.getAppContext(), TGCallService.class);
+        Intent intent = new Intent(AppContext.get(), TGCallService.class);
         intent.putExtra("account_id", tdlib.id());
         intent.putExtra("call_id", call.id);
         serviceCancellationSignal = new CancellationSignal();
-        UI.startService(intent, UI.getUiState() != UI.STATE_RESUMED, true, serviceCancellationSignal);
+        UI.startService(intent, UI.getUiState() != UI.State.RESUMED, true, serviceCancellationSignal);
 
         navigateToCallController(currentCallTdlib, currentCall);
       }
@@ -190,7 +195,7 @@ public class CallManager implements GlobalCallListener {
       if (currentCall.id != call.id) {
         if (!call.isOutgoing) {
           if (call.state.getConstructor() == TdApi.CallStatePending.CONSTRUCTOR) {
-            tdlib.client().send(new TdApi.DiscardCall(call.id, false, 0, call.isVideo, 0), tdlib.okHandler());
+            tdlib.send(new TdApi.DiscardCall(call.id, false, null, 0, call.isVideo, 0), tdlib.typedOkHandler());
           }
         }
         return;
@@ -219,7 +224,7 @@ public class CallManager implements GlobalCallListener {
 
   private boolean navigateToCallController (Tdlib tdlib, TdApi.Call call) {
     BaseActivity activity = UI.getUiContext();
-    if (activity != null && activity.getActivityState() == UI.STATE_RESUMED) {
+    if (activity != null && activity.getActivityState() == UI.State.RESUMED) {
       NavigationController navigation = UI.getNavigation();
       if (navigation != null) {
         ViewController<?> c = !navigation.isAnimating() ? navigation.getCurrentStackItem() : null;
@@ -244,7 +249,7 @@ public class CallManager implements GlobalCallListener {
 
   private static void discardCall (Tdlib tdlib, final int callId, final boolean isVideo) {
     Log.v(Log.TAG_VOIP, "#%d: DiscardCall requested, isVideo:%b", callId, isVideo);
-    tdlib.client().send(new TdApi.DiscardCall(callId, false, 0, isVideo, 0), object -> Log.v(Log.TAG_VOIP, "#%d: DiscardCall completed: %s", callId, object));
+    tdlib.client().send(new TdApi.DiscardCall(callId, false, null, 0, isVideo, 0), object -> Log.v(Log.TAG_VOIP, "#%d: DiscardCall completed: %s", callId, object));
   }
 
   /*
@@ -257,15 +262,36 @@ debugCall id:long debug:string = Ok;
 
   private static final boolean CHECK_CONNECTION = true;
 
-  private void showNeedMicAlert (boolean missingHardware) {
+  @Retention(RetentionPolicy.SOURCE)
+  @IntDef({
+    AlertType.MICROPHONE_HARDWARE_MISSING,
+    AlertType.MICROPHONE_PERMISSION_MISSING
+  })
+  private @interface AlertType {
+    int MICROPHONE_HARDWARE_MISSING = 1,
+        MICROPHONE_PERMISSION_MISSING = 2,
+        ANDROID_VERSION_UNSUPPORTED = 3;
+  }
+
+  private void showAlert (@AlertType int alertType) {
     final Context context = UI.getContext();
     AlertDialog.Builder b;
     b = new AlertDialog.Builder(context, Theme.dialogTheme());
-    b.setTitle(Lang.getString(R.string.MicrophonePermission));
-    if (missingHardware) {
-      b.setMessage(Lang.getString(R.string.MicrophoneMissing));
-    } else {
-      b.setMessage(Lang.getString(R.string.MicrophonePermissionDesc));
+    switch (alertType) {
+      case AlertType.ANDROID_VERSION_UNSUPPORTED -> {
+        b.setTitle(Lang.getString(R.string.AndroidVersionWarningTitle));
+        b.setMessage(Lang.getString(R.string.AndroidVersionWarning, SdkVersion.getPrettyName(Build.VERSION_CODES.LOLLIPOP), SdkVersion.getPrettyVersionCode(Build.VERSION_CODES.LOLLIPOP)));
+      }
+      case AlertType.MICROPHONE_HARDWARE_MISSING -> {
+        b.setTitle(Lang.getString(R.string.MicrophonePermission));
+        b.setMessage(Lang.getString(R.string.MicrophoneMissing));
+      }
+      case AlertType.MICROPHONE_PERMISSION_MISSING -> {
+        b.setTitle(Lang.getString(R.string.MicrophonePermission));
+        b.setMessage(Lang.getString(R.string.MicrophonePermissionDesc));
+      }
+      default ->
+        throw new UnsupportedOperationException(Integer.toString(alertType));
     }
     b.setPositiveButton(Lang.getOK(), (dialog, which) -> dialog.dismiss());
     b.setNeutralButton(Lang.getString(R.string.Settings), (dialog, which) -> {
@@ -279,7 +305,7 @@ debugCall id:long debug:string = Ok;
   }
 
   public void acceptIncomingCall (Tdlib tdlib, int callId) {
-    acceptCall(UI.getAppContext(), tdlib, callId);
+    acceptCall(AppContext.get(), tdlib, callId);
   }
 
   public void declineIncomingCall (Tdlib tdlib, int callId, boolean isVideo) {
@@ -288,7 +314,7 @@ debugCall id:long debug:string = Ok;
 
   public boolean checkRecordPermissions (final Context context, final Tdlib tdlib, final @Nullable TdApi.Call call, final long userId, final @Nullable ViewController<?> makeCallContext) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-      if (UI.getAppContext().checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+      if (AppContext.get().checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
         BaseActivity activity = UI.getUiContext();
         if (activity != null) {
           activity.requestMicPermissionForCall((code, permissions, grantResults, grantCount) -> {
@@ -304,7 +330,7 @@ debugCall id:long debug:string = Ok;
                 }
               }
             } else {
-              showNeedMicAlert(false);
+              showAlert(AlertType.MICROPHONE_PERMISSION_MISSING);
             }
           });
         } else {
@@ -355,8 +381,12 @@ debugCall id:long debug:string = Ok;
     if (userFull == null) {
       userFull = context.tdlib().cache().userFull(userId);
     }
-    if (!U.deviceHasMicrophone(UI.getAppContext())) {
-      showNeedMicAlert(true);
+    if (!BuildConfig.CALLS_AVAILABLE) {
+      showAlert(AlertType.ANDROID_VERSION_UNSUPPORTED);
+      return;
+    }
+    if (!U.deviceHasMicrophone(AppContext.get())) {
+      showAlert(AlertType.MICROPHONE_HARDWARE_MISSING);
       return;
     }
     /*final TdApi.Call pendingCall = context.tdlib().cache().getPendingCall();
@@ -423,20 +453,11 @@ debugCall id:long debug:string = Ok;
       return;
     }
     if (userFull == null) {
-      context.tdlib().client().send(new TdApi.GetUserFullInfo(userId), object -> {
-        switch (object.getConstructor()) {
-          case TdApi.UserFullInfo.CONSTRUCTOR: {
-            makeCall(context, userId, (TdApi.UserFullInfo) object, needPrompt);
-            break;
-          }
-          case TdApi.Error.CONSTRUCTOR: {
-            UI.showError(object);
-            break;
-          }
-          default: {
-            Log.unexpectedTdlibResponse(object, TdApi.GetUserFullInfo.class, TdApi.UserFullInfo.class);
-            break;
-          }
+      context.tdlib().send(new TdApi.GetUserFullInfo(userId), (remoteUserFull, error) -> {
+        if (error != null) {
+          UI.showError(error);
+        } else {
+          makeCall(context, userId, remoteUserFull, needPrompt);
         }
       });
       return;
@@ -456,18 +477,12 @@ debugCall id:long debug:string = Ok;
       return;
     }
     context.context().closeAllMedia(false);
-    context.tdlib().client().send(new TdApi.CreateCall(userId, new TdApi.CallProtocol(true, true, 65, VoIPController.getConnectionMaxLayer(), new String[] {VoIPController.getVersion()}), false), object -> {
-      switch (object.getConstructor()) {
-        case TdApi.CallId.CONSTRUCTOR:
-          Log.v(Log.TAG_VOIP, "#%d: call created, user_id:%d", ((TdApi.CallId) object).id, userId);
-          break;
-        case TdApi.Error.CONSTRUCTOR:
-          Log.e(Log.TAG_VOIP, "Failed to create call: %s", TD.toErrorString(object));
-          UI.showError(object);
-          break;
-        default:
-          Log.unexpectedTdlibResponse(object, TdApi.CreateCall.class, TdApi.CallId.class, TdApi.Error.class);
-          break;
+    context.tdlib().send(new TdApi.CreateCall(userId, VoIP.getProtocol(), false), (callId, error) -> {
+      if (error != null) {
+        Log.e(Log.TAG_VOIP, "Failed to create call: %s", TD.toErrorString(error));
+        UI.showError(error);
+      } else {
+        Log.v(Log.TAG_VOIP, "#%d: call created, user_id:%d", callId.id, userId);
       }
     });
   }
@@ -507,7 +522,7 @@ debugCall id:long debug:string = Ok;
         return;
       }
       Log.v(Log.TAG_VOIP, "#%d: AcceptCall requested", callId);
-      tdlib.client().send(new TdApi.AcceptCall(callId, new TdApi.CallProtocol(true, true, 65, VoIPController.getConnectionMaxLayer(), new String[] {VoIPController.getVersion()})), object -> Log.v(Log.TAG_VOIP, "#%d: AcceptCall completed: %s", callId, object));
+      tdlib.client().send(new TdApi.AcceptCall(callId, VoIP.getProtocol()), object -> Log.v(Log.TAG_VOIP, "#%d: AcceptCall completed: %s", callId, object));
     }
   }
 
@@ -545,7 +560,7 @@ debugCall id:long debug:string = Ok;
     }
     int duration = getCallDuration(tdlib, callId);
     Log.v(Log.TAG_VOIP, "#%d: DiscardCall, isDisconnect: %b, connectionId: %d, duration: %d", callId, isDisconnect, connectionId, duration);
-    tdlib.client().send(new TdApi.DiscardCall(callId, isDisconnect, Math.max(0, duration), false, connectionId), object -> {
+    tdlib.client().send(new TdApi.DiscardCall(callId, isDisconnect, null, Math.max(0, duration), false, connectionId), object -> {
       Log.v(Log.TAG_VOIP, "#%d: DiscardCall completed: %s", callId, object);
     });
   }

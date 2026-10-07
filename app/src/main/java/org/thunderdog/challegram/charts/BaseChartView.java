@@ -25,7 +25,6 @@ import androidx.annotation.Nullable;
 import androidx.core.graphics.ColorUtils;
 import androidx.interpolator.view.animation.FastOutSlowInInterpolator;
 
-import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.charts.data.ChartData;
 import org.thunderdog.challegram.charts.view_data.ChartBottomSignatureData;
@@ -33,6 +32,7 @@ import org.thunderdog.challegram.charts.view_data.ChartHorizontalLinesData;
 import org.thunderdog.challegram.charts.view_data.LegendSignatureView;
 import org.thunderdog.challegram.charts.view_data.LineViewData;
 import org.thunderdog.challegram.charts.view_data.TransitionParams;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeInvalidateListener;
 import org.thunderdog.challegram.tool.Screen;
@@ -40,6 +40,7 @@ import org.thunderdog.challegram.tool.Screen;
 import java.util.ArrayList;
 import java.util.Arrays;
 
+@SuppressWarnings("unchecked")
 public abstract class BaseChartView<T extends ChartData, L extends LineViewData> extends View implements ChartPickerDelegate.Listener, ThemeInvalidateListener {
 
     public SharedUiComponents sharedUiComponents;
@@ -289,10 +290,10 @@ public abstract class BaseChartView<T extends ChartData, L extends LineViewData>
         bottomSignaturePaint.setColor(Theme.textDecentColor()); // Theme.key_statisticChartSignature
         linePaint.setColor(Theme.separatorColor()); // Theme.key_statisticChartHintLine
         selectedLinePaint.setColor(Theme.separatorColor()); // TODO key_statisticChartActiveLine
-        pickerSelectorPaint.setColor(Theme.getColor(R.id.theme_color_fillingPositive)); // TODO key_statisticChartActivePickerChart
-        unactiveBottomChartPaint.setColor(me.vkryl.core.ColorUtils.alphaColor(.5f, ColorUtils.blendARGB(Theme.getColor(R.id.theme_color_fillingPositive), Theme.fillingColor(), .6f))); // TODO key_statisticChartInactivePickerChart
+        pickerSelectorPaint.setColor(Theme.getColor(ColorId.fillingPositive)); // TODO key_statisticChartActivePickerChart
+        unactiveBottomChartPaint.setColor(me.vkryl.core.ColorUtils.alphaColor(.5f, ColorUtils.blendARGB(Theme.getColor(ColorId.fillingPositive), Theme.fillingColor(), .6f))); // TODO key_statisticChartInactivePickerChart
         selectionBackgroundPaint.setColor(Theme.fillingColor()); // Theme.key_windowBackgroundWhite
-        ripplePaint.setColor(me.vkryl.core.ColorUtils.alphaColor(.2f, Theme.getColor(R.id.theme_color_fillingPositive))); // Theme.key_statisticChartRipple
+        ripplePaint.setColor(me.vkryl.core.ColorUtils.alphaColor(.2f, Theme.getColor(ColorId.fillingPositive))); // Theme.key_statisticChartRipple
         legendSignatureView.recolor();
 
         hintLinePaintAlpha = linePaint.getAlpha();
@@ -363,7 +364,7 @@ public abstract class BaseChartView<T extends ChartData, L extends LineViewData>
     private void measureHeightThreshold() {
         int chartHeight = getMeasuredHeight() - chartBottom;
         if (animateToMaxHeight == 0 || chartHeight == 0) return;
-        thresholdMaxHeight = ((float) animateToMaxHeight / chartHeight) * SIGNATURE_TEXT_SIZE;
+        thresholdMaxHeight = (animateToMaxHeight / chartHeight) * SIGNATURE_TEXT_SIZE;
     }
 
 
@@ -562,7 +563,7 @@ public abstract class BaseChartView<T extends ChartData, L extends LineViewData>
 
         float additionalOutAlpha = 1f;
         if (n > 2) {
-            float v = (a.values[1] - a.values[0]) / (float) (currentMaxHeight - currentMinHeight);
+            float v = (a.values[1] - a.values[0]) / (currentMaxHeight - currentMinHeight);
             if (v < 0.1) {
                 additionalOutAlpha = v / 0.1f;
             }
@@ -590,7 +591,7 @@ public abstract class BaseChartView<T extends ChartData, L extends LineViewData>
 
         float additionalOutAlpha = 1f;
         if (n > 2) {
-            float v = (a.values[1] - a.values[0]) / (float) (currentMaxHeight - currentMinHeight);
+            float v = (a.values[1] - a.values[0]) / (currentMaxHeight - currentMinHeight);
             if (v < 0.1) {
                 additionalOutAlpha = v / 0.1f;
             }

@@ -21,7 +21,9 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.os.Build;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.Message;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -36,6 +38,7 @@ import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.filegen.VideoData;
 import org.thunderdog.challegram.loader.ImageReader;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeDelegate;
 import org.thunderdog.challegram.tool.DrawAlgorithms;
@@ -58,24 +61,13 @@ import me.vkryl.core.lambda.Destroyable;
 
 public class VideoTimelineView extends View implements Destroyable, FactorAnimator.Target {
   private final ArrayList<Frame> frames = new ArrayList<>();
-  private static class VideoHandler extends Handler {
-    private final VideoTimelineView context;
 
-    public VideoHandler (VideoTimelineView context) {
-      this.context = context;
+  private final Handler handler = new Handler(Looper.getMainLooper(), msg -> {
+    if (msg.what == 0) {
+      addFrame(msg.arg1, (Frame) msg.obj);
     }
-
-    @Override
-    public void handleMessage (Message msg) {
-      switch (msg.what) {
-        case 0:
-          context.addFrame(msg.arg1, (Frame) msg.obj);
-          break;
-      }
-    }
-  }
-
-  private final VideoHandler handler = new VideoHandler(this);
+    return false;
+  });
   private final Rect srcRect = new Rect();
 
   public VideoTimelineView (Context context) {
@@ -235,6 +227,7 @@ public class VideoTimelineView extends View implements Destroyable, FactorAnimat
     void onTrimStartEnd (VideoTimelineView v, boolean isStarted);
     default void onVideoLoaded (VideoTimelineView v, double totalDuration, double width, double height, int frameRate, long bitrate) { }
     void onTimelineTrimChanged (VideoTimelineView v, double totalDuration, double startTimeSeconds, double endTimeSeconds);
+    default void onTimelineVisualTrimChanged (VideoTimelineView v, double totalDuration, double startTimeSeconds, double endTimeSeconds) {}
     void onSeekTo (VideoTimelineView v, float progress);
   }
 
@@ -334,6 +327,27 @@ public class VideoTimelineView extends View implements Destroyable, FactorAnimat
         });
     }
     return null;
+  }
+
+  public void performSliderDown (boolean isEnd) {
+    setMoving(true, true);
+    setSlideMode(isEnd ? SLIDE_MODE_END : SLIDE_MODE_START);
+    showTooltip();
+  }
+
+  public void performSliderMove (float factor, boolean isEnd) {
+    final var animator = isEnd ? endFactor : startFactor;
+    if (animator.getFactor() != factor) {
+      animator.forceFactor(factor);
+      updateTooltip(isEnd);
+      invalidate();
+    }
+  }
+
+  public void performSliderUp (boolean isEnd) {
+    setSlideMode(SLIDE_MODE_NONE);
+    setMoving(false, true);
+    normalizeValues(isEnd);
   }
 
   @Override
@@ -577,6 +591,9 @@ public class VideoTimelineView extends View implements Destroyable, FactorAnimat
   public void onFactorChanged (int id, float factor, float fraction, FactorAnimator callee) {
     updateTooltip(id == 1);
     invalidate();
+    if (delegate != null) {
+      delegate.onTimelineVisualTrimChanged(this, totalDuration, getCurrentStart(), getCurrentEnd());
+    }
   }
 
   @Override
@@ -592,9 +609,9 @@ public class VideoTimelineView extends View implements Destroyable, FactorAnimat
   private TooltipOverlayView.TooltipInfo startTooltip, endTooltip;
   private long startTooltipTime = -1, endTooltipTime = -1;
 
-  private int sliderActiveColorId = R.id.theme_color_sliderActive;
-  private int iconColorId = R.id.theme_color_filling;
-  private int overlayColorId = R.id.theme_color_previewBackground;
+  private int sliderActiveColorId = ColorId.sliderActive;
+  private int iconColorId = ColorId.filling;
+  private int overlayColorId = ColorId.previewBackground;
 
   public void setColors (int sliderActiveColorId, int iconColorId, int overlayColorId) {
     if (this.sliderActiveColorId != sliderActiveColorId || this.iconColorId != iconColorId || this.overlayColorId != overlayColorId) {
@@ -750,9 +767,14 @@ public class VideoTimelineView extends View implements Destroyable, FactorAnimat
       }
     }
 
+    @SuppressWarnings("deprecation")
     private void invalidate () {
       if (left != 0 || top != 0 || right != 0 || bottom != 0) {
-        parent.invalidate(left, top, right, bottom);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+          parent.invalidate();
+        } else {
+          parent.invalidate(left, top, right, bottom);
+        }
       }
     }
 

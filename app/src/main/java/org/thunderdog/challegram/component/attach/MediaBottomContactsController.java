@@ -22,8 +22,8 @@ import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.user.SimpleUsersAdapter;
 import org.thunderdog.challegram.core.Background;
@@ -34,8 +34,10 @@ import org.thunderdog.challegram.navigation.Menu;
 import org.thunderdog.challegram.tool.Strings;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.ui.ContactsController;
+import org.thunderdog.challegram.util.text.Highlight;
 
 import java.util.ArrayList;
+import java.util.Locale;
 
 import me.vkryl.android.AnimatorUtils;
 
@@ -66,32 +68,22 @@ public class MediaBottomContactsController extends MediaBottomBaseController<Voi
 
   @Override
   public void fillMenuItems (int id, HeaderView header, LinearLayout menu) {
-    switch (id) {
-      case R.id.menu_search: {
-        header.addSearchButton(menu, this);
-        break;
-      }
-      case R.id.menu_clear: {
-        header.addClearButton(menu, this);
-        break;
-      }
+    if (id == R.id.menu_search) {
+      header.addSearchButton(menu, this);
+    } else if (id == R.id.menu_clear) {
+      header.addClearButton(menu, this);
     }
   }
 
   @Override
   public void onMenuItemPressed (int id, View view) {
-    switch (id) {
-      case R.id.menu_btn_search: {
-        if (users != null && !users.isEmpty()) {
-          mediaLayout.getHeaderView().openSearchMode();
-          headerView = mediaLayout.getHeaderView();
-        }
-        break;
+    if (id == R.id.menu_btn_search) {
+      if (users != null && !users.isEmpty()) {
+        mediaLayout.getHeaderView().openSearchMode();
+        headerView = mediaLayout.getHeaderView();
       }
-      case R.id.menu_btn_clear: {
-        clearSearchInput();
-        break;
-      }
+    } else if (id == R.id.menu_btn_clear) {
+      clearSearchInput();
     }
   }
 
@@ -195,15 +187,17 @@ public class MediaBottomContactsController extends MediaBottomBaseController<Voi
           continue;
         }
 
-        String firstName = Strings.clean(user.getFirstName().trim()).toLowerCase();
-        String lastName = Strings.clean(user.getLastName().trim()).toLowerCase();
-        String check = (firstName + " " + lastName).trim();
+        String firstName = user.getFirstName();
+        String lastName = user.getLastName();
+        String fullName = TD.getUserName(firstName, lastName);
 
-        if (!firstName.startsWith(q) && !lastName.startsWith(q) && !check.startsWith(q)) {
-          continue;
+        if (
+          Strings.anyWordStartsWith(fullName, q) ||
+          Strings.anyWordStartsWith(Strings.clean(fullName), q) ||
+          Highlight.valueOfExactWord(fullName, q) != null
+        ) {
+          foundUsers.add(user);
         }
-
-        foundUsers.add(user);
       }
       UI.post(() -> {
         if (!isDestroyed() && lastQuery.equals(q)) {
@@ -220,6 +214,6 @@ public class MediaBottomContactsController extends MediaBottomBaseController<Voi
 
   @Override
   protected void onSearchInputChanged (final String query) {
-    searchUsers(Strings.clean(query.trim().toLowerCase()));
+    searchUsers(Strings.clean(query.trim().toLowerCase(Locale.ROOT)));
   }
 }

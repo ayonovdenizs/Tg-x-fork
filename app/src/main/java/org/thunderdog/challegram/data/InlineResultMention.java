@@ -17,21 +17,22 @@ package org.thunderdog.challegram.data;
 import android.graphics.Canvas;
 import android.text.TextUtils;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
-import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.component.inline.CustomResultView;
 import org.thunderdog.challegram.loader.AvatarReceiver;
 import org.thunderdog.challegram.loader.ComplexReceiver;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeId;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
+import org.thunderdog.challegram.tool.Strings;
 
 import me.vkryl.core.StringUtils;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
 public class InlineResultMention extends InlineResult<UserContext> {
   private static final float TEXT_SIZE_DP = 14f;
@@ -78,14 +79,10 @@ public class InlineResultMention extends InlineResult<UserContext> {
   }
 
   public static boolean matchesPrefix (TdApi.User user, String prefix, boolean allowUsernameless) {
-    String check = prefix.toLowerCase();
-    String lowerFirst = user.firstName.toLowerCase();
-    String lowerLast = user.lastName.toLowerCase();
-    String check2 = TD.getUserName(lowerFirst, lowerLast);
-    if (check2.startsWith(check) || lowerLast.startsWith(check)) {
+    if (Strings.anyWordStartsWith(TD.getUserName(user), prefix)) {
       return allowUsernameless || Td.hasUsername(user);
     }
-    return (allowUsernameless || Td.hasUsername(user)) && Td.findUsernameByPrefix(user, check);
+    return (allowUsernameless || Td.hasUsername(user)) && Td.findUsernameByPrefix(user, prefix);
   }
 
   private String trimmedDescription;
@@ -110,7 +107,7 @@ public class InlineResultMention extends InlineResult<UserContext> {
 
   @Override
   public void requestContent (ComplexReceiver receiver, boolean isInvalidate) {
-    receiver.clearReceivers((receiverType, receiver1, key) -> receiverType == ComplexReceiver.RECEIVER_TYPE_IMAGE && key == 0);
+    receiver.clearReceivers((receiverType, receiver1, key) -> receiverType == ComplexReceiver.ReceiverType.IMAGE && key == 0);
     receiver.getAvatarReceiver(0).requestUser(tdlib, userContext.getId(), AvatarReceiver.Options.NONE);
   }
 
@@ -125,14 +122,14 @@ public class InlineResultMention extends InlineResult<UserContext> {
 
     int startX = Screen.dp(14f) * 3 + Screen.dp(12f);
     if (userContext.getTrimmedName() != null) {
-      final int textColor = forceDarkMode ? Theme.getColor(R.id.theme_color_text, ThemeId.NIGHT_BLACK) : Theme.textAccentColor();
+      final int textColor = forceDarkMode ? Theme.getColor(ColorId.text, ThemeId.NIGHT_BLACK) : Theme.textAccentColor();
       c.drawText(userContext.getTrimmedName(), startX, startY + Screen.dp(4f) + Screen.dp(14f) + Screen.dp(5f), Paints.getMediumTextPaint(TEXT_SIZE_DP, textColor, false));
       startX += userContext.getTrimmedNameWidth();
       startX += Screen.dp(8f);
     }
 
     if (trimmedDescription != null) {
-      final int textColor = forceDarkMode ? Theme.getColor(R.id.theme_color_textLight, ThemeId.NIGHT_BLACK) : Theme.textDecentColor();
+      final int textColor = forceDarkMode ? Theme.getColor(ColorId.textLight, ThemeId.NIGHT_BLACK) : Theme.textDecentColor();
       c.drawText(trimmedDescription, startX, startY + Screen.dp(4f) + Screen.dp(14f) + Screen.dp(5f), Paints.getCommandPaint(textColor));
     }
   }

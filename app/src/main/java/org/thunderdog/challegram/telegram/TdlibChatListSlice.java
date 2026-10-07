@@ -17,22 +17,32 @@ import android.os.SystemClock;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
+import org.thunderdog.challegram.Log;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import me.vkryl.core.lambda.Destroyable;
 import me.vkryl.core.lambda.Filter;
 import me.vkryl.core.lambda.Future;
 import me.vkryl.core.lambda.RunnableData;
-import me.vkryl.td.ChatPosition;
+import tgx.td.ChatPosition;
 
-public class TdlibChatListSlice {
+public final class TdlibChatListSlice implements Destroyable {
+  public interface Modifier {
+    default boolean modifySlice (TdlibChatListSlice chatListSlice, List<Entry> slice, int currentSize) {
+      // Override in children, e.g. additional filtering and ordering
+      return false;
+    }
+  }
+
   private final Tdlib tdlib;
   private final TdlibChatList sourceList;
   private final Filter<TdApi.Chat> filter;
   private final boolean keepPositions;
+  private final @Nullable Modifier modifier;
 
   private ChatListListener listener, subListener;
   private final List<Entry> filteredList = new ArrayList<>();
@@ -64,18 +74,32 @@ public class TdlibChatListSlice {
     }
   }
 
-  public TdlibChatListSlice (Tdlib tdlib, TdApi.ChatList chatList, Filter<TdApi.Chat> filter, boolean keepPositions) {
+  TdlibChatListSlice (Tdlib tdlib, TdlibChatList chatList, Filter<TdApi.Chat> filter, boolean keepPositions, @Nullable Modifier modifier) {
     this.tdlib = tdlib;
-    this.sourceList = tdlib.chatList(chatList);
+    this.sourceList = chatList;
     this.filter = filter;
     this.keepPositions = keepPositions;
     this.haveCustomModifications = keepPositions;
+    this.modifier = modifier;
   }
 
   private int loadedCount () {
     synchronized (filteredList) {
       return filteredList.size();
     }
+  }
+
+  private void ensureTdlibThreadAndList (TdlibChatList chatList) {
+    tdlib.ensureTdlibThread();
+    if (this.sourceList != chatList) {
+      Log.e("Origin of our list:", this.sourceList.origin());
+      Log.e("Origin of their list:", chatList.origin());
+      throw new IllegalStateException("Received an update from " + chatList + ", expected: " + sourceList);
+    }
+  }
+
+  public TdApi.ChatList chatList () {
+    return sourceList.chatList();
   }
 
   public boolean needProgressPlaceholder () {
@@ -90,6 +114,7 @@ public class TdlibChatListSlice {
     return displayCount == loadedCount() && sourceList.isEndReached();
   }
 
+  @TdlibThread
   private int indexOfChat (long chatId) {
     // TODO lookup without increase in number of operations
     int index = 0;
@@ -102,10 +127,12 @@ public class TdlibChatListSlice {
     return -1;
   }
 
+  @TdlibThread
   private int findExistingIndex (int originalIndex, long chatId) {
     return needSort() ? indexOfChat(chatId) : originalIndex;
   }
 
+  @TdlibThread
   protected int findInsertIndex (Entry entry) {
     final int atIndex = Collections.binarySearch(filteredList, entry);
     if (atIndex >= 0)
@@ -121,6 +148,7 @@ public class TdlibChatListSlice {
     this.listener = new ChatListListener() {
       @Override
       public void onChatChanged (TdlibChatList chatList, TdApi.Chat chat, int index, Tdlib.ChatChange changeInfo) {
+        ensureTdlibThreadAndList(chatList);
         index = findExistingIndex(index, chat.id);
         if (index != -1) {
           if (index < displayCount) {
@@ -131,22 +159,29 @@ public class TdlibChatListSlice {
       }
 
       @Override
-      public void onChatAdded (TdlibChatList chatList, TdApi.Chat chat, int atIndex, Tdlib.ChatChange changeInfo) {
+      public void onChatAdded (TdlibChatList chatList, TdApi.Chat chat, final int originalIndex, Tdlib.ChatChange changeInfo) {
+        ensureTdlibThreadAndList(chatList);
         if (filter != null) {
           if (!filter.accept(chat))
             return;
         }
         Entry entry = new Entry(chat, chatList.chatList(), changeInfo.position, keepPositions);
-        if (needSort()) {
-          atIndex = findInsertIndex(entry);
+        final int insertIndex;
+        try {
+          if (needSort()) {
+            final int sortedIndex = findInsertIndex(entry);
+            filteredList.add(sortedIndex, entry);
+            insertIndex = sortedIndex;
+          } else {
+            filteredList.add(originalIndex, entry);
+            insertIndex = originalIndex;
+          }
+        } catch (RuntimeException e) {
+          Log.e("Chats in source: %d & %d, same: %b", e, sourceList.count(null), chatList.count(null), sourceList == chatList);
+          throw e;
         }
-        if (atIndex == filteredList.size()) {
-          filteredList.add(entry);
-        } else {
-          filteredList.add(atIndex, entry);
-        }
-        if (atIndex < displayCount) {
-          subListener.onChatAdded(chatList, chat, atIndex, changeInfo);
+        if (insertIndex < displayCount) {
+          subListener.onChatAdded(chatList, chat, insertIndex, changeInfo);
           displayCount++;
           subListener.onChatListChanged(chatList, ChangeFlags.ITEM_ADDED);
         } else {
@@ -156,6 +191,7 @@ public class TdlibChatListSlice {
 
       @Override
       public void onChatRemoved (TdlibChatList chatList, TdApi.Chat chat, int fromIndex, Tdlib.ChatChange changeInfo) {
+        ensureTdlibThreadAndList(chatList);
         fromIndex = findExistingIndex(fromIndex, chat.id);
         if (fromIndex != -1 && !filteredList.get(fromIndex).keepPosition) {
           /*Entry removedEntry =*/ filteredList.remove(fromIndex);
@@ -169,6 +205,7 @@ public class TdlibChatListSlice {
 
       @Override
       public void onChatMoved (TdlibChatList chatList, TdApi.Chat chat, int fromIndex, int toIndex, Tdlib.ChatChange changeInfo) {
+        ensureTdlibThreadAndList(chatList);
         final boolean needSort = needSort();
         if (needSort) {
           fromIndex = findExistingIndex(fromIndex, chat.id);
@@ -216,11 +253,13 @@ public class TdlibChatListSlice {
 
       @Override
       public void onChatListStateChanged (TdlibChatList chatList, int newState, int oldState) {
+        ensureTdlibThreadAndList(chatList);
         subListener.onChatListStateChanged(chatList, newState, oldState);
       }
 
       @Override
       public void onChatListItemChanged (TdlibChatList chatList, TdApi.Chat chat, int changeType) {
+        ensureTdlibThreadAndList(chatList);
         final int existingIndex = indexOfChat(chat.id);
         if (existingIndex == -1) {
           if (filter != null && filter.accept(chat)) { // chat became unfiltered
@@ -251,6 +290,7 @@ public class TdlibChatListSlice {
 
     this.subCallback = subCallback;
     final RunnableData<List<TdlibChatList.Entry>> callback = (moreChats) -> {
+      tdlib.ensureTdlibThread();
       synchronized (filteredList) {
         List<Entry> addedEntries = new ArrayList<>(moreChats.size());
         for (TdlibChatList.Entry entry : moreChats) {
@@ -261,7 +301,7 @@ public class TdlibChatListSlice {
         if (addedEntries.isEmpty()) {
           return;
         }
-        boolean haveCustomModifications = modifySlice(addedEntries, filteredList.size());
+        boolean haveCustomModifications = modifier != null && modifier.modifySlice(this, addedEntries, filteredList.size());
         filteredList.addAll(addedEntries);
         if (haveCustomModifications) {
           this.haveCustomModifications = true;
@@ -274,7 +314,7 @@ public class TdlibChatListSlice {
     sourceList.initializeList(filter, listener, callback, this.maxSize = initialChunkSize, () -> {
       loadingInitialChunk = false;
       dispatchChats(0);
-      if (onLoadInitialChunk != null) {
+      if (!isDestroyed() && onLoadInitialChunk != null) {
         onLoadInitialChunk.run();
       }
     });
@@ -282,11 +322,20 @@ public class TdlibChatListSlice {
 
   private boolean loadingInitialChunk;
 
+  private boolean isSuspended () {
+    return loadingInitialChunk || isDestroyed();
+  }
+
+  private boolean isDestroyed () {
+    return isDestroyed;
+  }
+
   @TdlibThread
   private int dispatchChats (final int changeFlags) {
-    if (loadingInitialChunk) {
+    if (isSuspended()) {
       return 0;
     }
+    tdlib.ensureTdlibThread();
     final int notifyCount = Math.max(0, Math.min(filteredList.size(), maxSize) - displayCount);
     if (notifyCount > 0) {
       final List<Entry> slice = new ArrayList<>(notifyCount);
@@ -301,7 +350,7 @@ public class TdlibChatListSlice {
   }
 
   public void loadMore (int moreCount, Runnable after) {
-    if (loadingInitialChunk)
+    if (isSuspended())
       return;
     tdlib.runOnTdlibThread(() -> {
       maxSize += moreCount;
@@ -320,10 +369,13 @@ public class TdlibChatListSlice {
     });
   }
 
-  public void unsubscribeFromUpdates (ChatListListener subListener) {
-    if (this.listener != null) {
+  private boolean isDestroyed;
+
+  @Override
+  public void performDestroy () {
+    if (!isDestroyed) {
+      isDestroyed = true;
       sourceList.unsubscribeFromUpdates(this.listener);
-      this.listener = null;
     }
   }
 
@@ -333,15 +385,14 @@ public class TdlibChatListSlice {
     return filter != null || haveCustomModifications;
   }
 
-  protected boolean modifySlice (List<Entry> slice, int currentSize) {
-    // Override in children, e.g. additional filtering and ordering
-    return false;
-  }
-
   public void bringToTop (long chatId, @Nullable Future<TdApi.Function<?>> createFunction, @Nullable Runnable after) {
     if (this.listener == null)
       throw new IllegalStateException();
     tdlib.chat(chatId, createFunction, chat -> {
+      tdlib.ensureTdlibThread();
+      if (isDestroyed()) {
+        return;
+      }
       final int fromIndex = indexOfChat(chatId);
       if (fromIndex != -1) {
         /*if (fromIndex == 0) // No need to do anything

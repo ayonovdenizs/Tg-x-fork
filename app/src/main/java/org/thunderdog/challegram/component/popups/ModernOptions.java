@@ -24,6 +24,7 @@ import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.navigation.OptionsLayout;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.telegram.TdlibUi;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
@@ -68,7 +69,7 @@ public class ModernOptions {
       desc,
       new int[]{R.id.btn_done, R.id.btn_privacyPolicy, R.id.btn_cancel},
       new String[]{Lang.getString(R.string.Continue), Lang.getString(R.string.PrivacyPolicy), Lang.getString(R.string.Cancel)},
-      new int[]{ViewController.OPTION_COLOR_BLUE, ViewController.OPTION_COLOR_NORMAL, ViewController.OPTION_COLOR_NORMAL},
+      new int[]{ViewController.OptionColor.BLUE, ViewController.OptionColor.NORMAL, ViewController.OptionColor.NORMAL},
       new int[]{R.drawable.baseline_check_circle_24, R.drawable.baseline_policy_24, R.drawable.baseline_cancel_24},
       new OptionDelegate() {
         @Override
@@ -78,17 +79,14 @@ public class ModernOptions {
 
         @Override
         public boolean onOptionItemPressed (View optionItemView, int id) {
-          switch (optionItemView.getId()) {
-            case R.id.btn_done:
-              onAgree.run();
-              break;
-            case R.id.btn_privacyPolicy:
-              onCancel.run();
-              context.tdlib().ui().openUrl(context, Lang.getStringSecure(R.string.url_privacyPolicy), new TdlibUi.UrlOpenParameters().forceInstantView());
-              break;
-            case R.id.btn_cancel:
-              onCancel.run();
-              break;
+          final int optionItemId = optionItemView.getId();
+          if (optionItemId == R.id.btn_done) {
+            onAgree.run();
+          } else if (optionItemId == R.id.btn_privacyPolicy) {
+            onCancel.run();
+            context.tdlib().ui().openUrl(context, Lang.getStringSecure(R.string.url_privacyPolicy), new TdlibUi.UrlOpenParameters().forceInstantView());
+          } else if (optionItemId == R.id.btn_cancel) {
+            onCancel.run();
           }
 
           return true;
@@ -105,10 +103,10 @@ public class ModernOptions {
     OptionsLayout optionsLayout = (OptionsLayout) layout.getChildAt(1);
 
     ImageView coloredHeader = new ImageView(layout.getContext());
-    coloredHeader.setBackgroundColor(Theme.getColor(R.id.theme_color_fillingPositive));
+    coloredHeader.setBackgroundColor(Theme.getColor(ColorId.fillingPositive));
     coloredHeader.setImageResource(icon);
     coloredHeader.setScaleType(ImageView.ScaleType.CENTER);
-    coloredHeader.setColorFilter(Paints.getColorFilter(Theme.getColor(R.id.theme_color_fillingPositiveContent)));
+    coloredHeader.setColorFilter(Paints.getColorFilter(Theme.getColor(ColorId.fillingPositiveContent)));
     coloredHeader.setLayoutParams(new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, Screen.dp(132f)));
 
     optionsLayout.addView(coloredHeader, 1);

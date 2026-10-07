@@ -23,12 +23,15 @@ import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 
 import org.thunderdog.challegram.core.Lang;
-import org.thunderdog.challegram.theme.ThemeColorId;
+import org.thunderdog.challegram.telegram.TdlibAccentColor;
+import org.thunderdog.challegram.theme.ColorId;
+import org.thunderdog.challegram.theme.PorterDuffColorId;
 import org.thunderdog.challegram.util.DrawModifier;
+import org.thunderdog.challegram.util.text.Highlight;
 
 import me.vkryl.core.ArrayUtils;
-import me.vkryl.core.StringUtils;
 import me.vkryl.core.BitwiseUtils;
+import me.vkryl.core.StringUtils;
 
 public class ListItem {
   public static final int TYPE_CUSTOM = -1;
@@ -90,7 +93,6 @@ public class ListItem {
   public static final int TYPE_CHAT_SMALL = 63;
   public static final int TYPE_CHAT_SMALL_SELECTABLE = 64;
   public static final int TYPE_EDITTEXT_WITH_PHOTO = 65;
-  public static final int TYPE_EDITTEXT_WITH_PHOTO_SMALLER = 66;
   public static final int TYPE_RADIO_SETTING_WITH_NEGATIVE_STATE = 67;
   public static final int TYPE_EDITTEXT_CHANNEL_DESCRIPTION = 68;
   public static final int TYPE_CHECKBOX_OPTION_WITH_AVATAR = 69;
@@ -158,6 +160,11 @@ public class ListItem {
 
   public static final int TYPE_USER_SMALL = 141;
 
+  public static final int TYPE_GIFT_HEADER = 142;
+
+  public static final int TYPE_HEADER_WITH_TEXT_BUTTON = 143;
+  public static final int TYPE_HEADER_WITH_CHECKBOX = 144;
+
   private static final int FLAG_SELECTED = 1;
   private static final int FLAG_BOOL_VALUE = 1 << 1;
   private static final int FLAG_USE_SELECTION_INDEX = 1 << 2;
@@ -170,20 +177,25 @@ public class ListItem {
   private final int checkId;
   private int flags;
   private long longId;
+  private String highlightValue;
+  private Highlight highlight;
 
   private @Nullable String[] sliderValues;
   private int sliderValue;
 
   private @Nullable DrawModifier drawModifier;
 
-  private String stringKey, stringValue;
-  private int textColorId, textPaddingLeft;
+  private String stringKey;
+  private CharSequence stringValue;
+  private @PorterDuffColorId int textColorId;
+  private TdlibAccentColor accentColor;
+  private int textPaddingLeft, textPaddingRight;
   private int intValue;
   private long longValue;
 
   private int firstVisiblePosition = -1, offsetInPixels;
 
-  private @ThemeColorId int radioColorId;
+  private @ColorId int radioColorId;
 
   private int height;
 
@@ -203,6 +215,10 @@ public class ListItem {
 
   public ListItem (int viewType, int id, int iconResource, int stringResource, boolean isSelected) {
     this(viewType, id, iconResource, stringResource, null, id, isSelected);
+  }
+
+  public ListItem (int viewType, int id, int iconResource, CharSequence string) {
+    this(viewType, id, iconResource, 0, string, id, false);
   }
 
   public ListItem (int viewType, int id, int iconResource, CharSequence string, boolean isSelected) {
@@ -241,7 +257,7 @@ public class ListItem {
 
   private InputFilter[] inputFilter;
 
-  public int getTextColorId (@ThemeColorId int defColorId) {
+  public int getTextColorId (@ColorId int defColorId) {
     return textColorId != 0 ? textColorId : defColorId;
   }
 
@@ -249,8 +265,17 @@ public class ListItem {
     return TGTheme.getColor(getTextColorId(defColorId));
   }*/
 
-  public ListItem setTextColorId (@ThemeColorId int colorId) {
+  public ListItem setTextColorId (@PorterDuffColorId int colorId) {
     this.textColorId = colorId;
+    return this;
+  }
+
+  public TdlibAccentColor getAccentColor () {
+    return accentColor;
+  }
+
+  public ListItem setAccentColor (TdlibAccentColor accentColor) {
+    this.accentColor = accentColor;
     return this;
   }
 
@@ -276,12 +301,12 @@ public class ListItem {
     return longValue;
   }
 
-  public ListItem setRadioColorId (@ThemeColorId int colorId) {
+  public ListItem setRadioColorId (@ColorId int colorId) {
     this.radioColorId = colorId;
     return this;
   }
 
-  @ThemeColorId
+  @ColorId
   public int getRadioColorId () {
     return radioColorId;
   }
@@ -310,6 +335,11 @@ public class ListItem {
 
   public ListItem setTextPaddingLeft (int paddingLeft) {
     this.textPaddingLeft = paddingLeft;
+    return this;
+  }
+
+  public ListItem setTextPaddingRight (int textPaddingRight) {
+    this.textPaddingRight = textPaddingRight;
     return this;
   }
 
@@ -345,12 +375,16 @@ public class ListItem {
     return textPaddingLeft;
   }
 
-  public ListItem setStringValue (String value) {
+  public int getTextPaddingRight () {
+    return textPaddingRight;
+  }
+
+  public ListItem setStringValue (CharSequence value) {
     this.stringValue = value;
     return this;
   }
 
-  public boolean setStringValueIfChanged (String value) {
+  public boolean setStringValueIfChanged (CharSequence value) {
     if (!StringUtils.equalsOrBothEmpty(this.stringValue, value)) {
       this.stringValue = value;
       return true;
@@ -359,6 +393,10 @@ public class ListItem {
   }
 
   public String getStringValue () {
+    return stringValue != null ? stringValue.toString() : null;
+  }
+
+  public CharSequence getCharSequenceValue () {
     return stringValue;
   }
 
@@ -410,6 +448,16 @@ public class ListItem {
 
   public ListItem setSelected (boolean isSelected) {
     this.flags = BitwiseUtils.setFlag(this.flags, FLAG_SELECTED, isSelected);
+    return this;
+  }
+
+  public ListItem setHighlightValue (String highlight) {
+    this.highlightValue = highlight;
+    return this;
+  }
+
+  public ListItem setHighlight (Highlight highlightValue) {
+    this.highlight = highlightValue;
     return this;
   }
 
@@ -509,6 +557,14 @@ public class ListItem {
 
   public int getStringResource () {
     return stringResource;
+  }
+
+  public String getHighlightValue () {
+    return highlightValue;
+  }
+
+  public Highlight getHighlight () {
+    return highlight;
   }
 
   private int[] stringResources;

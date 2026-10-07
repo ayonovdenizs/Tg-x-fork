@@ -29,6 +29,11 @@ public class TextColorSetOverride implements TextColorSet {
   }
 
   @Override
+  public long mediaTextComplexColor () {
+    return colorSet.mediaTextComplexColor();
+  }
+
+  @Override
   public int iconColor () {
     return colorSet.iconColor();
   }

@@ -2,6 +2,7 @@ package org.thunderdog.challegram.data;
 
 import android.graphics.Canvas;
 import android.view.Gravity;
+import android.view.View;
 
 import androidx.annotation.Dimension;
 import androidx.annotation.NonNull;
@@ -9,13 +10,13 @@ import androidx.annotation.Nullable;
 import androidx.annotation.Px;
 import androidx.core.util.ObjectsCompat;
 
-import org.drinkless.td.libcore.telegram.TdApi;
-import org.thunderdog.challegram.component.chat.MessageView;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.loader.AvatarReceiver;
 import org.thunderdog.challegram.loader.ComplexReceiver;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
+import org.thunderdog.challegram.tool.Views;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -25,8 +26,10 @@ import java.util.Set;
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.animator.FactorAnimator;
 import me.vkryl.android.animator.ListAnimator;
+import me.vkryl.android.util.SingleViewProvider;
 import me.vkryl.android.util.ViewProvider;
-import me.vkryl.td.Td;
+import me.vkryl.core.MathUtils;
+import tgx.td.Td;
 
 public final class TGAvatars implements FactorAnimator.Target {
   private static final @Dimension(unit = Dimension.DP) float DEFAULT_AVATAR_RADIUS = 10f;
@@ -51,6 +54,10 @@ public final class TGAvatars implements FactorAnimator.Target {
   public interface Callback {
     void onSizeChanged ();
     void onInvalidateMedia (TGAvatars avatars);
+  }
+
+  public TGAvatars (@NonNull Tdlib tdlib, @NonNull Callback callback, @NonNull View view) {
+    this(tdlib, callback, new SingleViewProvider(view));
   }
 
   public TGAvatars (@NonNull Tdlib tdlib, @NonNull Callback callback, @Nullable ViewProvider viewProvider) {
@@ -134,17 +141,17 @@ public final class TGAvatars implements FactorAnimator.Target {
     }
   }
 
-  public void requestFiles (ComplexReceiver complexReceiver, boolean isUpdate) {
+  public void requestFiles (ComplexReceiver complexReceiver, boolean isUpdate, boolean neverClear) {
     if (complexReceiver != null) {
       if (entries != null && !entries.isEmpty()) {
         for (AvatarEntry entry : entries) {
           AvatarReceiver receiver = complexReceiver.getAvatarReceiver(entry.id());
           receiver.requestMessageSender(tdlib, entry.senderId, AvatarReceiver.Options.NONE);
         }
-        if (!isUpdate) {
-          complexReceiver.clearReceivers((receiverType, receiver, key) -> receiverType == ComplexReceiver.RECEIVER_TYPE_AVATAR && entriesIds != null && entriesIds.contains(key));
+        if (!isUpdate && !neverClear) {
+          complexReceiver.clearReceivers((receiverType, receiver, key) -> receiverType == ComplexReceiver.ReceiverType.AVATAR && entriesIds != null && entriesIds.contains(key));
         }
-      } else {
+      } else if (!neverClear) {
         complexReceiver.clear();
       }
     }
@@ -162,13 +169,27 @@ public final class TGAvatars implements FactorAnimator.Target {
     return avatarSize + (avatarSize + Screen.dp(avatarSpacing)) * (factor - 1f);
   }
 
-  public void draw (@NonNull MessageView view, @NonNull Canvas c, int x, int cy, int gravity, float alpha) {
-    if (animator == null || animator.size() == 0 || alpha == 0f) {
-      return;
+  public float getTargetWidth (float offset) {
+    if (countAnimator == null) {
+      return 0f;
     }
+    float factor = countAnimator.getToFactor();
+    int avatarSize = Screen.dp(avatarRadius) * 2;
+    if (factor < 1f) {
+      return avatarSize * factor;
+    }
+    return avatarSize + (avatarSize + Screen.dp(avatarSpacing)) * (factor - 1f) + offset * MathUtils.clamp(countAnimator.getToFactor());
+  }
 
-    ComplexReceiver avatarsReceiver = view.getAvatarsReceiver();
-    if (avatarsReceiver == null) {
+  public float getAvatarsVisibility () {
+    if (countAnimator == null) {
+      return 0f;
+    }
+    return MathUtils.clamp(countAnimator.getFactor());
+  }
+
+  public void draw (@NonNull Canvas c, @Nullable ComplexReceiver avatarsReceiver, int x, int cy, int gravity, float alpha) {
+    if (animator == null || animator.size() == 0 || alpha == 0f || avatarsReceiver == null) {
       return;
     }
 
@@ -183,9 +204,9 @@ public final class TGAvatars implements FactorAnimator.Target {
     int saveCount;
     boolean isRightGravity = (gravity & Gravity.HORIZONTAL_GRAVITY_MASK) == Gravity.RIGHT;
     if (isRightGravity) {
-      saveCount = c.saveLayerAlpha(x - maxWidth - avatarOutline, cy - avatarRadius - avatarOutline, x + avatarOutline, cy + avatarRadius + avatarOutline, 255, Canvas.ALL_SAVE_FLAG);
+      saveCount = Views.saveLayerAlpha(c, x - maxWidth - avatarOutline, cy - avatarRadius - avatarOutline, x + avatarOutline, cy + avatarRadius + avatarOutline, 255, Canvas.ALL_SAVE_FLAG);
     } else {
-      saveCount = c.saveLayerAlpha(x - avatarOutline, cy - avatarRadius - avatarOutline, x + maxWidth + avatarOutline, cy + avatarRadius + avatarOutline, 255, Canvas.ALL_SAVE_FLAG);
+      saveCount = Views.saveLayerAlpha(c, x - avatarOutline, cy - avatarRadius - avatarOutline, x + maxWidth + avatarOutline, cy + avatarRadius + avatarOutline, 255, Canvas.ALL_SAVE_FLAG);
     }
     for (int index = animator.size() - 1; index >= 0; index--) {
       ListAnimator.Entry<AvatarEntry> entry = animator.getEntry(index);

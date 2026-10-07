@@ -10,18 +10,19 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.UiThread;
 
-import org.drinkless.td.libcore.telegram.TdApi;
-import org.thunderdog.challegram.R;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.component.dialogs.ChatView;
 import org.thunderdog.challegram.data.AvatarPlaceholder;
 import org.thunderdog.challegram.loader.gif.GifFile;
 import org.thunderdog.challegram.loader.gif.GifReceiver;
 import org.thunderdog.challegram.telegram.ChatListener;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.telegram.TdlibAccount;
 import org.thunderdog.challegram.telegram.TdlibCache;
+import org.thunderdog.challegram.telegram.TdlibManager;
+import org.thunderdog.challegram.theme.ColorId;
+import org.thunderdog.challegram.theme.PropertyId;
 import org.thunderdog.challegram.theme.Theme;
-import org.thunderdog.challegram.theme.ThemeColorId;
-import org.thunderdog.challegram.theme.ThemeProperty;
 import org.thunderdog.challegram.tool.DrawAlgorithms;
 import org.thunderdog.challegram.tool.Drawables;
 import org.thunderdog.challegram.tool.Paints;
@@ -30,6 +31,7 @@ import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.util.DrawableProvider;
+import org.thunderdog.challegram.util.text.Letters;
 import org.thunderdog.challegram.util.text.Text;
 import org.thunderdog.challegram.util.text.TextColorSets;
 
@@ -45,9 +47,10 @@ import me.vkryl.core.ColorUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.FutureBool;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.Td;
+import tgx.td.ChatId;
+import tgx.td.Td;
 
+@SuppressWarnings("unchecked")
 public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDataChangeListener, TdlibCache.UserStatusChangeListener, TdlibCache.SupergroupDataChangeListener, TdlibCache.BasicGroupDataChangeListener {
   public static class FullChatPhoto {
     public final @NonNull TdApi.ChatPhoto chatPhoto;
@@ -67,8 +70,8 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
   private boolean isDetached;
 
   private boolean displayFullSizeOnlyInFullScreen;
-  private @ThemeProperty int defaultAvatarRadiusPropertyId, forumAvatarRadiusPropertyId;
-  private @ThemeColorId int contentCutOutColorId;
+  private @PropertyId int defaultAvatarRadiusPropertyId, forumAvatarRadiusPropertyId;
+  private @ColorId int contentCutOutColorId;
   private @ScaleMode int scaleMode;
   private float primaryPlaceholderRadius;
 
@@ -92,7 +95,8 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
     Options.FORCE_ANIMATION,
     Options.FORCE_FORUM,
     Options.NO_UPDATES,
-    Options.SHOW_ONLINE
+    Options.SHOW_ONLINE,
+    Options.FORCE_IGNORE_FORUM
   }, flag = true)
   public @interface Options {
     int
@@ -101,7 +105,8 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
       FORCE_ANIMATION = 1 << 1,
       FORCE_FORUM = 1 << 2,
       NO_UPDATES = 1 << 3,
-      SHOW_ONLINE = 1 << 4
+      SHOW_ONLINE = 1 << 4,
+      FORCE_IGNORE_FORUM = 1 << 5
     ;
   }
 
@@ -128,7 +133,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
     }
   }
 
-  public void setAvatarRadiusPropertyIds (@ThemeProperty int defaultAvatarRadiusPropertyId, @ThemeProperty int forumAvatarRadiusPropertyId) {
+  public void setAvatarRadiusPropertyIds (@PropertyId int defaultAvatarRadiusPropertyId, @PropertyId int forumAvatarRadiusPropertyId) {
     if (this.defaultAvatarRadiusPropertyId != defaultAvatarRadiusPropertyId || this.forumAvatarRadiusPropertyId != forumAvatarRadiusPropertyId) {
       this.defaultAvatarRadiusPropertyId = defaultAvatarRadiusPropertyId;
       this.forumAvatarRadiusPropertyId = forumAvatarRadiusPropertyId;
@@ -136,7 +141,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
     }
   }
 
-  public void setContentCutOutColorId (@ThemeColorId int colorId) {
+  public void setContentCutOutColorId (@ColorId int colorId) {
     if (this.contentCutOutColorId != colorId) {
       this.contentCutOutColorId = colorId;
       invalidate();
@@ -174,7 +179,16 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
   // Public API
 
   public boolean requestPlaceholder (Tdlib tdlib, AvatarPlaceholder.Metadata specificPlaceholder, @Options int options) {
-    return requestData(tdlib, DataType.PLACEHOLDER, specificPlaceholder != null ? specificPlaceholder.colorId : 0, specificPlaceholder, null, null, options | Options.NO_UPDATES);
+    int nonZeroId;
+    if (specificPlaceholder != null) {
+      nonZeroId = specificPlaceholder.accentColor.getId();
+      if (nonZeroId >= 0) {
+        nonZeroId = nonZeroId + 1;
+      }
+    } else {
+      nonZeroId = 0;
+    }
+    return requestData(tdlib, DataType.PLACEHOLDER, nonZeroId, specificPlaceholder, null, null, null, options | Options.NO_UPDATES);
   }
 
   public boolean isDisplayingPlaceholder (AvatarPlaceholder.Metadata specificPlaceholder) {
@@ -184,7 +198,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
   }
 
   public boolean requestSpecific (Tdlib tdlib, FullChatPhoto specificPhoto, @Options int options) {
-    return requestData(tdlib, DataType.SPECIFIC_PHOTO, specificPhoto != null ? specificPhoto.chatPhoto.id : 0, null, specificPhoto, null, options | Options.NO_UPDATES);
+    return requestData(tdlib, DataType.SPECIFIC_PHOTO, specificPhoto != null ? specificPhoto.chatPhoto.id : 0, null, specificPhoto, null, null, options | Options.NO_UPDATES);
   }
 
   public boolean isDisplayingSpecificPhoto (TdApi.ChatPhoto specificPhoto) {
@@ -194,7 +208,11 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
   }
 
   public boolean requestSpecific (Tdlib tdlib, ImageFile specificFile, @Options int options) {
-    return requestData(tdlib, DataType.SPECIFIC_FILE, specificFile != null ? specificFile.getId() : 0, null, null, specificFile, options);
+    return requestData(tdlib, DataType.SPECIFIC_FILE, specificFile != null ? specificFile.getId() : 0, null, null, specificFile, null, options);
+  }
+
+  public boolean requestSpecific (Tdlib tdlib, TdApi.ChatPhotoInfo photoInfo, @Options int options) {
+    return requestData(tdlib, DataType.SPECIFIC_PHOTO_INFO, BitwiseUtils.mergeLong(photoInfo.small.id, photoInfo.big.id), null, null, null, photoInfo, options | Options.NO_UPDATES);
   }
 
   public void requestMessageSender (@Nullable Tdlib tdlib, @Nullable TdApi.MessageSender sender, @Options int options) {
@@ -223,7 +241,19 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
   }
 
   public boolean requestUser (Tdlib tdlib, long userId, @Options int options) {
-    return requestData(tdlib, DataType.USER, userId, null, null, null, options);
+    return requestData(tdlib, DataType.USER, userId, null, null, null, null, options);
+  }
+
+  public boolean requestAccount (Tdlib tdlib, int accountId, @Options int options) {
+    // TODO subscribe for updates
+    TdlibAccount account = TdlibManager.instanceForAccountId(accountId).account(accountId);
+    AvatarPlaceholder.Metadata placeholder = account.getAvatarPlaceholderMetadata();
+    ImageFile imageFile = account.getAvatarFile(false);
+    if (imageFile != null) {
+      return requestSpecific(tdlib, imageFile, options);
+    } else {
+      return requestPlaceholder(tdlib, placeholder, options);
+    }
   }
 
   public boolean isDisplayingUser (long userId) {
@@ -231,7 +261,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
   }
 
   public boolean requestChat (Tdlib tdlib, long chatId, @Options int options) {
-    return requestData(tdlib, DataType.CHAT, chatId, null, null, null, options);
+    return requestData(tdlib, DataType.CHAT, chatId, null, null, null, null, options);
   }
 
   public boolean isDisplayingChat (long chatId) {
@@ -264,6 +294,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
     DataType.PLACEHOLDER,
     DataType.SPECIFIC_PHOTO,
     DataType.SPECIFIC_FILE,
+    DataType.SPECIFIC_PHOTO_INFO,
     DataType.USER,
     DataType.CHAT
   })
@@ -273,8 +304,9 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
       PLACEHOLDER = 1,
       SPECIFIC_PHOTO = 2,
       SPECIFIC_FILE = 3,
-      USER = 4,
-      CHAT = 5;
+      SPECIFIC_PHOTO_INFO = 4,
+      USER = 5,
+      CHAT = 6;
   }
 
   private Tdlib tdlib;
@@ -283,6 +315,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
   private AvatarPlaceholder.Metadata specificPlaceholder;
   private FullChatPhoto specificPhoto;
   private ImageFile specificFile;
+  private TdApi.ChatPhotoInfo specificPhotoInfo;
   private @Options int options;
 
   private void subscribeToUpdates () {
@@ -290,6 +323,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
       case DataType.NONE:
       case DataType.PLACEHOLDER:
       case DataType.SPECIFIC_FILE:
+      case DataType.SPECIFIC_PHOTO_INFO:
         break;
       case DataType.SPECIFIC_PHOTO:
         if (this.additionalDataId != 0) {
@@ -332,6 +366,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
       case DataType.NONE:
       case DataType.PLACEHOLDER:
       case DataType.SPECIFIC_FILE:
+      case DataType.SPECIFIC_PHOTO_INFO:
         break;
       case DataType.SPECIFIC_PHOTO:
         if (this.additionalDataId != 0) {
@@ -363,7 +398,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
   }
 
   @UiThread
-  private boolean requestData (@Nullable Tdlib tdlib, @DataType int dataType, long dataId, @Nullable AvatarPlaceholder.Metadata specificPlaceholder, FullChatPhoto specificPhoto, ImageFile specificFile, @Options int options) {
+  private boolean requestData (@Nullable Tdlib tdlib, @DataType int dataType, long dataId, @Nullable AvatarPlaceholder.Metadata specificPlaceholder, FullChatPhoto specificPhoto, ImageFile specificFile, TdApi.ChatPhotoInfo specificPhotoInfo, @Options int options) {
     if (!UI.inUiThread())
       throw new IllegalStateException();
     if (dataType == DataType.NONE || dataId == 0 || (tdlib == null && !(dataType == DataType.SPECIFIC_FILE || dataType == DataType.PLACEHOLDER))) {
@@ -373,6 +408,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
       specificPhoto = null;
       specificPlaceholder = null;
       specificFile = null;
+      specificPhotoInfo = null;
       options = Options.NONE;
     }
     if (this.tdlib != tdlib || this.dataType != dataType || this.dataId != dataId) {
@@ -384,6 +420,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
       this.specificPlaceholder = specificPlaceholder;
       this.specificPhoto = specificPhoto;
       this.specificFile = specificFile;
+      this.specificPhotoInfo = specificPhotoInfo;
       this.options = options;
       if (dataType == DataType.CHAT) {
         switch (ChatId.getType(dataId)) {
@@ -486,17 +523,17 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
         break;
       }
       case DataType.SPECIFIC_PHOTO: {
-        setIsForum(BitwiseUtils.hasFlag(options, Options.FORCE_FORUM) || (specificPhoto != null && tdlib.chatForum(specificPhoto.chatId)), isUpdate);
+        setIsForum(!BitwiseUtils.hasFlag(options, Options.FORCE_IGNORE_FORUM) && (BitwiseUtils.hasFlag(options, Options.FORCE_FORUM) || (specificPhoto != null && tdlib.isForum(specificPhoto.chatId))), isUpdate);
         break;
       }
       case DataType.SPECIFIC_FILE:
       case DataType.PLACEHOLDER:
       case DataType.USER: {
-        setIsForum(BitwiseUtils.hasFlag(options, Options.FORCE_FORUM), isUpdate);
+        setIsForum(!BitwiseUtils.hasFlag(options, Options.FORCE_IGNORE_FORUM) && BitwiseUtils.hasFlag(options, Options.FORCE_FORUM), isUpdate);
         break;
       }
       case DataType.CHAT: {
-        setIsForum(BitwiseUtils.hasFlag(options, Options.FORCE_FORUM) || tdlib.chatForum(dataId), isUpdate);
+        setIsForum(!BitwiseUtils.hasFlag(options, Options.FORCE_IGNORE_FORUM) && (BitwiseUtils.hasFlag(options, Options.FORCE_FORUM) || tdlib.isForum(dataId)), isUpdate);
         break;
       }
     }
@@ -561,6 +598,14 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
         }
         break;
       }
+      case DataType.SPECIFIC_PHOTO_INFO: {
+        if (specificPhotoInfo != null) {
+          requestPhoto(specificPhotoInfo, null, BitwiseUtils.hasFlag(options, Options.FORCE_ANIMATION), options);
+        } else {
+          requestEmpty();
+        }
+        break;
+      }
       case DataType.PLACEHOLDER: {
         requestPlaceholder(specificPlaceholder, options);
         break;
@@ -586,7 +631,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
       }
       case DataType.CHAT: {
         TdApi.Chat chat = tdlib.chat(dataId);
-        setIsForum(tdlib.chatForum(dataId), isUpdate);
+        setIsForum(tdlib.isForum(dataId), isUpdate);
         boolean allowAnimation = BitwiseUtils.hasFlag(options, Options.FORCE_ANIMATION) || tdlib.needAvatarPreviewAnimation(dataId);
         TdApi.ChatPhotoInfo chatPhotoInfo = chat != null && !tdlib.isSelfChat(dataId) ? chat.photo : null;
         if (chatPhotoInfo == null) {
@@ -724,7 +769,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
       boolean fullSize = BitwiseUtils.hasFlag(options, Options.FULL_SIZE);
       TdApi.AnimatedChatPhoto smallAnimation = photo.smallAnimation == null ? photo.animation : photo.smallAnimation;
       TdApi.AnimatedChatPhoto fullAnimation = photo.smallAnimation != null ? photo.animation : null;
-      loadPreviewAnimation(!fullSize || fullAnimation == null ? smallAnimation : null);
+      loadPreviewAnimation(!fullSize || fullAnimation == null || displayFullSizeOnlyInFullScreen ? smallAnimation : null);
       loadFullAnimation(fullSize ? fullAnimation : null);
     } else {
       loadPreviewAnimation(null);
@@ -906,7 +951,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
   }
 
   @Override
-  public void setUpdateListener (ReceiverUpdateListener listener) {
+  public final AvatarReceiver setUpdateListener (ReceiverUpdateListener listener) {
     if (listener != null) {
       complexReceiver.setUpdateListener(
         (receiver, key) ->
@@ -915,6 +960,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
     } else {
       complexReceiver.setUpdateListener(null);
     }
+    return this;
   }
 
   @Override
@@ -979,7 +1025,7 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
 
   @Override
   public void destroy () {
-    requestData(null, DataType.NONE, 0, null, null, null, Options.NONE);
+    requestData(null, DataType.NONE, 0, null, null, null, null, Options.NONE);
   }
 
   @Override
@@ -1080,11 +1126,11 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
       float maxRadius = Math.min(getWidth(), getHeight()) / 2f;
       float defaultAvatarRadius = defaultAvatarRadiusPropertyId != 0 ? Theme.getProperty(defaultAvatarRadiusPropertyId) : -1.0f;
       if (defaultAvatarRadius == -1.0f) {
-        defaultAvatarRadius = Theme.getProperty(ThemeProperty.AVATAR_RADIUS);
+        defaultAvatarRadius = Theme.getProperty(PropertyId.AVATAR_RADIUS);
       }
       float forumAvatarRadius = forumAvatarRadiusPropertyId != 0 ? Theme.getProperty(forumAvatarRadiusPropertyId) : -1.0f;
       if (forumAvatarRadius == -1.0f) {
-        forumAvatarRadius = Theme.getProperty(ThemeProperty.AVATAR_RADIUS_FORUM);
+        forumAvatarRadius = Theme.getProperty(PropertyId.AVATAR_RADIUS_FORUM);
       }
       float radiusFactor = MathUtils.clamp(
         MathUtils.fromTo(
@@ -1132,14 +1178,13 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
         }
       }
     } else if (requestedPlaceholder != null) {
-      int toColorId = Theme.avatarSmallToBig(requestedPlaceholder.colorId);
-      int placeholderColor = toColorId != 0 ? ColorUtils.fromToArgb(
-        Theme.getColor(requestedPlaceholder.colorId),
-        Theme.getColor(toColorId),
+      int placeholderColor = ColorUtils.fromToArgb(
+        requestedPlaceholder.accentColor.getPrimaryColor(),
+        requestedPlaceholder.accentColor.getPrimaryBigColor(),
         isFullScreen.getFloatValue()
-      ) : Theme.getColor(requestedPlaceholder.colorId);
+      );
       drawPlaceholderRounded(c, displayRadius, ColorUtils.alphaColor(alpha, placeholderColor));
-      int avatarContentColorId = R.id.theme_color_avatar_content;
+      int avatarContentColorId = ColorId.avatar_content;
       float primaryContentAlpha = requestedPlaceholder.extraDrawableRes != 0 ? 1f - isFullScreen.getFloatValue() : 1f;
       if (primaryContentAlpha > 0f) {
         if (requestedPlaceholder.drawableRes != 0) {
@@ -1154,9 +1199,9 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
     }
 
     int contentCutOutColor = ColorUtils.alphaColor(alpha,
-      Theme.getColor(contentCutOutColorId != 0 ? contentCutOutColorId : R.id.theme_color_filling)
+      Theme.getColor(contentCutOutColorId != 0 ? contentCutOutColorId : ColorId.filling)
     );
-    int onlineColor = ColorUtils.alphaColor(alpha, Theme.getColor(R.id.theme_color_online));
+    int onlineColor = ColorUtils.alphaColor(alpha, Theme.getColor(ColorId.online));
     DrawAlgorithms.drawOnline(c,
       this,
       allowOnline.getFloatValue() * isOnline.getFloatValue(),
@@ -1168,18 +1213,18 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
   private Text displayingLetters;
   private float displayingLettersTextSize;
 
-  private void drawPlaceholderLetters (Canvas c, String letters, float alpha) {
-    if (StringUtils.isEmpty(letters)) {
+  private void drawPlaceholderLetters (Canvas c, Letters letters, float alpha) {
+    if (letters == null || StringUtils.isEmpty(letters.text)) {
       return;
     }
 
-    float currentRadiusPx = getWidth() / 2f;
+    float currentRadiusPx = Math.min(getWidth(), getHeight()) / 2f;
 
     float textSizeDp = (int) ((primaryPlaceholderRadius != 0 ? primaryPlaceholderRadius : Screen.px(currentRadiusPx)) * .75f);
 
-    if (displayingLetters == null || !displayingLetters.getText().equals(letters) || displayingLettersTextSize != textSizeDp) {
+    if (displayingLetters == null || !displayingLetters.getText().equals(letters.text) || displayingLettersTextSize != textSizeDp) {
       displayingLetters = new Text.Builder(
-        letters, (int) (currentRadiusPx * 3), Paints.robotoStyleProvider(textSizeDp), TextColorSets.Regular.AVATAR_CONTENT)
+        letters.text, (int) (currentRadiusPx * 3), Paints.robotoStyleProvider(textSizeDp), TextColorSets.Regular.AVATAR_CONTENT)
         .allBold()
         .singleLine()
         .build();
@@ -1187,8 +1232,12 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
     }
 
     float radiusPx = primaryPlaceholderRadius != 0f ? Screen.dp(primaryPlaceholderRadius) : currentRadiusPx;
-    float scale = radiusPx < currentRadiusPx ? radiusPx / (float) currentRadiusPx : 1f;
-    scale *= Math.min(1f, (radiusPx * 2f) / (float) (Math.max(displayingLetters.getWidth(), displayingLetters.getHeight())));
+    float scale = radiusPx < currentRadiusPx ? radiusPx / currentRadiusPx : 1f;
+    float size = Math.max(displayingLetters.getWidth(), displayingLetters.getHeight());
+    float maxSize = (float) Math.sqrt(2.0) * (currentRadiusPx - Screen.dp(1f));
+    if (size > maxSize) {
+      scale *= maxSize / size;
+    }
 
     float centerX = centerX();
     float centerY = centerY();
@@ -1208,14 +1257,18 @@ public class AvatarReceiver implements Receiver, ChatListener, TdlibCache.UserDa
   }
 
   private void drawPlaceholderDrawable (Canvas c, int resId, int colorId, float alpha) {
-    float currentRadiusPx = getWidth() / 2f;
+    float currentRadiusPx = Math.min(getWidth(), getHeight()) / 2f;
     float radiusPx = primaryPlaceholderRadius != 0f ? Screen.dp(primaryPlaceholderRadius) : currentRadiusPx;
     View view = getTargetView();
     Drawable drawable = view instanceof DrawableProvider ?
       ((DrawableProvider) view).getSparseDrawable(resId, colorId) :
       Drawables.get(resId);
     float scale = radiusPx < currentRadiusPx ? radiusPx / currentRadiusPx : 1f;
-    scale *= Math.min(1f, (radiusPx * 2f) / (float) Math.max(drawable.getMinimumWidth(), drawable.getMinimumHeight()));
+    float size = Math.max(drawable.getMinimumWidth(), drawable.getMinimumHeight()) * scale;
+    float maxSize = (float) Math.sqrt(2.0) * (currentRadiusPx - Screen.dp(1f));
+    if (size > maxSize) {
+      scale *= maxSize / size;
+    }
     float centerX = centerX();
     float centerY = centerY();
     final boolean needRestore = scale != 1f;

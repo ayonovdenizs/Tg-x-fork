@@ -19,7 +19,7 @@ import android.os.SystemClock;
 import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.emoji.Emoji;
 import org.thunderdog.challegram.telegram.Tdlib;
@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import me.vkryl.core.BitwiseUtils;
+import me.vkryl.core.StringUtils;
 
 public class GifFile {
   public static final int TYPE_GIF = 1;
@@ -47,15 +48,19 @@ public class GifFile {
   public static final int FLAG_PLAY_ONCE = 1 << 2;
   public static final int FLAG_UNIQUE = 1 << 3;
   public static final int FLAG_DECODE_LAST_FRAME = 1 << 4;
+  public static final int FLAG_HIGH_PRIORITY_FOR_DECODE = 1 << 5;
 
   @Retention(RetentionPolicy.SOURCE)
   @IntDef({
     OptimizationMode.NONE,
     OptimizationMode.STICKER_PREVIEW,
-    OptimizationMode.EMOJI
+    OptimizationMode.EMOJI,
+    OptimizationMode.EMOJI_PREVIEW
   })
   public @interface OptimizationMode {
-    int NONE = 0, STICKER_PREVIEW = 1, EMOJI = 2;
+    int NONE = 0, STICKER_PREVIEW = 1,
+      EMOJI = 2,          // for text media
+      EMOJI_PREVIEW = 3;  // for emoji keyboard
   }
 
   protected final Tdlib tdlib;
@@ -63,6 +68,7 @@ public class GifFile {
   private final int type;
   private int scaleType;
   private int flags;
+  private String playOnceId;
   private @OptimizationMode int optimizationMode;
   private long chatId, messageId;
   private boolean isLooped, isFrozen;
@@ -140,6 +146,19 @@ public class GifFile {
 
   public void setTotalFrameCount (long totalFrameCount) {
     this.totalFrameCount = totalFrameCount;
+    if (onTotalFrameCountLoadListener != null) {
+      tdlib.ui().post(() -> {
+        if (onTotalFrameCountLoadListener != null) {
+          onTotalFrameCountLoadListener.run();
+        }
+      });
+    }
+  }
+
+  private Runnable onTotalFrameCountLoadListener;
+
+  public void setOnTotalFrameCountLoadListener (Runnable onTotalFrameCountLoadListener) {
+    this.onTotalFrameCountLoadListener = onTotalFrameCountLoadListener;
   }
 
   public boolean hasFrame (long frameNo) {
@@ -190,6 +209,14 @@ public class GifFile {
     return false;
   }
 
+  public void setHighPriorityForDecode () {
+    flags = BitwiseUtils.setFlag(flags, FLAG_HIGH_PRIORITY_FOR_DECODE, true);
+  }
+
+  public boolean isHighPriorityForDecode () {
+    return BitwiseUtils.hasFlag(flags, FLAG_HIGH_PRIORITY_FOR_DECODE);
+  }
+
   public void setOptimizationMode (@OptimizationMode int optimizationMode) {
     this.optimizationMode = optimizationMode;
   }
@@ -199,7 +226,7 @@ public class GifFile {
   }
 
   public boolean isOneTimeCache () { // Delete cache file as soon as file no longer displayed
-    return optimizationMode == OptimizationMode.EMOJI || optimizationMode == OptimizationMode.STICKER_PREVIEW;
+    return optimizationMode == OptimizationMode.EMOJI || optimizationMode == OptimizationMode.STICKER_PREVIEW || optimizationMode == OptimizationMode.EMOJI_PREVIEW;
   }
 
   @Deprecated()
@@ -209,6 +236,10 @@ public class GifFile {
 
   public void setPlayOnce (boolean playOnce) {
     this.flags = BitwiseUtils.setFlag(flags, FLAG_PLAY_ONCE, playOnce);
+  }
+
+  public void setPlayOnceId (String playOnceId) {
+    this.playOnceId = playOnceId;
   }
 
   public void setPlayOnce () {
@@ -236,7 +267,23 @@ public class GifFile {
     loopListeners.add(callback);
   }
 
+
+  private int repeatsCounter = -1;
+
+  public void setRepeatCount (int count) {
+    setPlayOnce(true);
+    setLooped(false);
+    repeatsCounter = count;
+  }
+
   public void onLoop () {
+    if (repeatsCounter >= 0) {
+      repeatsCounter -= 1;
+      if (repeatsCounter > 0) {
+        setLooped(false);
+      }
+    }
+
     if (loopListeners != null) {
       tdlib.ui().post(() -> {
         if (loopListeners != null) {
@@ -335,8 +382,10 @@ public class GifFile {
     if (fitzpatrickType != 0) {
       b.append(",f").append(fitzpatrickType);
     }
-    if (isUnique() || isPlayOnce()) {
+    if (isUnique() || (isPlayOnce() && StringUtils.isEmpty(playOnceId))) {
       b.append(",o").append(creationTime);
+    } else if (isPlayOnce()) {
+      b.append(",p").append(playOnceId);
     }
     if (startMediaTimestamp != 0) {
       b.append(",t").append(startMediaTimestamp);

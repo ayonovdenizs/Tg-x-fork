@@ -36,7 +36,7 @@ import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.chat.CircleCounterBadgeView;
@@ -56,7 +56,9 @@ import org.thunderdog.challegram.navigation.HeaderView;
 import org.thunderdog.challegram.navigation.Menu;
 import org.thunderdog.challegram.navigation.MenuMoreWrap;
 import org.thunderdog.challegram.navigation.ToggleHeaderView;
+import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Intents;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
@@ -71,7 +73,8 @@ import java.util.List;
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.widget.FrameLayoutFix;
 import me.vkryl.core.lambda.CancellableRunnable;
-import me.vkryl.td.Td;
+import tgx.td.ChatId;
+import tgx.td.Td;
 
 public class MediaBottomGalleryController extends MediaBottomBaseController<MediaBottomGalleryController.Arguments> implements Media.GalleryCallback, MediaGalleryAdapter.Callback, Menu, View.OnClickListener, MediaBottomGalleryBucketAdapter.Callback, MediaViewDelegate, MediaSelectDelegate, MediaSendDelegate {
   public static class Arguments {
@@ -93,51 +96,44 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
 
   @Override
   protected int getMenuId () {
+    if (mediaLayout.isDisallowGallerySystemPicker()) {
+      return 0;
+    }
     return R.id.menu_more;
   }
 
   @Override
   public void fillMenuItems (int id, HeaderView header, LinearLayout menu) {
-    switch (id) {
-      case R.id.menu_more: {
+    if (id == R.id.menu_more) {
+      if (mediaLayout.getMode() != MediaLayout.MODE_AVATAR_PICKER) {
         header.addSearchButton(menu, this);
-        header.addMoreButton(menu, this);
-        break;
       }
-      case R.id.menu_clear: {
-        header.addClearButton(menu, this);
-        break;
-      }
+      header.addMoreButton(menu, this);
+    } else if (id == R.id.menu_clear) {
+      header.addClearButton(menu, this);
     }
   }
 
   @Override
   protected int getRecyclerBackgroundColorId () {
-    return R.id.theme_color_chatBackground;
+    return ColorId.chatBackground;
   }
 
   @Override
   public void onMenuItemPressed (int id, View view) {
-    switch (id) {
-      case R.id.menu_btn_clear: {
-        clearSearchInput();
-        break;
-      }
-      case R.id.menu_btn_search: {
-        if (true) {
-          mediaLayout.chooseInlineBot(tdlib.getPhotoSearchBotUsername());
-        } else {
-          if (galleryShown || !hasGalleryAccess) {
-            mediaLayout.getHeaderView().openSearchMode();
-            headerView = mediaLayout.getHeaderView();
-          }
+    if (id == R.id.menu_btn_clear) {
+      clearSearchInput();
+    } else if (id == R.id.menu_btn_search) {
+      if (true) {
+        mediaLayout.chooseInlineBot(tdlib.getPhotoSearchBotUsername());
+      } else {
+        if (galleryShown || !hasGalleryAccess) {
+          mediaLayout.getHeaderView().openSearchMode();
+          headerView = mediaLayout.getHeaderView();
         }
-        break;
       }
-      case R.id.menu_btn_more: {
-        mediaLayout.openGallery(false);
-        break;
-      }
+    } else if (id == R.id.menu_btn_more) {
+      mediaLayout.openGallery(false);
     }
   }
 
@@ -217,7 +213,8 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
     decoration = new GridSpacingItemDecoration(spanCount, Screen.dp(4f), true, true, true);
     GridLayoutManager manager = new RtlGridLayoutManager(context(), spanCount);
 
-    int options = MediaGalleryAdapter.OPTION_SELECTABLE | MediaGalleryAdapter.OPTION_ALWAYS_SELECTABLE;
+    int options = inSingleMediaMode() ? MediaGalleryAdapter.OPTION_NEVER_SELECTABLE :
+      MediaGalleryAdapter.OPTION_SELECTABLE | MediaGalleryAdapter.OPTION_ALWAYS_SELECTABLE;
     /*if (U.deviceHasAnyCamera(context)) {
       options |= MediaGalleryAdapter.OPTION_CAMERA_AVAILABLE;
     }*/
@@ -238,8 +235,8 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
 
     if (mediaLayout.needCameraButton()) {
       cameraBadgeView = new CircleCounterBadgeView(this, R.id.btn_camera, this::onCameraButtonClick, null);
-      cameraBadgeView.init(R.drawable.deproko_baseline_camera_26, 48f, 4f, R.id.theme_color_circleButtonChat, R.id.theme_color_circleButtonChatIcon);
-      cameraBadgeView.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(CircleCounterBadgeView.BUTTON_WRAPPER_WIDTH), Screen.dp(74f), Gravity.BOTTOM | Gravity.RIGHT, 0, 0, Screen.dp(12), Screen.dp(12 + 60)));
+      cameraBadgeView.init(R.drawable.deproko_baseline_camera_26, 48f, 4f, ColorId.circleButtonChat, ColorId.circleButtonChatIcon);
+      cameraBadgeView.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(CircleCounterBadgeView.BUTTON_WRAPPER_WIDTH), Screen.dp(74f), Gravity.BOTTOM | Gravity.RIGHT, 0, 0, Screen.dp(12), Screen.dp(12) + mediaLayout.getCameraButtonOffset()));
       contentView.addView(cameraBadgeView);
     }
 
@@ -248,7 +245,12 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
 
   @Override
   public boolean allowSpoiler () {
-    return true;
+    return !ChatId.isSecret(getOutputChatId());
+  }
+
+  @Override
+  public boolean allowShowCaptionAboveMedia () {
+    return !ChatId.isSecret(getOutputChatId());
   }
 
   @Override
@@ -261,6 +263,12 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
   }
 
   private void onCameraButtonClick (View v) {
+    if (mediaLayout.getMode() == MediaLayout.MODE_AVATAR_PICKER) {
+      mediaLayout.hidePopupAndOpenCamera(new ViewController.CameraOpenOptions().anchor(v)
+        .setAvatarPickerMode(mediaLayout.getAvatarPickerMode()).setMediaEditorDelegates(this, this, this));
+      return;
+    }
+
     MessagesController c = mediaLayout.parentMessageController();
     if (c == null) return;
 
@@ -423,7 +431,7 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
   }
 
   @Override
-  public boolean showExitWarning (boolean isExitingSelection) {
+  public boolean showExitWarning (boolean isExitingSelection, boolean commit) {
     List<ImageFile> selectedImages = adapter.getSelectedPhotosAndVideosAsList(false);
     if (selectedImages != null && !selectedImages.isEmpty()) {
       boolean hasChanges = false, hasCaptions = false;
@@ -434,11 +442,13 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
           hasCaptions = true;
       }
       if (hasChanges || hasCaptions) {
-        int res = hasChanges && hasCaptions ? R.string.DiscardMediaHint3 : hasCaptions ? R.string.DiscardMediaHint2 : R.string.DiscardMediaHint;
-        int res2 = hasChanges && hasCaptions ? R.string.DiscardMediaMsg3 : hasCaptions ? R.string.DiscardMediaMsg2 : R.string.DiscardMediaMsg;
-        showUnsavedChangesPromptBeforeLeaving(Lang.getMarkdownString(this, res), Lang.getString(res2), () -> {
-          mediaLayout.onConfirmExit(isExitingSelection);
-        });
+        if (commit) {
+          int res = hasChanges && hasCaptions ? R.string.DiscardMediaHint3 : hasCaptions ? R.string.DiscardMediaHint2 : R.string.DiscardMediaHint;
+          int res2 = hasChanges && hasCaptions ? R.string.DiscardMediaMsg3 : hasCaptions ? R.string.DiscardMediaMsg2 : R.string.DiscardMediaMsg;
+          showUnsavedChangesPromptBeforeLeaving(Lang.getMarkdownString(this, res), Lang.getString(res2), () -> {
+            mediaLayout.onConfirmExit(isExitingSelection);
+          });
+        }
         return true;
       }
     }
@@ -538,7 +548,7 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
   }
 
   @Override
-  public boolean sendSelectedItems (View view, ArrayList<ImageFile> images, TdApi.MessageSendOptions options, boolean disableMarkdown, boolean asFiles, boolean hasSpoiler) {
+  public boolean sendSelectedItems (View view, ArrayList<ImageFile> images, TdApi.MessageSendOptions options, boolean disableMarkdown, boolean asFiles, boolean showCaptionAboveMedia, boolean hasSpoiler) {
     // TODO delete other
     return mediaLayout.sendPhotosOrVideos(view, images, false, options, disableMarkdown, asFiles, true);
   }
@@ -559,6 +569,16 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
   }
 
   @Override
+  public boolean showCaptionAboveMedia () {
+    return mediaLayout.showCaptionAboveMedia();
+  }
+
+  @Override
+  public void onShowCaptionAboveMediaStateChanged (boolean showCaptionAboveMedia) {
+    mediaLayout.setShowCaptionAboveMedia(showCaptionAboveMedia);
+  }
+
+  @Override
   protected void onCancelMultiSelection () {
     adapter.clearSelectedImages((GridLayoutManager) getLayoutManager());
   }
@@ -573,16 +593,21 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
       Log.i("stack.set complete for %d files in %dms", stack.getCurrentSize(), SystemClock.elapsedRealtime() - time);
 
       MediaViewController controller = new MediaViewController(context, tdlib);
-      controller.setArguments(
+      controller.setArguments(mediaLayout.prepareMediaViewArguments(
         MediaViewController.Args.fromGallery(this, this, this, this, stack, mediaLayout.areScheduledOnly())
-          .setReceiverChatId(mediaLayout.getTargetChatId())
-      );
+          .setReceiverChatId(mediaLayout.getTargetChatId()).setAvatarPickerMode(mediaLayout.getAvatarPickerMode())
+          .setFlag(MediaViewController.Args.FLAG_DISALLOW_MULTI_SELECTION_MEDIA, mediaLayout.inSingleMediaMode())
+      ));
       controller.open();
 
       return true;
     }
 
     return false;
+  }
+
+  private boolean inSingleMediaMode () {
+    return mediaLayout.inSingleMediaMode();
   }
 
   @Override
@@ -592,6 +617,9 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
 
   @Override
   public void setMediaItemSelected (int index, MediaItem item, boolean isSelected) {
+    if (mediaLayout.getMode() == MediaLayout.MODE_AVATAR_PICKER) {
+      return;
+    }
     adapter.setSelected(item.getSourceGalleryFile(), isSelected);
   }
 
@@ -773,12 +801,22 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
   }
 
   @Override
-  public boolean onBackPressed (boolean fromTop) {
+  public boolean performOnBackPressed (boolean fromTop, boolean commit) {
     if (sectionsFactor != 0f) {
-      closeSections();
+      if (commit) {
+        closeSections();
+      }
       return true;
     }
-    return super.onBackPressed(fromTop);
+    return super.performOnBackPressed(fromTop, commit);
+  }
+
+  @Override
+  protected void onBottomInsetChanged (int extraBottomInset, int extraBottomInsetWithoutIme, boolean isImeInset) {
+    super.onBottomInsetChanged(extraBottomInset, extraBottomInsetWithoutIme, isImeInset);
+    if (cameraBadgeView != null) {
+      Views.setBottomMargin(cameraBadgeView, Screen.dp(12) + mediaLayout.getCameraButtonOffset() + extraBottomInsetWithoutIme);
+    }
   }
 
   private @Nullable Media.GalleryBucket currentBucket;
@@ -834,7 +872,7 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
 
   @Override
   protected void onSearchInputChanged (String query) {
-    searchImages(query.trim().toLowerCase());
+    searchImages(query.trim());
   }
 
   private String lastQuery = "";
@@ -881,27 +919,18 @@ public class MediaBottomGalleryController extends MediaBottomBaseController<Medi
       awaitingQuery = q;
       if (!bingUserLoading) {
         bingUserLoading = true;
-        tdlib.client().send(new TdApi.SearchPublicChat(tdlib.getPhotoSearchBotUsername()), object -> {
-          switch (object.getConstructor()) {
-            case TdApi.Chat.CONSTRUCTOR: {
-              TdApi.User user = tdlib.chatUser((TdApi.Chat) object);
-              if (user != null) {
-                bingUserId = user.id;
-                UI.post(() -> {
-                  if (lastQuery.equals(awaitingQuery)) {
-                    searchInternal(awaitingQuery);
-                  }
-                });
-              }
-              break;
-            }
-            case TdApi.Error.CONSTRUCTOR: {
-              UI.showError(object);
-              break;
-            }
-            default: {
-              Log.unexpectedTdlibResponse(object, TdApi.SearchPublicChat.class, TdApi.Chat.class);
-              break;
+        tdlib.send(new TdApi.SearchPublicChat(tdlib.getPhotoSearchBotUsername()), (publicChat, error) -> {
+          if (error != null) {
+            UI.showError(error);
+          } else {
+            TdApi.User user = tdlib.chatUser(publicChat);
+            if (user != null) {
+              bingUserId = user.id;
+              UI.post(() -> {
+                if (lastQuery.equals(awaitingQuery)) {
+                  searchInternal(awaitingQuery);
+                }
+              });
             }
           }
         });

@@ -33,7 +33,7 @@ import org.thunderdog.challegram.util.text.TextMedia;
 
 import me.vkryl.core.lambda.Destroyable;
 
-class CustomEmojiSpanImpl extends EmojiSpanImpl implements TdlibEmojiManager.Watcher, Destroyable {
+public class CustomEmojiSpanImpl extends EmojiSpanImpl implements TdlibEmojiManager.Watcher, PreserveCustomEmojiFilter.RecoverableSpan, Destroyable {
   private final CustomEmojiSurfaceProvider surfaceProvider;
   private final Tdlib tdlib;
   private final long customEmojiId;
@@ -83,8 +83,8 @@ class CustomEmojiSpanImpl extends EmojiSpanImpl implements TdlibEmojiManager.Wat
     if (this.customEmoji == customEmoji)
       return;
     this.customEmoji = customEmoji;
-    if (mSize != -1) {
-      prepareCustomEmoji(mSize);
+    if (size.isInitialized()) {
+      prepareCustomEmoji(size.getSize());
       surfaceProvider.onInvalidateSpan(this, customEmoji != null && customEmoji.isNotFound());
     }
   }
@@ -98,16 +98,19 @@ class CustomEmojiSpanImpl extends EmojiSpanImpl implements TdlibEmojiManager.Wat
     });
   }
 
+  private int emojiAlpha = 255;
+
   @Override
-  protected void drawEmoji (Canvas c, float centerX, float centerY, int emojiSize) {
+  protected void drawEmoji (Canvas c, float centerX, float centerY, int emojiSize, int alpha) {
     int left = (int) (centerX - emojiSize / 2f);
     int top = (int) (centerY - emojiSize / 2f);
     int right = left + emojiSize;
     int bottom = top + emojiSize;
     drawRect.set(left, top, right, bottom);
+    emojiAlpha = alpha;
     prepareCustomEmoji(emojiSize);
     if (customEmoji != null && customEmoji.isNotFound()) {
-      super.drawEmoji(c, drawRect.centerX(), drawRect.centerY(), mSize);
+      super.drawEmoji(c, drawRect.centerX(), drawRect.centerY(), size.getSize(), alpha);
     }
   }
 
@@ -127,11 +130,14 @@ class CustomEmojiSpanImpl extends EmojiSpanImpl implements TdlibEmojiManager.Wat
     } else {
       restoreToCount = -1;
     }
+    ComplexReceiver receiver = surfaceProvider.provideComplexReceiverForSpan(this);
+    boolean haveDuplicateMedia = surfaceProvider.getDuplicateMediaItemCount(this, mediaItem) > 1;
     mediaItem.draw(c,
       drawRect,
-      surfaceProvider.provideComplexReceiverForSpan(this),
+      emojiAlpha,
+      receiver,
       attachedToMediaKey,
-      surfaceProvider.getDuplicateMediaItemCount(this, mediaItem) > 1
+      haveDuplicateMedia
     );
     if (needScale) {
       Views.restore(c, restoreToCount);
@@ -146,8 +152,8 @@ class CustomEmojiSpanImpl extends EmojiSpanImpl implements TdlibEmojiManager.Wat
     if (drawRect.left == drawRect.right || drawRect.top == drawRect.bottom) {
       return; // force invalidate()?
     }
-    if (customEmojiSize != mSize && mSize > 0) {
-      prepareCustomEmoji(mSize);
+    if (customEmojiSize != size.getSize() && size.getSize() > 0) {
+      prepareCustomEmoji(size.getSize());
     }
     int paddingLeft = view.getPaddingLeft();
     int paddingTop = view.getPaddingTop();

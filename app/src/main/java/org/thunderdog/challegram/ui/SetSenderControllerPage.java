@@ -10,7 +10,7 @@ import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.dialogs.SearchManager;
 import org.thunderdog.challegram.core.Lang;
@@ -19,6 +19,7 @@ import org.thunderdog.challegram.navigation.BackHeaderButton;
 import org.thunderdog.challegram.navigation.HeaderView;
 import org.thunderdog.challegram.navigation.Menu;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.ColorState;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Keyboard;
@@ -32,7 +33,7 @@ import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
 
 import me.vkryl.core.StringUtils;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
 public class SetSenderControllerPage extends BottomSheetViewController.BottomSheetBaseRecyclerViewController<SetSenderController.Args> implements
         BottomSheetViewController.BottomSheetBaseControllerPage, Menu {
@@ -65,7 +66,12 @@ public class SetSenderControllerPage extends BottomSheetViewController.BottomShe
     headerView.setWillNotDraw(false);
     addThemeInvalidateListener(headerView);
     return headerView;
-  };
+  }
+
+  @Override
+  public boolean supportsBottomInset () {
+    return true;
+  }
 
   @Override
   protected void onCreateView (Context context, CustomRecyclerView recyclerView) {
@@ -80,7 +86,7 @@ public class SetSenderControllerPage extends BottomSheetViewController.BottomShe
       @Override
       public void getItemOffsets (@NonNull Rect outRect, @NonNull View view, @NonNull RecyclerView parent, @NonNull RecyclerView.State state) {
         super.getItemOffsets(outRect, view, parent, state);
-        int bottom = view instanceof EmptySmartView && getKeyboardState() ? -Keyboard.getSize(Keyboard.getSize()): 0;
+        int bottom = view instanceof EmptySmartView && getKeyboardState() ? -Keyboard.getSize(Keyboard.getSize()) : 0;
         outRect.set(0, bottom, 0, 0);
       }
     });
@@ -206,14 +212,14 @@ public class SetSenderControllerPage extends BottomSheetViewController.BottomShe
           DoubleTextWrapper d = new DoubleTextWrapper(tdlib, Td.getSenderUserId(sender.sender), true);
           d.setChatMessageSender(sender);
           d.setForcedSubtitle(Lang.getString(R.string.YourAccount));
-          d.setDrawFakeCheckbox(Td.getSenderId(currentSender) == Td.getSenderId(sender.sender));
+          d.setIsChecked(Td.getSenderId(currentSender) == Td.getSenderId(sender.sender), /* animated */ false);
           return d;
         } else {
           TdApi.Chat chat = tdlib.chat(Td.getSenderId(sender.sender));
           if (chat != null) {
             DoubleTextWrapper d = new DoubleTextWrapper(tdlib, chat);
             d.setChatMessageSender(sender);
-            d.setDrawFakeCheckbox(Td.getSenderId(currentSender) == Td.getSenderId(sender.sender));
+            d.setIsChecked(Td.getSenderId(currentSender) == Td.getSenderId(sender.sender), /* animated */ false);
             if (Td.getSenderId(sender.sender) == this.chat.id) {
               d.setForcedSubtitle(Lang.getString(R.string.AnonymousAdmin));
             } else {
@@ -263,15 +269,10 @@ public class SetSenderControllerPage extends BottomSheetViewController.BottomShe
 
   @Override
   public void onMenuItemPressed (int id, View view) {
-    switch (id) {
-      case R.id.menu_btn_search: {
-        openSearchMode();
-        break;
-      }
-      case R.id.menu_btn_clear: {
-        clearSearchInput();
-        break;
-      }
+    if (id == R.id.menu_btn_search) {
+      openSearchMode();
+    } else if (id == R.id.menu_btn_clear) {
+      clearSearchInput();
     }
   }
 
@@ -351,9 +352,14 @@ public class SetSenderControllerPage extends BottomSheetViewController.BottomShe
   }
 
   @Override
-  public boolean onBackPressed (boolean fromTop) {
+  public boolean performOnBackPressed (boolean fromTop, boolean commit) {
+    if (super.performOnBackPressed(fromTop, commit)) {
+      return true;
+    }
     if (inSearchMode()) {
-      closeSearchMode(null);
+      if (commit) {
+        closeSearchMode(null);
+      }
       return true;
     }
     return false;
@@ -379,17 +385,17 @@ public class SetSenderControllerPage extends BottomSheetViewController.BottomShe
 
   @Override
   protected int getHeaderTextColorId () {
-    return R.id.theme_color_text;
+    return ColorId.text;
   }
 
   @Override
   protected int getHeaderColorId () {
-    return R.id.theme_color_filling;
+    return ColorId.filling;
   }
 
   @Override
   protected int getHeaderIconColorId () {
-    return R.id.theme_color_icon;
+    return ColorId.icon;
   }
 
   @Override

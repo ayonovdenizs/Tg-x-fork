@@ -24,24 +24,27 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.net.Uri;
 import android.os.Build;
-import android.provider.Settings;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.os.CancellationSignal;
 import androidx.core.view.GestureDetectorCompat;
+import androidx.media3.common.PlaybackException;
 
 import com.davemorrissey.labs.subscaleview.ImageSource;
 import com.davemorrissey.labs.subscaleview.SubsamplingScaleImageView;
 
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
+import org.thunderdog.challegram.Log;
+import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
@@ -56,10 +59,12 @@ import org.thunderdog.challegram.loader.Receiver;
 import org.thunderdog.challegram.loader.gif.GifActor;
 import org.thunderdog.challegram.loader.gif.GifReceiver;
 import org.thunderdog.challegram.mediaview.crop.CropState;
+import org.thunderdog.challegram.mediaview.crop.CroppedLayout;
 import org.thunderdog.challegram.mediaview.data.MediaItem;
 import org.thunderdog.challegram.mediaview.gl.EGLEditorView;
 import org.thunderdog.challegram.player.TGPlayerController;
 import org.thunderdog.challegram.support.ViewSupport;
+import org.thunderdog.challegram.telegram.TdlibDelegate;
 import org.thunderdog.challegram.telegram.TdlibFilesManager;
 import org.thunderdog.challegram.telegram.TdlibManager;
 import org.thunderdog.challegram.tool.DrawAlgorithms;
@@ -79,7 +84,7 @@ import me.vkryl.core.ColorUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.lambda.CancellableRunnable;
 import me.vkryl.core.lambda.Destroyable;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
 public class MediaCellView extends ViewGroup implements
   MediaCellViewDetector.Callback,
@@ -130,7 +135,7 @@ public class MediaCellView extends ViewGroup implements
     }
 
     @Override
-    protected void onDraw (Canvas c) {
+    protected void onDraw (@NonNull Canvas c) {
       if (receiver != null && imageAlpha != 0f && revealFactor != 0f) {
         c.drawRect(receiver.getLeft(), receiver.getTop(), receiver.getRight(), receiver.getBottom(), Paints.fillingPaint(ColorUtils.color((int) (255f * backgroundAlpha), forceTouchMode ? 0xffffffff : 0)));
       }
@@ -332,10 +337,8 @@ public class MediaCellView extends ViewGroup implements
 
       CropState cropState = media.getCropState();
       if (cropState != null && !cropState.isRegionEmpty()) {
-        double width = cropState.getRight() - cropState.getLeft();
-        double height = cropState.getBottom() - cropState.getTop();
-        imageWidthCropped = (int) ((double) imageWidth * width);
-        imageHeightCropped = (int) ((double) imageHeight * height);
+        imageWidthCropped = (int) ((double) imageWidth * cropState.getRegionWidth());
+        imageHeightCropped = (int) ((double) imageHeight * cropState.getRegionHeight());
       } else {
         imageWidthCropped = imageWidth;
         imageHeightCropped = imageHeight;
@@ -467,7 +470,7 @@ public class MediaCellView extends ViewGroup implements
     int imageWidth, imageHeight;
     int imageWidthCropped, imageHeightCropped;
     if (media != null) {
-      if (media.isVideo() && media.isRotated()) {
+      if (media.isVideoRenderRotated(true)) {
         imageWidth = media.getHeight();
         imageHeight = media.getWidth();
       } else {
@@ -513,10 +516,10 @@ public class MediaCellView extends ViewGroup implements
       } else {
         LayoutParams params = view.getLayoutParams();
         if (params != null && params.width == LayoutParams.WRAP_CONTENT && params.height == LayoutParams.WRAP_CONTENT) {
-          int w, h;
-          w = imageWidth;
-          h = imageHeight;
-          measureChild(view, MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY));
+          measureChild(view,
+            MeasureSpec.makeMeasureSpec(imageWidth, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(imageHeight, MeasureSpec.EXACTLY)
+          );
         } else {
           measureChild(view, widthMeasureSpec, heightMeasureSpec);
         }
@@ -541,36 +544,74 @@ public class MediaCellView extends ViewGroup implements
       final int availWidth = fullWidth - paddingHorizontal * 2;
       final int availHeight = fullHeight - offsetBottom;
       int imageWidth, imageHeight;
+      int imageWidthOriginal, imageHeightOriginal;
       if (media != null) {
-        if (media.isVideo() && media.isRotated()) {
-          imageWidth = media.getHeight();
-          imageHeight = media.getWidth();
-        } else {
-          imageWidth = media.getWidth();
-          imageHeight = media.getHeight();
+        imageWidthOriginal = media.getWidth(false);
+        imageHeightOriginal = media.getHeight(false);
+
+        imageWidth = imageWidthOriginal;
+        imageHeight = imageHeightOriginal;
+        CropState cropState = media.getCropState();
+        if (cropState != null) {
+          if (U.isRotated(cropState.getRotateBy())) {
+            int temp = imageWidth;
+            imageWidth = imageHeight;
+            imageHeight = temp;
+          }
+          if (!cropState.isRegionEmpty()) {
+            imageWidth *= cropState.getRegionWidth();
+            imageHeight *= cropState.getRegionHeight();
+          }
         }
       } else {
         imageWidth = imageHeight = 0;
+        imageWidthOriginal = imageHeightOriginal = 0;
       }
       if (imageWidth == 0 || imageHeight == 0) {
         imageWidth = availWidth;
         imageHeight = availHeight;
+        imageWidthOriginal = availWidth;
+        imageHeightOriginal = availHeight;
       } else {
         float ratio;
 
-        ratio = Math.min((float) availWidth / (float) imageWidth, (float) availHeight / (float) imageHeight);
+        ratio = Math.min(
+          (float) availWidth / (float) imageWidth,
+          (float) availHeight / (float) imageHeight
+        );
         imageWidth *= ratio;
         imageHeight *= ratio;
+
+        ratio = Math.min(
+          (float) availWidth / (float) imageWidthOriginal,
+          (float) availHeight / (float) imageHeightOriginal
+        );
+        imageWidthOriginal *= ratio;
+        imageHeightOriginal *= ratio;
       }
 
       for (int i = 0; i < childCount; i++) {
         View view = getChildAt(i);
         LayoutParams params = view.getLayoutParams();
+        Log.i("videoCell #%d: %dx%d, original: %dx%d, crop: %s, rotated: %s", i + 1,
+          imageWidth, imageHeight,
+          imageWidthOriginal, imageHeightOriginal,
+          media != null ? media.getCropState() : null,
+          media != null ? media.isVideoRenderRotated(false) : null
+        );
         if (params != null && params.width == LayoutParams.WRAP_CONTENT && params.height == LayoutParams.WRAP_CONTENT) {
-          int w, h;
-          w = imageWidth;
-          h = imageHeight;
-          measureChild(view, MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY));
+          if (view instanceof CroppedLayout) {
+            ((CroppedLayout) view).onPreMeasure(
+              getMeasuredWidth(),
+              getMeasuredHeight(),
+              imageWidth, imageHeight,
+              imageWidthOriginal, imageHeightOriginal
+            );
+          }
+          view.measure(
+            MeasureSpec.makeMeasureSpec(imageWidth, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(imageHeight, MeasureSpec.EXACTLY)
+          );
         } else {
           measureChild(view, widthMeasureSpec, heightMeasureSpec);
         }
@@ -586,35 +627,17 @@ public class MediaCellView extends ViewGroup implements
 
       final int availWidth = fullWidth - paddingHorizontal * 2;
       final int availHeight = fullHeight - offsetBottom;
-      int imageWidth, imageHeight;
-      if (media != null) {
-        if (media.isVideo() && media.isRotated()) {
-          imageWidth = media.getHeight();
-          imageHeight = media.getWidth();
-        } else {
-          imageWidth = media.getWidth();
-          imageHeight = media.getHeight();
-        }
-      } else {
-        imageWidth = imageHeight = 0;
-      }
-      if (imageWidth == 0 || imageHeight == 0) {
-        imageWidth = availWidth;
-        imageHeight = availHeight;
-      } else {
-        final float ratio = Math.min((float) availWidth / (float) imageWidth, (float) availHeight / (float) imageHeight);
-        imageWidth *= ratio;
-        imageHeight *= ratio;
-      }
-      int centerX = paddingHorizontal + availWidth / 2;
-      int centerY = availHeight / 2;
-      int exactLeft = centerX - imageWidth / 2;
-      int exactRight = centerX + imageWidth / 2;
-      int exactTop = centerY - imageHeight / 2;
-      int exactBottom = centerY + imageHeight / 2;
+      final int centerX = paddingHorizontal + availWidth / 2;
+      final int centerY = availHeight / 2;
 
       for (int i = 0; i < childCount; i++) {
         View view = getChildAt(i);
+        int imageWidth = view.getMeasuredWidth();
+        int imageHeight = view.getMeasuredHeight();
+        int exactLeft = centerX - imageWidth / 2;
+        int exactRight = centerX + imageWidth / 2;
+        int exactTop = centerY - imageHeight / 2;
+        int exactBottom = centerY + imageHeight / 2;
         ViewGroup.LayoutParams params = view.getLayoutParams();
         if (params != null && params.width == LayoutParams.WRAP_CONTENT && params.height == LayoutParams.WRAP_CONTENT && !forceTouchMode) {
           view.layout(exactLeft, exactTop, exactRight, exactBottom);
@@ -649,11 +672,27 @@ public class MediaCellView extends ViewGroup implements
     destroyed = true;
   }
 
+  public void checkCrop () {
+    if (media != null && media.isVideo()) {
+      if (playerView != null) {
+        playerView.checkCrop();
+      }
+      requestLayout();
+      invalidate();
+    }
+  }
+
   public void checkTrim (boolean invalidateFrame) {
     if (playerView != null && playerView.checkTrim()) {
       timeNow = timeTotal = -1;
     }
-    if (invalidateFrame && media != null && media.isVideo() && !media.isGifType()) {
+    if (invalidateFrame) {
+      invalidateVideoFrame();
+    }
+  }
+
+  public void invalidateVideoFrame () {
+    if (media != null && media.isVideo() && !media.isGifType()) {
       final MediaItem mediaItem = media;
       ImageFile file = mediaItem.getTargetImageFile(true);
       ImageLoader.instance().loadFile(file, (success, result) -> UI.post(() -> {
@@ -983,7 +1022,7 @@ public class MediaCellView extends ViewGroup implements
         bottom = centerY + height / 2 + clipVertical;
       }
 
-      int radius = imageWidth != imageHeight ? 0 : (int) ((float) thumb.getRadius() * (1f - MathUtils.clamp(revealFactor)));
+      int radius = imageWidth != imageHeight ? 0 : (int) (thumb.getRadius() * (1f - MathUtils.clamp(revealFactor)));
       setImageRadius(radius, revealFactor);
 
       if (!receiver.setBounds(left, top, right, bottom) && forceLayout) {
@@ -1110,7 +1149,7 @@ public class MediaCellView extends ViewGroup implements
       Client.ResultHandler fileHandler = remoteFileObject -> {
         if (remoteFileObject.getConstructor() == TdApi.File.CONSTRUCTOR) {
           TdApi.File tdlibFile = (TdApi.File) remoteFileObject;
-          imageFile.tdlib().client().send(new TdApi.DownloadFile(tdlibFile.id, 32, 0, 0, true), result -> {
+          imageFile.tdlib().client().send(new TdApi.DownloadFile(tdlibFile.id, TdlibFilesManager.PRIORITY_IMAGE, 0, 0, true), result -> {
             if (result.getConstructor() == TdApi.File.CONSTRUCTOR) {
               TdApi.File downloadedFile = (TdApi.File) result;
               Td.copyTo(downloadedFile, tdlibFile);
@@ -1446,7 +1485,7 @@ public class MediaCellView extends ViewGroup implements
     int viewWidth = getMeasuredWidth();
     int viewHeight = getMeasuredHeight();
     float scaleWidth, scaleHeight;
-    if (media.isVideo() && media.isRotated()) {
+    if (media.isVideoRenderRotated(true)) {
       if (viewWidth < viewHeight) {
         scaleWidth = imageHeight;
         scaleHeight = imageWidth;
@@ -1499,7 +1538,7 @@ public class MediaCellView extends ViewGroup implements
 
   public void checkPostRotation (boolean animated) {
     if (media != null) {
-      setPostRotation(media.isVideo() ? media.getPostRotation() : 0, animated);
+      setPostRotation(media.isVideo() ? media.getPostRotate() : 0, animated);
     }
   }
 
@@ -1559,7 +1598,8 @@ public class MediaCellView extends ViewGroup implements
     if (canTouch(isDown)) {
       detector.onTouchEvent(ev);
     }
-    return interceptAnyEvents || super.onInterceptTouchEvent(ev);
+    boolean res = super.onInterceptTouchEvent(ev);
+    return res || interceptAnyEvents;
   }
 
   public boolean canZoom () {
@@ -1869,6 +1909,9 @@ public class MediaCellView extends ViewGroup implements
   // Video
 
   public interface Callback {
+    default boolean onDisplayError (@NonNull PlaybackException error, @Nullable MediaItem item) {
+      return false;
+    }
     void onCanSeekChanged (MediaItem item, boolean canSeek);
     void onSeekProgress (MediaItem item, long now, long duration, float progress);
     void onPlayPause (MediaItem item, boolean isPlaying);
@@ -1915,7 +1958,7 @@ public class MediaCellView extends ViewGroup implements
     if (this.hideStaticView != hideStaticView) {
       this.hideStaticView = hideStaticView;
       if (hideStaticView) {
-        prepareVideo();
+        prepareVideo(media != null && media.getSourceGalleryFile() != null);
         if (playerView != null) {
           playerView.setVideo(media);
         }
@@ -1992,14 +2035,17 @@ public class MediaCellView extends ViewGroup implements
     }
   }
 
-  private void prepareVideo () {
+  private void prepareVideo (boolean enableCropping) {
     if (playerView == null) {
       videoParentView = new CellVideoView(getContext());
       videoParentView.setLayoutParams(FrameLayoutFix.newParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
-      playerView = new VideoPlayerView(getContext(), videoParentView, 0);
-      playerView.setInForceTouch();
+      playerView = new VideoPlayerView(getContext(), videoParentView, 0, enableCropping, (error, item) -> {
+        if (callback == null || !callback.onDisplayError(error, item)) {
+          boolean isGif = item != null && item.isGifType();
+          UI.showToast(U.isUnsupportedFormat(error) ? (isGif ? R.string.GifPlaybackUnsupported : R.string.VideoPlaybackUnsupported) : (isGif ? R.string.GifPlaybackError : R.string.VideoPlaybackError), Toast.LENGTH_SHORT);
+        }
+      });
       playerView.forceLooping(forceTouchMode);
-      playerView.setBoundCell(this);
       playerView.setCallback(this);
       hideStaticView = true;
       addView(videoParentView, 0);
@@ -2028,7 +2074,21 @@ public class MediaCellView extends ViewGroup implements
         }
         media.setComponentsAlpha(1f);
       } else {
-        U.openFile(UI.getContext(getContext()).navigation().getCurrentStackItem(), media.getSourceVideo());
+        TdlibDelegate context = UI.getContext(getContext()).navigation().getCurrentStackItem();
+        TdApi.Video video = media.getSourceVideo();
+        if (video != null) {
+          U.openFile(context, video);
+          return;
+        }
+        TdApi.Animation animation = media.getSourceAnimation();
+        if (animation != null) {
+          U.openFile(context, animation);
+          return;
+        }
+        TdApi.Document document = media.getSourceDocument();
+        if (document != null) {
+          U.openFile(context, document.fileName, new File(document.document.local.path), document.mimeType, 0);
+        }
       }
     }
   }
@@ -2037,6 +2097,10 @@ public class MediaCellView extends ViewGroup implements
     if (playerView != null && media != null && media.isVideo() && (media.isLoaded() || Config.VIDEO_CLOUD_PLAYBACK_AVAILABLE) && media.getType() == MediaItem.TYPE_GALLERY_VIDEO) {
       playerView.setMuted(media.needMute());
     }
+  }
+
+  public void stopPlaying () {
+    resetVideoState();
   }
 
   public void pauseIfPlaying () {

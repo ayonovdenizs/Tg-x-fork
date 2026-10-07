@@ -14,9 +14,9 @@
  */
 package org.thunderdog.challegram.theme;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.ColorStateList;
+import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.graphics.drawable.ColorDrawable;
@@ -33,101 +33,107 @@ import androidx.annotation.ColorInt;
 import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 
 import org.thunderdog.challegram.FillingDrawable;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.core.Lang;
+import org.thunderdog.challegram.loader.Receiver;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.support.CircleDrawable;
 import org.thunderdog.challegram.support.RectDrawable;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.tool.Drawables;
+import org.thunderdog.challegram.tool.Paints;
+import org.thunderdog.challegram.tool.PorterDuffPaint;
 import org.thunderdog.challegram.tool.Screen;
-import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.util.CustomStateListDrawable;
 
 import java.util.ArrayList;
 
 import me.vkryl.android.ViewUtils;
+import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.ColorUtils;
 
 public class Theme {
   public static final int EXPORT_FLAG_INCLUDE_DEFAULT_VALUES = 1;
   public static final int EXPORT_FLAG_JAVA = 1 << 1;
 
+  @SuppressWarnings("DiscouragedApi")
   public static int getIdResourceIdentifier (@NonNull String key) {
     try {
-      Context context = UI.getAppContext();
+      Context context = AppContext.get();
       return context.getResources().getIdentifier(key, "id", context.getPackageName());
     } catch (Throwable ignored) {
       return 0;
     }
   }
 
-  public static int avatarBigToSmall (@ThemeColorId int avatarColorId) {
+  public static int avatarBigToSmall (@ColorId int avatarColorId) {
     switch (avatarColorId) {
-      case R.id.theme_color_avatarInactive_big:
-        return R.id.theme_color_avatarInactive;
-      case R.id.theme_color_avatarReplies_big:
-        return R.id.theme_color_avatarReplies;
-      case R.id.theme_color_avatarPink_big:
-        return R.id.theme_color_avatarPink;
-      case R.id.theme_color_avatarRed_big:
-        return R.id.theme_color_avatarRed;
-      case R.id.theme_color_avatarOrange_big:
-        return R.id.theme_color_avatarOrange;
-      case R.id.theme_color_avatarYellow_big:
-        return R.id.theme_color_avatarYellow;
-      case R.id.theme_color_avatarGreen_big:
-        return R.id.theme_color_avatarGreen;
-      case R.id.theme_color_avatarBlue_big:
-        return R.id.theme_color_avatarBlue;
-      case R.id.theme_color_avatarCyan_big:
-        return  R.id.theme_color_avatarCyan;
-      case R.id.theme_color_avatarViolet_big:
-        return R.id.theme_color_avatarViolet;
+      case ColorId.avatarInactive_big:
+        return ColorId.avatarInactive;
+      case ColorId.avatarReplies_big:
+        return ColorId.avatarReplies;
+      case ColorId.avatarPink_big:
+        return ColorId.avatarPink;
+      case ColorId.avatarRed_big:
+        return ColorId.avatarRed;
+      case ColorId.avatarOrange_big:
+        return ColorId.avatarOrange;
+      case ColorId.avatarYellow_big:
+        return ColorId.avatarYellow;
+      case ColorId.avatarGreen_big:
+        return ColorId.avatarGreen;
+      case ColorId.avatarBlue_big:
+        return ColorId.avatarBlue;
+      case ColorId.avatarCyan_big:
+        return  ColorId.avatarCyan;
+      case ColorId.avatarViolet_big:
+        return ColorId.avatarViolet;
     }
     return 0;
   }
   
-  public static int avatarSmallToBig (@ThemeColorId int avatarColorId) {
+  public static int avatarSmallToBig (@ColorId int avatarColorId) {
     switch (avatarColorId) {
-      case R.id.theme_color_avatarInactive:
-        return R.id.theme_color_avatarInactive_big;
-      case R.id.theme_color_avatarSavedMessages:
-        return R.id.theme_color_avatarSavedMessages_big;
-      case R.id.theme_color_avatarReplies:
-        return R.id.theme_color_avatarReplies_big;
-      case R.id.theme_color_avatarPink:
-        return R.id.theme_color_avatarPink_big;
-      case R.id.theme_color_avatarRed:
-        return R.id.theme_color_avatarRed_big;
-      case R.id.theme_color_avatarOrange:
-        return R.id.theme_color_avatarOrange_big;
-      case R.id.theme_color_avatarYellow:
-        return R.id.theme_color_avatarYellow_big;
-      case R.id.theme_color_avatarGreen:
-        return R.id.theme_color_avatarGreen_big;
-      case R.id.theme_color_avatarBlue:
-        return R.id.theme_color_avatarBlue_big;
-      case R.id.theme_color_avatarCyan:
-        return  R.id.theme_color_avatarCyan_big;
-      case R.id.theme_color_avatarViolet:
-        return R.id.theme_color_avatarViolet_big;
+      case ColorId.avatarInactive:
+        return ColorId.avatarInactive_big;
+      case ColorId.avatarSavedMessages:
+        return ColorId.avatarSavedMessages_big;
+      case ColorId.avatarReplies:
+        return ColorId.avatarReplies_big;
+      case ColorId.avatarPink:
+        return ColorId.avatarPink_big;
+      case ColorId.avatarRed:
+        return ColorId.avatarRed_big;
+      case ColorId.avatarOrange:
+        return ColorId.avatarOrange_big;
+      case ColorId.avatarYellow:
+        return ColorId.avatarYellow_big;
+      case ColorId.avatarGreen:
+        return ColorId.avatarGreen_big;
+      case ColorId.avatarBlue:
+        return ColorId.avatarBlue_big;
+      case ColorId.avatarCyan:
+        return  ColorId.avatarCyan_big;
+      case ColorId.avatarViolet:
+        return ColorId.avatarViolet_big;
     }
     return 0;
   }
 
   public static float getSubtitleAlpha () {
-    return getProperty(ThemeProperty.SUBTITLE_ALPHA);
+    return getProperty(PropertyId.SUBTITLE_ALPHA);
   }
 
-  public static String getColorName (@ThemeColorId int colorId) {
+  public static String getColorName (@ColorId int colorId) {
     return ThemeColors.getName(colorId);
   }
 
-  public static String getPropertyName (@ThemeProperty int propertyId) {
+  public static String getPropertyName (@PropertyId int propertyId) {
     return ThemeProperties.getName(propertyId);
   }
 
@@ -146,7 +152,7 @@ public class Theme {
   }
 
   public static int getWallpaperIdentifier (@ThemeId int themeId) {
-    int usageId = (int) getProperty(ThemeProperty.WALLPAPER_USAGE_ID, themeId);
+    int usageId = (int) getProperty(PropertyId.WALLPAPER_USAGE_ID, themeId);
     if (usageId == 2) {
       return getCustomWallpaperIdentifier(themeId);
     }
@@ -154,7 +160,7 @@ public class Theme {
   }
 
   public static int getWallpaperIdentifier () {
-    int usageId = (int) getProperty(ThemeProperty.WALLPAPER_USAGE_ID);
+    int usageId = (int) getProperty(PropertyId.WALLPAPER_USAGE_ID);
     if (usageId == 2) {
       return getCustomWallpaperIdentifier(ThemeManager.instance().currentThemeId());
     }
@@ -162,7 +168,7 @@ public class Theme {
   }
 
   public static int getWallpaperIdentifier (ThemeDelegate theme) {
-    final int usageId = (int) theme.getProperty(ThemeProperty.WALLPAPER_USAGE_ID);
+    final int usageId = (int) theme.getProperty(PropertyId.WALLPAPER_USAGE_ID);
     if (usageId == 2) {
       return getCustomWallpaperIdentifier(theme.getId());
     }
@@ -182,30 +188,30 @@ public class Theme {
 
   // Base
 
-  public static float getProperty (final @ThemeProperty int propertyId) {
+  public static float getProperty (final @PropertyId int propertyId) {
     return ThemeManager.instance().currentTheme().getProperty(propertyId);
   }
 
   @ColorInt
-  public static int getColor (final @ThemeColorId int colorId) {
+  public static int getColor (final @ColorId int colorId) {
     return ThemeManager.instance().currentTheme().getColor(colorId);
   }
 
-  public static int getColorFast (final @ThemeColorId int colorId) {
+  public static int getColorFast (final @ColorId int colorId) {
     ThemeDelegate currentTheme = ThemeManager.currentThemeFast();
     if (currentTheme != null)
       return currentTheme.getColor(colorId);
     return ThemeSet.getColor(ThemeId.BLUE, colorId);
   }
 
-  public static float getProperty (final @ThemeProperty int propertyId, final @ThemeId int themeId) {
+  public static float getProperty (final @PropertyId int propertyId, final @ThemeId int themeId) {
     ThemeDelegate currentTheme = ThemeManager.currentThemeFast();
     if (currentTheme != null && themeId == currentTheme.getId())
       return currentTheme.getProperty(propertyId);
     return ThemeSet.getProperty(themeId, propertyId);
   }
 
-  public static float getProperty (final Settings prefs, final @ThemeProperty int propertyId, final @ThemeId int themeId) {
+  public static float getProperty (final Settings prefs, final @PropertyId int propertyId, final @ThemeId int themeId) {
     ThemeDelegate currentTheme = ThemeManager.currentThemeFast();
     if (currentTheme != null && themeId == currentTheme.getId())
       return currentTheme.getProperty(propertyId);
@@ -213,7 +219,7 @@ public class Theme {
   }
 
   @ColorInt
-  public static int getColor (final @ThemeColorId int colorId, final @ThemeId int themeId) {
+  public static int getColor (final @ColorId int colorId, final @ThemeId int themeId) {
     ThemeDelegate currentTheme = ThemeManager.currentThemeFast();
     if (currentTheme != null && themeId == currentTheme.getId())
       return currentTheme.getColor(colorId);
@@ -221,7 +227,7 @@ public class Theme {
   }
 
   //
-  @ThemeColorId
+  @ColorId
   public static int getCircleColorId (@ThemeId int themeId) {
     switch (themeId) {
       case ThemeId.NONE:
@@ -229,27 +235,27 @@ public class Theme {
       case ThemeId.CUSTOM:
         break;
       case ThemeId.BLACK_WHITE:
-        return R.id.theme_color_themeBlackWhite;
+        return ColorId.themeBlackWhite;
       case ThemeId.BLUE:
-        return R.id.theme_color_themeBlue;
+        return ColorId.themeBlue;
       case ThemeId.CLASSIC:
-        return R.id.theme_color_themeClassic;
+        return ColorId.themeClassic;
       case ThemeId.CYAN:
-        return R.id.theme_color_themeCyan;
+        return ColorId.themeCyan;
       case ThemeId.GREEN:
-        return R.id.theme_color_themeGreen;
+        return ColorId.themeGreen;
       case ThemeId.NIGHT_BLACK:
-        return R.id.theme_color_themeNightBlack;
+        return ColorId.themeNightBlack;
       case ThemeId.NIGHT_BLUE:
-        return R.id.theme_color_themeNightBlue;
+        return ColorId.themeNightBlue;
       case ThemeId.ORANGE:
-        return R.id.theme_color_themeOrange;
+        return ColorId.themeOrange;
       case ThemeId.PINK:
-        return R.id.theme_color_themePink;
+        return ColorId.themePink;
       case ThemeId.RED:
-        return R.id.theme_color_themeRed;
+        return ColorId.themeRed;
       case ThemeId.WHITE_BLACK:
-        return R.id.theme_color_themeWhiteBlack;
+        return ColorId.themeWhiteBlack;
     }
     throw newError(themeId, "themeId");
   }
@@ -264,71 +270,71 @@ public class Theme {
   // == Solid colors ==
 
   public static int backgroundColor () {
-    return getColor(R.id.theme_color_background);
+    return getColor(ColorId.background);
   }
 
   public static int fillingColor () {
-    return getColor(R.id.theme_color_filling);
+    return getColor(ColorId.filling);
   }
 
   public static int pressedFillingColor () {
-    return getColor(R.id.theme_color_fillingPressed);
+    return getColor(ColorId.fillingPressed);
   }
 
   /*public static int pressedFillingTransparentColor () {
-    return getColor(R.id.theme_color_fillingPressedTransparent);
+    return getColor(ColorId.fillingPressedTransparent);
   }*/
 
   public static int fillingTextSelectionColor () {
-    return getColor(R.id.theme_color_textSelectionHighlight);
+    return getColor(ColorId.textSelectionHighlight);
   }
 
   public static int separatorColor () {
-    return getColor(R.id.theme_color_separator);
+    return getColor(ColorId.separator);
   }
 
   public static int progressColor () {
-    return getColor(R.id.theme_color_progress);
+    return getColor(ColorId.progress);
   }
 
   public static int placeholderColor () {
-    return getColor(R.id.theme_color_placeholder);
+    return getColor(ColorId.placeholder);
   }
 
   public static int headerPlaceholderColor () {
-    return getColor(R.id.theme_color_placeholder);
+    return getColor(ColorId.placeholder);
   }
 
   public static int overlayColor () {
-    return getColor(R.id.theme_color_previewBackground);
+    return getColor(ColorId.previewBackground);
   }
 
   public static int iconColor () {
-    return getColor(R.id.theme_color_icon);
+    return getColor(ColorId.icon);
   }
 
   public static int backgroundIconColor () {
-    return getColor(R.id.theme_color_background_icon);
+    return getColor(ColorId.background_icon);
   }
 
   public static int iconLightColor () {
-    return getColor(R.id.theme_color_iconLight);
+    return getColor(ColorId.iconLight);
   }
 
   public static int ticksColor () {
-    return getColor(R.id.theme_color_ticks);
+    return getColor(ColorId.ticks);
   }
 
   public static int chatSendButtonColor () {
-    return getColor(R.id.theme_color_chatSendButton);
+    return getColor(ColorId.chatSendButton);
   }
 
   public static int checkFillingColor () {
-    return getColor(R.id.theme_color_checkActive);
+    return getColor(ColorId.checkActive);
   }
 
   public static int checkCheckColor () {
-    return getColor(R.id.theme_color_checkContent);
+    return getColor(ColorId.checkContent);
   }
 
   public static float HEADER_TEXT_DECENT_ALPHA = .6f;
@@ -336,39 +342,39 @@ public class Theme {
   // Text
 
   public static int textAccentColor () {
-    return getColor(R.id.theme_color_text);
+    return getColor(ColorId.text);
   }
 
   public static int textDecentColor () {
-    return getColor(R.id.theme_color_textLight);
+    return getColor(ColorId.textLight);
   }
 
   public static int textAccent2Color () {
-    return getColor(R.id.theme_color_background_text);
+    return getColor(ColorId.background_text);
   }
 
   public static int textDecent2Color () {
-    return getColor(R.id.theme_color_background_textLight);
+    return getColor(ColorId.background_textLight);
   }
 
   public static int textSecureColor () {
-    return getColor(R.id.theme_color_textSecure);
+    return getColor(ColorId.textSecure);
   }
 
   public static int textRedColor () {
-    return getColor(R.id.theme_color_textNegative);
+    return getColor(ColorId.textNegative);
   }
 
   public static int textPlaceholderColor () {
-    return getColor(R.id.theme_color_textPlaceholder);
+    return getColor(ColorId.textPlaceholder);
   }
 
   public static int textLinkColor () {
-    return getColor(R.id.theme_color_textLink);
+    return getColor(ColorId.textLink);
   }
 
   public static int textLinkHighlightColor () {
-    return getColor(R.id.theme_color_textLinkPressHighlight);
+    return getColor(ColorId.textLinkPressHighlight);
   }
 
   // == Navigation colors ==
@@ -376,11 +382,11 @@ public class Theme {
   // Header
 
   public static int headerColor () {
-    return getColor(R.id.theme_color_headerBackground);
+    return getColor(ColorId.headerBackground);
   }
 
   public static int headerTextColor () {
-    return getColor(R.id.theme_color_headerText);
+    return getColor(ColorId.headerText);
   }
 
   public static int headerSubtitleColor () {
@@ -388,145 +394,145 @@ public class Theme {
   }
 
   public static int passcodeSubtitleColor () {
-    return ColorUtils.alphaColor(Theme.getSubtitleAlpha(), Theme.getColor(R.id.theme_color_passcodeText));
+    return ColorUtils.alphaColor(Theme.getSubtitleAlpha(), Theme.getColor(ColorId.passcodeText));
   }
 
   public static int headerBackColor () {
-    return getColor(R.id.theme_color_headerIcon);
+    return getColor(ColorId.headerIcon);
   }
 
   // Common header stuff
 
   public static int headerFloatBackgroundColor () {
-    return getColor(R.id.theme_color_overlayFilling);
+    return getColor(ColorId.overlayFilling);
   }
 
   public static int headerFloatIconColor () {
-    return getColor(R.id.theme_color_headerButtonIcon);
+    return getColor(ColorId.headerButtonIcon);
   }
 
   public static int chatSelectionColor () {
-    return getColor(R.id.theme_color_messageSelection);
+    return getColor(ColorId.messageSelection);
   }
 
   /*public static int chatMessageSelectionColor () {
-    return getColor(R.id.theme_color_chatMessageSelection);
+    return getColor(ColorId.chatMessageSelection);
   }*/
 
   public static int chatAuthorColor (boolean isOutBubble) {
-    return getColor(R.id.theme_color_messageAuthor);
+    return getColor(ColorId.messageAuthor);
   }
 
   public static int chatAuthorDeadColor () {
-    return getColor(R.id.theme_color_nameInactive);
+    return getColor(ColorId.nameInactive);
   }
 
   public static int chatUnreadSeparatorBackgroundColor () {
-    return getColor(R.id.theme_color_unread);
+    return getColor(ColorId.unread);
   }
 
   public static int chatUnreadSeparatorTextColor () {
-    return getColor(R.id.theme_color_unreadText);
+    return getColor(ColorId.unreadText);
   }
 
   public static int chatQuickActionColor () {
-    return getColor(R.id.theme_color_messageSwipeBackground);
+    return getColor(ColorId.messageSwipeBackground);
   }
 
   public static int chatQuickActionTextColor () {
-    return getColor(R.id.theme_color_messageSwipeContent);
+    return getColor(ColorId.messageSwipeContent);
   }
 
   public static int chatVerticalLineColor () {
-    return getColor(R.id.theme_color_messageVerticalLine);
+    return getColor(ColorId.messageVerticalLine);
   }
 
   public static int badgeColor () {
-    return getColor(R.id.theme_color_badge);
+    return getColor(ColorId.badge);
   }
 
   public static int badgeTextColor () {
-    return getColor(R.id.theme_color_badgeText);
+    return getColor(ColorId.badgeText);
   }
 
   public static int badgeMutedColor () {
-    return getColor(R.id.theme_color_badgeMuted);
+    return getColor(ColorId.badgeMuted);
   }
 
   public static int badgeFailedColor () {
-    return getColor(R.id.theme_color_badgeFailed);
+    return getColor(ColorId.badgeFailed);
   }
 
   public static int chatListMuteColor () {
-    return getColor(R.id.theme_color_chatListMute);
+    return getColor(ColorId.chatListMute);
   }
 
   public static int chatListActionColor () {
-    return getColor(R.id.theme_color_chatListAction);
+    return getColor(ColorId.chatListAction);
   }
 
   public static int togglerActiveColor () {
-    return getColor(R.id.theme_color_togglerActive);
+    return getColor(ColorId.togglerActive);
   }
 
   public static int togglerInactiveColor () {
-    return getColor(R.id.theme_color_togglerInactive);
+    return getColor(ColorId.togglerInactive);
   }
 
   public static int togglerActiveFillingColor () {
-    return getColor(R.id.theme_color_togglerActiveBackground);
+    return getColor(ColorId.togglerActiveBackground);
   }
 
   public static int togglerInactiveFillingColor () {
-    return getColor(R.id.theme_color_togglerInactiveBackground);
+    return getColor(ColorId.togglerInactiveBackground);
   }
 
   public static int radioOutlineColor () {
-    return getColor(R.id.theme_color_controlInactive);
+    return getColor(ColorId.controlInactive);
   }
 
   public static int radioCheckColor () {
-    return getColor(R.id.theme_color_controlContent);
+    return getColor(ColorId.controlContent);
   }
 
   public static int radioFillingColor () {
-    return getColor(R.id.theme_color_controlActive);
+    return getColor(ColorId.controlActive);
   }
 
   public static int profileSelectionColor () {
-    return getColor(R.id.theme_color_profileSectionActive);
+    return getColor(ColorId.profileSectionActive);
   }
 
   public static int profileSelectionTextColor () {
-    return getColor(R.id.theme_color_profileSectionActiveContent);
+    return getColor(ColorId.profileSectionActiveContent);
   }
 
   public static int inlineTextColor (boolean isOutBubble) {
-    return getColor(isOutBubble ? R.id.theme_color_bubbleOut_inlineText : R.id.theme_color_inlineText);
+    return getColor(isOutBubble ? ColorId.bubbleOut_inlineText : ColorId.inlineText);
   }
 
   public static int inlineTextActiveColor () {
-    return getColor(R.id.theme_color_inlineContentActive);
+    return getColor(ColorId.inlineContentActive);
   }
 
   public static int inlineOutlineColor (boolean isOutBubble) {
-    return getColor(isOutBubble ? R.id.theme_color_bubbleOut_inlineOutline : R.id.theme_color_inlineOutline);
+    return getColor(isOutBubble ? ColorId.bubbleOut_inlineOutline : ColorId.inlineOutline);
   }
 
   public static int inlineIconColor (boolean isOutBubble) {
-    return getColor(isOutBubble ? R.id.theme_color_bubbleOut_inlineIcon : R.id.theme_color_inlineIcon);
+    return getColor(isOutBubble ? ColorId.bubbleOut_inlineIcon : ColorId.inlineIcon);
   }
 
   public static int introDotActiveColor () {
-    return getColor(R.id.theme_color_introSectionActive);
+    return getColor(ColorId.introSectionActive);
   }
 
   public static int introDotInactiveColor () {
-    return getColor(R.id.theme_color_introSection);
+    return getColor(ColorId.introSection);
   }
 
   public static int textInputActiveColor () {
-    return getColor(R.id.theme_color_inputActive);
+    return getColor(ColorId.inputActive);
   }
 
   // == Background drawables ==
@@ -534,10 +540,10 @@ public class Theme {
   // Filled drawable
 
   public static Drawable fillingSelector () {
-    return fillingSelector(R.id.theme_color_filling);
+    return fillingSelector(ColorId.filling);
   }
 
-  public static Drawable fillingSelector (@ThemeColorId int backgroundColorId) {
+  public static Drawable fillingSelector (@ColorId int backgroundColorId) {
     if (Build.VERSION.SDK_INT > Build.VERSION_CODES.LOLLIPOP) {
       return fillingRippleSelector(backgroundColorId);
     } else {
@@ -545,8 +551,24 @@ public class Theme {
     }
   }
 
-  @TargetApi(Build.VERSION_CODES.LOLLIPOP)
-  private static Drawable fillingRippleSelector (@ThemeColorId int backgroundColorId) {
+  public static Drawable fillingSelector (@ColorId int backgroundColorId, float radius) {
+    if (Build.VERSION.SDK_INT > Build.VERSION_CODES.LOLLIPOP) {
+      return fillingRippleSelector(backgroundColorId, radius);
+    } else {
+      return fillingSimpleSelector(backgroundColorId, radius);
+    }
+  }
+
+  @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+  private static Drawable fillingRippleSelector (@ColorId int backgroundColorId, float radius) {
+    return new android.graphics.drawable.RippleDrawable(
+      new ColorStateList(new int[][] {StateSet.WILD_CARD}, new int[] {RIPPLE_COLOR}),
+      new FillingDrawable(backgroundColorId, radius), createRoundRectDrawable(0xFFFFFFFF, radius)
+    );
+  }
+
+  @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+  private static Drawable fillingRippleSelector (@ColorId int backgroundColorId) {
     return new android.graphics.drawable.RippleDrawable(
       new ColorStateList(new int[][] {StateSet.WILD_CARD}, new int[] {RIPPLE_COLOR}),
       new FillingDrawable(backgroundColorId),
@@ -564,7 +586,7 @@ public class Theme {
         int count = ripple.getNumberOfLayers();
         for (int i = 0; i < count; i++) {
           Drawable d = ripple.getDrawable(i);
-          if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != R.id.theme_color_fillingPressed) {
+          if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != ColorId.fillingPressed) {
             return ((FillingDrawable) d).getColorId();
           }
         }
@@ -574,7 +596,7 @@ public class Theme {
     if (drawable instanceof CustomStateListDrawable) {
       ArrayList<Drawable> drawables = ((CustomStateListDrawable) drawable).getDrawableList();
       for (Drawable d : drawables) {
-        if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != R.id.theme_color_fillingPressed) {
+        if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != ColorId.fillingPressed) {
           return ((FillingDrawable) d).getColorId();
         }
       }
@@ -596,7 +618,7 @@ public class Theme {
         int count = ripple.getNumberOfLayers();
         for (int i = 0; i < count; i++) {
           Drawable d = ripple.getDrawable(i);
-          if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != R.id.theme_color_fillingPressed) {
+          if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != ColorId.fillingPressed) {
             return (FillingDrawable) d;
           }
         }
@@ -606,7 +628,7 @@ public class Theme {
     if (drawable instanceof CustomStateListDrawable) {
       ArrayList<Drawable> drawables = ((CustomStateListDrawable) drawable).getDrawableList();
       for (Drawable d : drawables) {
-        if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != R.id.theme_color_fillingPressed) {
+        if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != ColorId.fillingPressed) {
           return (FillingDrawable) d;
         }
       }
@@ -618,7 +640,7 @@ public class Theme {
     return null;
   }
 
-  public static void changeBackgroundColorId (View view, @ThemeColorId int backgroundColorId) {
+  public static void changeBackgroundColorId (View view, @ColorId int backgroundColorId) {
     if (view == null)
       return;
     Drawable drawable = view.getBackground();
@@ -628,7 +650,7 @@ public class Theme {
         int count = ripple.getNumberOfLayers();
         for (int i = 0; i < count; i++) {
           Drawable d = ripple.getDrawable(i);
-          if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != R.id.theme_color_fillingPressed) {
+          if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != ColorId.fillingPressed) {
             ((FillingDrawable) d).setColorId(backgroundColorId);
           }
         }
@@ -638,7 +660,7 @@ public class Theme {
     if (drawable instanceof CustomStateListDrawable) {
       ArrayList<Drawable> drawables = ((CustomStateListDrawable) drawable).getDrawableList();
       for (Drawable d : drawables) {
-        if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != R.id.theme_color_fillingPressed) {
+        if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != ColorId.fillingPressed) {
           ((FillingDrawable) d).setColorId(backgroundColorId);
         }
       }
@@ -660,7 +682,7 @@ public class Theme {
         int count = ripple.getNumberOfLayers();
         for (int i = 0; i < count; i++) {
           Drawable d = ripple.getDrawable(i);
-          if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != R.id.theme_color_fillingPressed) {
+          if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != ColorId.fillingPressed) {
             ((FillingDrawable) d).setForcedTheme(forcedTheme);
           }
         }
@@ -670,7 +692,7 @@ public class Theme {
     if (drawable instanceof CustomStateListDrawable) {
       ArrayList<Drawable> drawables = ((CustomStateListDrawable) drawable).getDrawableList();
       for (Drawable d : drawables) {
-        if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != R.id.theme_color_fillingPressed) {
+        if (d instanceof FillingDrawable && ((FillingDrawable) d).getColorId() != ColorId.fillingPressed) {
           ((FillingDrawable) d).setForcedTheme(forcedTheme);
         }
       }
@@ -682,7 +704,7 @@ public class Theme {
     }
   }
 
-  public static void changeSelector (View view, boolean forceLegacy, @ThemeColorId int backgroundColorId) {
+  public static void changeSelector (View view, boolean forceLegacy, @ColorId int backgroundColorId) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       if (view == null)
         return;
@@ -702,14 +724,18 @@ public class Theme {
   public static final int RIPPLE_COLOR = 0x50a0a0a0;
   public static final int HALF_RIPPLE_COLOR = 0x28a0a0a0;
 
-  private static Drawable fillingSimpleSelector (@ThemeColorId int backgroundColorId) {
-    return Drawables.getColorSelector(new FillingDrawable(backgroundColorId), new FillingDrawable(R.id.theme_color_fillingPressed));
+  private static Drawable fillingSimpleSelector (@ColorId int backgroundColorId) {
+    return fillingSimpleSelector(backgroundColorId, 0);
+  }
+
+  private static Drawable fillingSimpleSelector (@ColorId int backgroundColorId, float radius) {
+    return Drawables.getColorSelector(new FillingDrawable(backgroundColorId, radius), new FillingDrawable(ColorId.fillingPressed, radius));
   }
 
   // Transparent drawable
 
-  public static Drawable filteredDrawable (@DrawableRes int res, @ThemeColorId int colorId, @Nullable ViewController<?> themeProvider) {
-    Drawable drawable = ViewSupport.getDrawableFilter(UI.getAppContext(), res, new PorterDuffColorFilter(Theme.getColor(colorId), PorterDuff.Mode.MULTIPLY));
+  public static Drawable filteredDrawable (@DrawableRes int res, @ColorId int colorId, @Nullable ViewController<?> themeProvider) {
+    Drawable drawable = ViewSupport.getDrawableFilter(AppContext.get(), res, new PorterDuffColorFilter(Theme.getColor(colorId), PorterDuff.Mode.MULTIPLY));
     if (themeProvider != null) {
       themeProvider.addThemeSpecialFilterListener(drawable, colorId);
     }
@@ -728,6 +754,18 @@ public class Theme {
     return transparentSelector(0x40a0a0a0);
   }
 
+  public static Drawable transparentRoundSelector (float radius) {
+    return transparentSelector(RIPPLE_COLOR, radius);
+  }
+
+  private static Drawable transparentSelector (final int color, final float radius) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+      return transparentRippleSelector(color, radius);
+    } else {
+      return transparentSimpleSelector(color, radius);
+    }
+  }
+
   private static Drawable transparentSelector (final int color) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       return transparentRippleSelector(color);
@@ -736,7 +774,7 @@ public class Theme {
     }
   }
 
-  @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+  @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
   private static Drawable transparentRippleSelector (final int color) {
     return new android.graphics.drawable.RippleDrawable(
       new ColorStateList(new int[][] {StateSet.WILD_CARD}, new int[] {color}),
@@ -745,8 +783,21 @@ public class Theme {
     );
   }
 
+  @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+  private static Drawable transparentRippleSelector (final int color, final float radius) {
+    return new android.graphics.drawable.RippleDrawable(
+      new ColorStateList(new int[][] {StateSet.WILD_CARD}, new int[] {color}),
+      null,
+      createRoundRectDrawable(color, radius)
+    );
+  }
+
   private static Drawable transparentSimpleSelector (final int color) {
     return Drawables.getColorSelector(null, new ColorDrawable(color));
+  }
+
+  private static Drawable transparentSimpleSelector (final int color, final float radius) {
+    return Drawables.getColorSelector(null, createRoundRectDrawable(color, radius));
   }
 
   // Custom selector
@@ -759,7 +810,7 @@ public class Theme {
     }
   }
 
-  @TargetApi(Build.VERSION_CODES.LOLLIPOP)
+  @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
   private static Drawable customRippleSelector (Drawable drawable) {
     return new android.graphics.drawable.RippleDrawable(
       new ColorStateList(new int[][] {StateSet.WILD_CARD}, new int[] {0x40a0a0a0}),
@@ -774,7 +825,7 @@ public class Theme {
 
   // Circle selector
 
-  public static Drawable circleSelector (final float size, final @ThemeColorId int colorId) {
+  public static Drawable circleSelector (final float size, final @ColorId int colorId) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       return circleRippleSelector(size, colorId);
     } else {
@@ -782,8 +833,8 @@ public class Theme {
     }
   }
 
-  @TargetApi(Build.VERSION_CODES.LOLLIPOP)
-  private static Drawable circleRippleSelector (final float size, final @ThemeColorId int colorId) {
+  @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+  private static Drawable circleRippleSelector (final float size, final @ColorId int colorId) {
     return new android.graphics.drawable.RippleDrawable(
       new ColorStateList(new int[][] {StateSet.WILD_CARD}, new int[] {0x40a0a0a0}),
       new CircleDrawable(colorId, size, false),
@@ -791,13 +842,13 @@ public class Theme {
     );
   }
 
-  private static Drawable circleSimpleSelector (final float size, final @ThemeColorId int colorId) {
+  private static Drawable circleSimpleSelector (final float size, final @ColorId int colorId) {
     return Drawables.getColorSelector(new CircleDrawable(colorId, size, false), new CircleDrawable(colorId, size, true));
   }
 
   // Circle selector
 
-  public static Drawable rectSelector (final float size, final float padding, final @ThemeColorId int color) {
+  public static Drawable rectSelector (final float size, final float padding, final @ColorId int color) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       return rectRippleSelector(size, padding, color);
     } else {
@@ -805,8 +856,8 @@ public class Theme {
     }
   }
 
-  @TargetApi(Build.VERSION_CODES.LOLLIPOP)
-  private static Drawable rectRippleSelector (final float size, final float padding, final @ThemeColorId int colorId) {
+  @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+  private static Drawable rectRippleSelector (final float size, final float padding, final @ColorId int colorId) {
     return new android.graphics.drawable.RippleDrawable(
       new ColorStateList(new int[][] {StateSet.WILD_CARD}, new int[] {0x60a0a0a0}),
       new RectDrawable(colorId, size, padding, false),
@@ -814,7 +865,7 @@ public class Theme {
     );
   }
 
-  private static Drawable rectSimpleSelector (final float size, final float padding, final @ThemeColorId int colorId) {
+  private static Drawable rectSimpleSelector (final float size, final float padding, final @ColorId int colorId) {
     return Drawables.getColorSelector(new RectDrawable(colorId, size, padding, false), new RectDrawable(colorId, size, padding, true));
   }
 
@@ -830,12 +881,12 @@ public class Theme {
 
   @SuppressWarnings("SwitchIntDef")
   public static boolean isDarkTheme (@ThemeId int themeId) {
-    return getProperty(ThemeProperty.DARK, themeId) == 1;
+    return getProperty(PropertyId.DARK, themeId) == 1;
   }
 
   @SuppressWarnings("SwitchIntDef")
   public static boolean isDarkTheme (Settings prefs, @ThemeId int themeId) {
-    return getProperty(prefs, ThemeProperty.DARK, themeId) == 1;
+    return getProperty(prefs, PropertyId.DARK, themeId) == 1;
   }
 
   public static boolean needLightStatusBar () {
@@ -843,58 +894,58 @@ public class Theme {
   }
 
   public static boolean needLightStatusBar (@ThemeId int themeId) {
-    return (int) getProperty(ThemeProperty.LIGHT_STATUS_BAR, themeId) == 1;
+    return (int) getProperty(PropertyId.LIGHT_STATUS_BAR, themeId) == 1;
   }
 
-  public static float getOverrideProperty (@ThemeProperty int propertyId) {
+  public static float getOverrideProperty (@PropertyId int propertyId) {
     // TODO validate propertyId?
     return getProperty(propertyId);
   }
 
   public static float getDarkFactor () {
-    return getProperty(ThemeProperty.DARK);
+    return getProperty(PropertyId.DARK);
   }
 
   public static float getShadowDepth () {
-    return Theme.getProperty(ThemeProperty.SHADOW_DEPTH);
+    return Theme.getProperty(PropertyId.SHADOW_DEPTH);
   }
 
   public static float getSeparatorReplacement () {
-    return Theme.getProperty(ThemeProperty.REPLACE_SHADOWS_WITH_SEPARATORS);
+    return Theme.getProperty(PropertyId.REPLACE_SHADOWS_WITH_SEPARATORS);
   }
 
   public static float avatarRadiusDefault () {
-    return Theme.getProperty(ThemeProperty.AVATAR_RADIUS);
+    return Theme.getProperty(PropertyId.AVATAR_RADIUS);
   }
 
   public static float getBubbleOutlineFactor () {
-    return Theme.getProperty(ThemeProperty.BUBBLE_OUTLINE);
+    return Theme.getProperty(PropertyId.BUBBLE_OUTLINE);
   }
 
   public static float getBubbleOutlineSize () {
-    return Theme.getProperty(ThemeProperty.BUBBLE_OUTLINE_SIZE);
+    return Theme.getProperty(PropertyId.BUBBLE_OUTLINE_SIZE);
   }
 
   public static float getBubbleDateRadius () {
-    return Theme.getProperty(ThemeProperty.BUBBLE_DATE_CORNER);
+    return Theme.getProperty(PropertyId.BUBBLE_DATE_CORNER);
   }
 
   public static float getDateRadius () {
-    return Theme.getProperty(ThemeProperty.DATE_CORNER);
+    return Theme.getProperty(PropertyId.DATE_CORNER);
   }
 
   public static float getImageRadius () {
-    return Theme.getProperty(ThemeProperty.IMAGE_CORNER);
+    return Theme.getProperty(PropertyId.IMAGE_CORNER);
   }
 
   private static final boolean BUBBLE_BIG_RADIUS_AVAILABLE = Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT;
 
   public static float getBubbleDefaultRadius () {
-    return Theme.getProperty(BUBBLE_BIG_RADIUS_AVAILABLE ? ThemeProperty.BUBBLE_CORNER : ThemeProperty.BUBBLE_CORNER_LEGACY);
+    return Theme.getProperty(BUBBLE_BIG_RADIUS_AVAILABLE ? PropertyId.BUBBLE_CORNER : PropertyId.BUBBLE_CORNER_LEGACY);
   }
 
   public static float getBubbleMergeRadius () {
-    return Theme.getProperty(BUBBLE_BIG_RADIUS_AVAILABLE ? ThemeProperty.BUBBLE_CORNER_MERGED : ThemeProperty.BUBBLE_CORNER_LEGACY);
+    return Theme.getProperty(BUBBLE_BIG_RADIUS_AVAILABLE ? PropertyId.BUBBLE_CORNER_MERGED : PropertyId.BUBBLE_CORNER_LEGACY);
   }
 
   public static boolean isBubbleRadiusBig (float radius) {
@@ -906,7 +957,14 @@ public class Theme {
   }
 
   public static float getBubbleUnreadShadow () {
-    return Theme.getProperty(ThemeProperty.BUBBLE_UNREAD_SHADOW);
+    return Theme.getProperty(PropertyId.BUBBLE_UNREAD_SHADOW);
+  }
+
+  private static Drawable createRoundRectDrawable (int color, float radius) {
+    final int rad = Screen.dp(radius);
+    ShapeDrawable defaultDrawable = new ShapeDrawable(new RoundRectShape(new float[]{rad, rad, rad, rad, rad, rad, rad, rad}, null, null));
+    defaultDrawable.getPaint().setColor(color);
+    return defaultDrawable;
   }
 
   // TODO REMOVE
@@ -920,7 +978,7 @@ public class Theme {
     defaultDrawable.getPaint().setColor(defaultColor);
     ShapeDrawable pressedDrawable = new ShapeDrawable(new RoundRectShape(new float[]{rad, rad, rad, rad, rad, rad, rad, rad}, null, null));
     pressedDrawable.getPaint().setColor(maskColor);
-    if (Build.VERSION.SDK_INT >= 21) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       ColorStateList colorStateList = new ColorStateList(
         new int[][]{StateSet.WILD_CARD},
         new int[]{pressedColor}
@@ -942,7 +1000,7 @@ public class Theme {
   }
 
   public static Drawable getRoundRectSelectorDrawable(int color) {
-    if (Build.VERSION.SDK_INT >= 21) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       Drawable maskDrawable = createRoundRectDrawable(Screen.dp(3), 0xffffffff);
       ColorStateList colorStateList = new ColorStateList(
         new int[][]{StateSet.WILD_CARD},
@@ -955,6 +1013,54 @@ public class Theme {
       stateListDrawable.addState(new int[]{android.R.attr.state_selected}, createRoundRectDrawable(Screen.dp(3), (color & 0x00ffffff) | 0x19000000));
       stateListDrawable.addState(StateSet.WILD_CARD, new ColorDrawable(0x00000000));
       return stateListDrawable;
+    }
+  }
+
+  public static long newComplexColor (boolean isId, int colorValue) {
+    return BitwiseUtils.mergeLong(isId ? 1 : 0, colorValue);
+  }
+
+  public static boolean isColorId (long complexColor) {
+    return BitwiseUtils.splitLongToFirstInt(complexColor) == 1;
+  }
+
+  public static int extractColorValue (long complexColor) {
+    return BitwiseUtils.splitLongToSecondInt(complexColor);
+  }
+
+  public static @ColorInt int toColorInt (long complexColor) {
+    int value = extractColorValue(complexColor);
+    if (isColorId(complexColor)) {
+      return getColor(value);
+    } else {
+      return value;
+    }
+  }
+
+  public static @ColorId int toColorInt (long complexColor, @ThemeId int themeId) {
+    int value = extractColorValue(complexColor);
+    if (isColorId(complexColor)) {
+      return getColor(value, themeId);
+    } else {
+      return value;
+    }
+  }
+
+  public static void applyComplexColor (Receiver receiver, long complexColor) {
+    if (isColorId(complexColor)) {
+      @ColorId int colorId = extractColorValue(complexColor);
+      receiver.setThemedPorterDuffColorId(colorId);
+    } else {
+      @ColorInt int color = extractColorValue(complexColor);
+      receiver.setPorterDuffColorFilter(color);
+    }
+  }
+
+  public static Paint getComplexPorterDuffPaint (long complexColor, float alpha) {
+    if (isColorId(complexColor)) {
+      return PorterDuffPaint.get(extractColorValue(complexColor), alpha);
+    } else {
+      return Paints.getPorterDuffPaint(ColorUtils.alphaColor(alpha, extractColorValue(complexColor)));
     }
   }
 }

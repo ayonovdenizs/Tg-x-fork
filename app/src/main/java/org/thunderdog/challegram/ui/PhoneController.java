@@ -14,13 +14,15 @@
  */
 package org.thunderdog.challegram.ui;
 
+import android.app.AlertDialog;
 import android.content.Context;
+import android.net.Uri;
+import android.os.Build;
 import android.text.InputFilter;
 import android.text.InputType;
 import android.text.Spannable;
+import android.text.SpannableStringBuilder;
 import android.text.Spanned;
-import android.text.TextPaint;
-import android.text.style.ClickableSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -33,45 +35,60 @@ import android.widget.Toast;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
-import androidx.collection.SparseArrayCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
+import org.thunderdog.challegram.BuildConfig;
+import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
+import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.component.base.SettingView;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Background;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.TD;
+import org.thunderdog.challegram.emoji.Emoji;
+import org.thunderdog.challegram.emoji.EmojiFilter;
 import org.thunderdog.challegram.navigation.BackHeaderButton;
 import org.thunderdog.challegram.navigation.HeaderView;
 import org.thunderdog.challegram.navigation.Menu;
+import org.thunderdog.challegram.telegram.TGLegacyManager;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibAccount;
 import org.thunderdog.challegram.telegram.TdlibManager;
+import org.thunderdog.challegram.theme.ColorId;
+import org.thunderdog.challegram.theme.PorterDuffColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Intents;
 import org.thunderdog.challegram.tool.Keyboard;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Strings;
-import org.thunderdog.challegram.tool.TGCountry;
-import org.thunderdog.challegram.tool.TGPhoneFormat;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.util.CustomTypefaceSpan;
 import org.thunderdog.challegram.util.NoUnderlineClickableSpan;
+import org.thunderdog.challegram.util.StringList;
+import org.thunderdog.challegram.util.text.Highlight;
 import org.thunderdog.challegram.widget.MaterialEditTextGroup;
 import org.thunderdog.challegram.widget.NoScrollTextView;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
+import me.vkryl.android.AppInstallationUtil;
+import me.vkryl.android.text.AcceptFilter;
+import me.vkryl.android.text.CodePointCountFilter;
 import me.vkryl.android.widget.FrameLayoutFix;
+import me.vkryl.core.ArrayUtils;
 import me.vkryl.core.MathUtils;
 import me.vkryl.core.StringUtils;
+import me.vkryl.core.collection.IntList;
 import me.vkryl.core.lambda.RunnableBool;
+import tgx.td.Td;
 
 public class PhoneController extends EditBaseController<Void> implements SettingsAdapter.TextChangeListener, MaterialEditTextGroup.FocusListener, MaterialEditTextGroup.TextChangeListener, View.OnClickListener, Menu {
 
@@ -116,26 +133,18 @@ public class PhoneController extends EditBaseController<Void> implements Setting
 
   @Override
   public void fillMenuItems (int id, HeaderView header, LinearLayout menu) {
-    switch (id) {
-      case R.id.menu_login: {
-        header.addButton(menu, R.id.btn_proxy, R.drawable.baseline_security_24, R.id.theme_color_headerIcon, this, Screen.dp(48f));
-        header.addButton(menu, R.id.btn_languageSettings, R.drawable.baseline_language_24, R.id.theme_color_headerIcon, this, Screen.dp(48f));
-        break;
-      }
+    if (id == R.id.menu_login) {
+      header.addButton(menu, R.id.btn_proxy, R.drawable.baseline_security_24, ColorId.headerIcon, this, Screen.dp(48f));
+      header.addButton(menu, R.id.btn_languageSettings, R.drawable.baseline_language_24, ColorId.headerIcon, this, Screen.dp(48f));
     }
   }
 
   @Override
   public void onMenuItemPressed (int id, View view) {
-    switch (id) {
-      case R.id.btn_proxy: {
-        tdlib.ui().openProxySettings(this, true);
-        break;
-      }
-      case R.id.btn_languageSettings: {
-        navigateTo(new SettingsLanguageController(context, tdlib));
-        break;
-      }
+    if (id == R.id.btn_proxy) {
+      tdlib.ui().openProxySettings(this, true);
+    } else if (id == R.id.btn_languageSettings) {
+      navigateTo(new SettingsLanguageController(context, tdlib));
     }
   }
 
@@ -156,8 +165,8 @@ public class PhoneController extends EditBaseController<Void> implements Setting
       }
     }
     if (countryView != null) {
-      if (event == Lang.EVENT_PACK_CHANGED || (event == Lang.EVENT_STRING_CHANGED && arg1 == R.string.Country)) {
-        countryView.setHint(R.string.Country);
+      if (event == Lang.EVENT_PACK_CHANGED || (event == Lang.EVENT_STRING_CHANGED && arg1 == getCountryRes())) {
+        countryView.setHint(getCountryRes());
       }
     }
     if (numberView != null) {
@@ -211,33 +220,18 @@ public class PhoneController extends EditBaseController<Void> implements Setting
   private ListItem hintItem;
   private ListItem firstNameItem, lastNameItem;
 
-  private SparseArrayCompat<String> storedValues;
-
   private boolean oneShotFocusSet;
 
-  @Override
-  protected void onCreateView (final Context context, FrameLayoutFix contentView, RecyclerView recyclerView) {
-    int headerHeight = Screen.dp(72f);
-
-    ((FrameLayoutFix.LayoutParams) recyclerView.getLayoutParams()).topMargin = headerHeight;
-
-    if (mode != MODE_ADD_CONTACT) {
-      setDoneIcon(R.drawable.baseline_arrow_forward_24);
-    }
-
-    recyclerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
-
-    storedValues = new SparseArrayCompat<>(3);
-
+  /*private void initValues () {
     if (mode != MODE_ADD_CONTACT) {
       String[] phoneNumber = TGCountry.instance().getNumber(tdlib);
       if (phoneNumber != null) {
         storedValues.put(R.id.login_code, phoneNumber[0]);
         storedValues.put(R.id.login_phone, phoneNumber[1]);
 
-        String[] country = currentCountry = TGCountry.instance().get(phoneNumber[0]);
+        TGCountry.Country country = currentCountry = TGCountry.instance().get(phoneNumber[0]);
         if (country != null) {
-          storedValues.put(R.id.login_country, country[2]);
+          storedValues.put(R.id.login_country, country.name);
         }
       }
     } else if (!StringUtils.isEmpty(initialPhoneNumber)) {
@@ -280,9 +274,9 @@ public class PhoneController extends EditBaseController<Void> implements Setting
 
       if (!StringUtils.isEmpty(countryCode)) {
         storedValues.put(R.id.login_code, countryCode);
-        String[] current = currentCountry = TGCountry.instance().get(countryCode);
+        TGCountry.Country current = currentCountry = TGCountry.instance().get(countryCode);
         if (current != null) {
-          storedValues.put(R.id.login_country, current[2]);
+          storedValues.put(R.id.login_country, current.name);
         }
       }
 
@@ -290,19 +284,54 @@ public class PhoneController extends EditBaseController<Void> implements Setting
     }
 
     if (currentCountry == null && StringUtils.isEmpty(initialPhoneNumber)) {
-      String[] current = currentCountry = TGCountry.instance().getCurrent();
+      TGCountry.Country current = currentCountry = TGCountry.instance().getCurrent();
       if (current != null) {
-        storedValues.put(R.id.login_code, current[0]);
-        storedValues.put(R.id.login_country, current[2]);
+        storedValues.put(R.id.login_code, current.number);
+        storedValues.put(R.id.login_country, current.name);
       }
     }
+
+    String countryText = storedValues.get(R.id.login_country, "");
+    countryView.setText(countryText);
+
+    if (mode != MODE_ADD_CONTACT || StringUtils.isEmpty(initialPhoneNumber)) {
+          setLockFocusView(codeText.isEmpty() ? codeView.getEditText() : numberView.getEditText());
+        }
+  }*/
+
+  @Override
+  protected void onCreateView (final Context context, FrameLayoutFix contentView, RecyclerView recyclerView) {
+    String[] initialPhoneNumberParts = !StringUtils.isEmpty(initialPhoneNumber) ? TD.getPhoneNumberParts(initialPhoneNumber) : null;
+    if (!StringUtils.isEmpty(initialPhoneNumber) && initialPhoneNumberParts == null) {
+      String numeric = Strings.getNumber(initialPhoneNumber);
+      initialPhoneNumberParts = new String[] {
+        numeric.substring(0, 1),
+        numeric.substring(1)
+      };
+    }
+    if (initialPhoneNumberParts != null) {
+      selectedCallingCode = initialPhoneNumberParts[0];
+      enteredPhoneNumber = initialPhoneNumberParts[1];
+    }
+
+    int headerHeight = Screen.dp(72f);
+
+    ((FrameLayoutFix.LayoutParams) recyclerView.getLayoutParams()).topMargin = headerHeight;
+
+    if (mode != MODE_ADD_CONTACT) {
+      setDoneIcon(R.drawable.baseline_arrow_forward_24);
+    }
+
+    recyclerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
 
     FrameLayoutFix countryWrap = new FrameLayoutFix(context);
     countryWrap.setPadding(Screen.dp(16f), Screen.dp(12f), Screen.dp(16f), 0);
     countryWrap.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, headerHeight, Gravity.TOP));
 
-    String countryText = storedValues.get(R.id.login_country, "");
-    countryView = new MaterialEditTextGroup(context);
+    countryView = new MaterialEditTextGroup(context, tdlib);
+    countryView.getEditText().setFilters(new InputFilter[] {
+      new EmojiFilter()
+    });
     countryView.addThemeListeners(this);
     countryView.setUseTextChangeAnimations();
     countryView.getEditText().setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS | InputType.TYPE_TEXT_FLAG_CAP_WORDS | InputType.TYPE_TEXT_VARIATION_POSTAL_ADDRESS);
@@ -310,21 +339,21 @@ public class PhoneController extends EditBaseController<Void> implements Setting
     countryView.setDoneListener(v -> {
       if (countryView.isEmpty()) {
         setInCountryMode(false);
-        updateCountry("", true);
+        clearCountry();
         codeView.setText("");
       } else if (currentResults != null && !currentResults.isEmpty() && currentResults.get(0).getViewType() == ListItem.TYPE_COUNTRY) {
         ListItem item = currentResults.get(0);
-        setCountry(item);
+        this.selectedCallingCode = item.getStringValue();
+        setCountry((TdApi.CountryInfo) item.getData(), true, true);
       } else {
         setInCountryMode(false);
-        updateCountry(storedValues.get(R.id.login_code, ""), true);
+        resetCountry();
       }
       return true;
     });
-    countryView.setHint(R.string.Country);
+    countryView.setHint(getCountryRes());
     countryView.getEditText().setId(R.id.login_country);
     countryView.getEditText().setNextFocusDownId(R.id.login_code);
-    countryView.setText(countryText);
     countryView.setTextListener(this);
     countryView.setFocusListener(this);
     countryWrap.addView(countryView);
@@ -337,7 +366,7 @@ public class PhoneController extends EditBaseController<Void> implements Setting
       this.baseItems.add(firstNameItem = new ListItem(ListItem.TYPE_EDITTEXT_NO_PADDING_REUSABLE, R.id.edit_first_name, 0, R.string.login_FirstName).setStringValue(initialFirstName));
       this.baseItems.add(lastNameItem = new ListItem(ListItem.TYPE_EDITTEXT_NO_PADDING_REUSABLE, R.id.edit_last_name, 0, R.string.login_LastName).setStringValue(initialLastName));
     }
-    hintItem = new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, mode == MODE_ADD_CONTACT ? 0 : mode == MODE_CHANGE_NUMBER ? R.string.ChangePhoneHelp : R.string.login_SmsHint).setTextColorId(R.id.theme_color_textLight);
+    hintItem = new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, mode == MODE_ADD_CONTACT ? 0 : mode == MODE_CHANGE_NUMBER ? R.string.ChangePhoneHelp : R.string.login_SmsHint).setTextColorId(ColorId.textLight);
     if (mode != MODE_ADD_CONTACT) {
       this.baseItems.add(hintItem);
     }
@@ -368,13 +397,8 @@ public class PhoneController extends EditBaseController<Void> implements Setting
 
       @Override
       protected void setValuedSetting (ListItem item, SettingView view, boolean isUpdate) {
-        switch (item.getId()) {
-          case R.id.btn_syncContacts: {
-            break;
-          }
-          default: {
-            break;
-          }
+        if (item.getId() == R.id.btn_syncContacts) {
+          // Do smth?
         }
       }
 
@@ -400,27 +424,37 @@ public class PhoneController extends EditBaseController<Void> implements Setting
         params = FrameLayoutFix.newParams(Screen.dp(50f), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT);
         params.leftMargin = Screen.dp(18f);
 
-        String codeText = storedValues.get(R.id.login_code, "");
-
-        codeView = new MaterialEditTextGroup(context);
+        codeView = new MaterialEditTextGroup(context, tdlib);
         codeView.addThemeListeners(PhoneController.this);
         codeView.setLayoutParams(params);
         codeView.getEditText().setId(R.id.login_code);
         codeView.getEditText().setNextFocusDownId(R.id.login_phone);
         codeView.getEditText().setInputType(InputType.TYPE_CLASS_PHONE);
         codeView.getEditText().setFilters(new InputFilter[]{
-          new InputFilter.LengthFilter(4)
+          new CodePointCountFilter(4),
+          new AcceptFilter() {
+            @Override
+            protected boolean accept (char c) {
+              return (c >= '0' && c <= '9');
+            }
+          }
         });
         codeView.setFocusListener(PhoneController.this);
-        codeView.setText(codeText);
         codeView.setTextListener(PhoneController.this);
         numberWrap.addView(codeView);
 
         params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.LEFT);
         params.leftMargin = Screen.dp(89f);
 
-        String numberText = storedValues.get(R.id.login_country, "");
-        numberView = new MaterialEditTextGroup(context);
+        numberView = new MaterialEditTextGroup(context, tdlib);
+        numberView.getEditText().setFilters(new InputFilter[] {
+          new AcceptFilter() {
+            @Override
+            protected boolean accept (char c) {
+              return (c >= '0' && c <= '9') || c == ' ' || c == '(' || c == ')' || c == '-';
+            }
+          }
+        });
         numberView.addThemeListeners(PhoneController.this);
         numberView.getEditText().setBackspaceListener((v, editable, selectionStart, selectionEnd) -> {
           if (editable.length() == 0) {
@@ -458,9 +492,6 @@ public class PhoneController extends EditBaseController<Void> implements Setting
             editable.delete(0, selectionStart);
             return true;
           }
-          if (currentCountry == null) {
-            return false;
-          }
 
           ignorePhoneChanges = true;
 
@@ -495,8 +526,6 @@ public class PhoneController extends EditBaseController<Void> implements Setting
 
           ignorePhoneChanges = false;
 
-
-
           return true;
         });
         numberView.setHint(getNumberHint());
@@ -504,7 +533,6 @@ public class PhoneController extends EditBaseController<Void> implements Setting
         numberView.getEditText().setId(R.id.login_phone);
         numberView.getEditText().setInputType(InputType.TYPE_CLASS_PHONE);
         numberView.setFocusListener(PhoneController.this);
-        numberView.setText(numberText);
         if (mode == MODE_ADD_CONTACT) {
           numberView.setNextFocusDownId(R.id.edit_first_name);
         } else {
@@ -514,8 +542,13 @@ public class PhoneController extends EditBaseController<Void> implements Setting
         numberView.setTextListener(PhoneController.this);
         numberWrap.addView(numberView);
 
+        if (!StringUtils.isEmpty(selectedCallingCode) || !StringUtils.isEmpty(enteredPhoneNumber)) {
+          codeView.setText(!StringUtils.isEmpty(selectedCallingCode) ? selectedCallingCode : "");
+          numberView.setText(!StringUtils.isEmpty(enteredPhoneNumber) ? enteredPhoneNumber : "");
+        }
+
         if (mode != MODE_ADD_CONTACT || StringUtils.isEmpty(initialPhoneNumber)) {
-          setLockFocusView(codeText.isEmpty() ? codeView.getEditText() : numberView.getEditText());
+          setLockFocusView(StringUtils.isEmpty(selectedCallingCode) ? codeView.getEditText() : numberView.getEditText());
         }
 
         if (UI.inTestMode() && isFocused()) {
@@ -529,17 +562,31 @@ public class PhoneController extends EditBaseController<Void> implements Setting
       protected void setCustom (ListItem item, SettingHolder holder, int position) {
         ViewGroup group = (ViewGroup) holder.itemView;
         MaterialEditTextGroup codeView = (MaterialEditTextGroup) group.getChildAt(1);
-        codeView.setText(storedValues.get(R.id.login_code, ""));
+        codeView.setText(selectedCallingCode);
         MaterialEditTextGroup numberView = (MaterialEditTextGroup) group.getChildAt(2);
-        numberView.setText(storedValues.get(R.id.login_phone, ""));
+        numberView.setText(enteredPhoneNumber);
       }
     };
-    adapter.setLockFocusOn(this, true);
+    adapter.setLockFocusOn(this, mode != MODE_ADD_CONTACT);
     if (mode == MODE_ADD_CONTACT) {
       adapter.setTextChangeListener(this);
     }
     adapter.setItems(baseItems, isAccountAdd);
     recyclerView.setAdapter(adapter);
+
+    TGLegacyManager.instance().addEmojiListener(adapter);
+    loadCountries();
+  }
+
+  private int countryRes;
+
+  private int getCountryRes () {
+    if (countryRes == 0) {
+      countryRes = AppInstallationUtil.getInstallerId(context) == AppInstallationUtil.InstallerId.HUAWEI_APPGALLERY ?
+        R.string.CountryCode :
+        R.string.Country;
+    }
+    return countryRes;
   }
 
   private @StringRes int getNumberHint () {
@@ -548,28 +595,47 @@ public class PhoneController extends EditBaseController<Void> implements Setting
 
   @Override
   public void onClick (View v) {
-    switch (v.getId()) {
-      case R.id.btn_syncContacts: {
-        adapter.toggleView(v);
-        break;
-      }
-      case R.id.result: {
-        ListItem item = (ListItem) v.getTag();
-        if (item != null && item.getData() != null) {
-          setCountry(item);
-        }
-        break;
+    final int viewId = v.getId();
+    if (viewId == R.id.btn_syncContacts) {
+      adapter.toggleView(v);
+    } else if (viewId == R.id.result) {
+      ListItem item = (ListItem) v.getTag();
+      if (item != null && item.getData() instanceof TdApi.CountryInfo country) {
+        this.selectedCallingCode = item.getStringValue();
+        setCountry(country, true, true);
       }
     }
   }
 
-  private void setCountry (ListItem item) {
-    String country = item.getString().toString();
-    String code = ((String) item.getData()).substring(1);
-    storedValues.put(R.id.login_code, code);
-    countryView.setText(country, true);
-    setInCountryMode(false);
-    Keyboard.show(numberView.getEditText());
+  private void clearCountry () {
+    setCountry(null, true, true);
+  }
+
+  private void resetCountry () {
+    setCountry(selectedCountry, true, true);
+  }
+
+  private void setCountry (@Nullable TdApi.CountryInfo country, boolean dispatch, boolean selectedByUser) {
+    this.selectedCountry = country;
+    this.selectedCountryByUser = selectedByUser;
+
+    CharSequence displayText;
+    if (country != null) {
+      String emoji = Emoji.getEmojiFlagFromCountry(country.countryCode);
+      if (!StringUtils.isEmpty(emoji)) {
+        displayText = new SpannableStringBuilder(Emoji.instance().replaceEmoji(emoji)).append(" ").append(country.name);
+      } else {
+        displayText = country.name;
+      }
+    } else {
+      displayText = "";
+    }
+
+    countryView.setText(displayText, isFocused());
+    if (dispatch) {
+      setInCountryMode(false);
+      Keyboard.show(numberView.getEditText());
+    }
     UI.post(() -> setIsCountryDefault(true));
   }
 
@@ -586,74 +652,69 @@ public class PhoneController extends EditBaseController<Void> implements Setting
   }
 
   @Override
-  public boolean onBackPressed (boolean fromTop) {
+  public boolean performOnBackPressed (boolean fromTop, boolean commit) {
     if (inCountryMode) {
-      setInCountryMode(false);
-      updateCountry(storedValues.get(R.id.login_code, ""), isCountryDefault);
+      if (commit) {
+        setInCountryMode(false);
+        resetCountry();
+      }
       return true;
     }
-    return false;
+    return super.performOnBackPressed(fromTop, commit);
   }
 
   private boolean ignorePhoneChanges;
 
   @Override
-  public void onTextChanged (int id, ListItem item, MaterialEditTextGroup v, String text) {
-    switch (id) {
-      case R.id.edit_first_name: {
-        updateDoneState();
-        break;
-      }
+  public void onTextChanged (int id, ListItem item, MaterialEditTextGroup v) {
+    if (id == R.id.edit_first_name) {
+      updateDoneState();
     }
   }
 
   @Override
   public void onTextChanged (MaterialEditTextGroup v, CharSequence charSequence) {
     String text = charSequence.toString();
-    switch (v.getEditText().getId()) {
-      case R.id.login_country: {
-        if (inCountryMode) {
-          setIsCountryDefault(false);
-        }
-        searchCountry(text.trim().toLowerCase());
-        break;
+    final int inputId = v.getEditText().getId();
+    if (inputId == R.id.login_country) {
+      if (inCountryMode) {
+        setIsCountryDefault(false);
       }
-      case R.id.login_code: {
-        String prevValue = storedValues.get(R.id.login_code);
-        if (prevValue != null && StringUtils.equalsOrBothEmpty(prevValue, text)) {
-          return;
-        }
-        storedValues.put(v.getEditText().getId(), text);
-        String numeric = Strings.getNumber(text);
-        if (!text.equals(numeric)) {
-          codeView.setText(numeric);
-        } else {
-          updateCountry(numeric, true);
-          checkNumber(numberView.getEditText().getText().toString());
-          updateDoneState();
-        }
-        showError(null);
-        if (text.length() == 4 && codeView.getEditText().getSelectionEnd() == text.length()) {
-          Keyboard.show(numberView.getEditText());
-        }
-        break;
+      searchCountry(text.trim());
+    } else if (inputId == R.id.login_code) {
+      String prevValue = selectedCallingCode;
+      if (prevValue != null && StringUtils.equalsOrBothEmpty(prevValue, text)) {
+        return;
       }
-      case R.id.login_phone: {
-        storedValues.put(v.getEditText().getId(), text);
-        if (!ignorePhoneChanges) {
-          checkNumber(text);
-          updateDoneState();
-        }
-        showError(null);
-        break;
+      selectedCallingCode = text;
+      String numeric = Strings.getNumber(text);
+      if (!text.equals(numeric)) {
+        codeView.setText(numeric);
+      } else {
+        String phoneNumber = numberView.getEditText().getText().toString();
+        findAndUpdateCountry(numeric, Strings.getNumber(phoneNumber), true);
+        checkNumber(phoneNumber);
+        updateDoneState();
       }
+      showError(null);
+      if (text.length() == 4 && codeView.getEditText().getSelectionEnd() == text.length()) {
+        Keyboard.show(numberView.getEditText());
+      }
+    } else if (inputId == R.id.login_phone) {
+      enteredPhoneNumber = text;
+      if (!ignorePhoneChanges) {
+        checkNumber(text);
+        findAndUpdateCountry(selectedCallingCode, Strings.getNumber(text), false);
+        updateDoneState();
+      }
+      showError(null);
     }
   }
 
   private void checkNumber (String text) {
     String number = Strings.getNumber(text);
     CharSequence code = codeView.getText();
-    String expected = currentCountry != null ? Strings.formatNumberPart(code.toString(), number) : number;
+    String expected = selectedCountry != null ? Strings.formatNumberPart(code.toString(), number) : number;
     if (!text.equals(expected)) {
       ignorePhoneChanges = true;
       Views.replaceText(numberView.getEditText().getText(), text, expected);
@@ -661,23 +722,120 @@ public class PhoneController extends EditBaseController<Void> implements Setting
     }
   }
 
-  private String[] currentCountry;
+  private String currentCountryCode;
+  private TdApi.CountryInfo selectedCountry;
+  private boolean selectedCountryByUser;
+  private String selectedCallingCode = "";
+  private String enteredPhoneNumber = "";
   private boolean isCountryDefault = true;
 
   private void setIsCountryDefault (boolean isDefault) {
     this.isCountryDefault = isDefault;
   }
 
-  private void updateCountry (String code, boolean isDefault) {
-    String[] country = currentCountry = TGCountry.instance().get(code);
-    setIsCountryDefault(isDefault);
-    countryView.setText(country != null ? country[2] : null, true);
+  private static final String[] CANADA_AREA_CODES = {
+    "204", "226", "236", "249", "250", "263",
+    "306", "343", "354", "365", "367", "368", "382",
+    "403", "416", "418", "426", "428", "431", "437", "438", "450", "474",
+    "506", "514", "519", "548", "579", "581", "584", "587",
+    "604", "613", "639", "647", "672", "683",
+    "705", "709", "742", "753", "778", "780", "782",
+    "807", "819", "825", "867", "873", "879",
+    "902", "905", "942"
+  };
+
+  private void findAndUpdateCountry (String callingCode, String phoneNumber, boolean allowDispatch) {
+    if (countries == null) {
+      return;
+    }
+
+    Map<String, TdApi.CountryInfo> foundCandidates = null;
+
+    if (!StringUtils.isEmpty(callingCode)) {
+      for (TdApi.CountryInfo country : countries) {
+        if (ArrayUtils.contains(country.callingCodes, callingCode)) {
+          if (foundCandidates == null) {
+            foundCandidates = new LinkedHashMap<>();
+          }
+          foundCandidates.put(country.countryCode, country);
+        }
+      }
+
+    }
+
+    if (foundCandidates == null || foundCandidates.isEmpty()) {
+      setCountry(null, false, false);
+      return;
+    }
+
+    TdApi.CountryInfo bestMatch = null;
+    if (selectedCountry != null && foundCandidates.containsKey(selectedCountry.countryCode) && selectedCountryByUser) {
+      bestMatch = selectedCountry;
+    }
+    if (bestMatch == null && foundCandidates.size() > 1) {
+      switch (callingCode) {
+        case "1": { // US (main), CA
+          if (phoneNumber.length() >= 3 && ArrayUtils.contains(CANADA_AREA_CODES, phoneNumber.substring(0, 3))) {
+            bestMatch = foundCandidates.get("CA");
+          } else {
+            bestMatch = foundCandidates.get("US");
+          }
+          break;
+        }
+        case "7": { // RU (main), KZ
+          if (phoneNumber.startsWith("7")) {
+            bestMatch = foundCandidates.get("KZ");
+          } else {
+            bestMatch = foundCandidates.get("RU");
+          }
+          break;
+        }
+        case "599": { // BQ, CW (main)
+          if (phoneNumber.startsWith("3") || phoneNumber.startsWith("4") || phoneNumber.startsWith("7")) {
+            bestMatch = foundCandidates.get("BQ");
+          } else {
+            bestMatch = foundCandidates.get("CW");
+          }
+          break;
+        }
+      }
+
+      Set<String> currentCountryCodes = tdlib.possibleCountryCodes(currentCountryCode);
+      if (bestMatch == null && !currentCountryCodes.isEmpty()) {
+        for (Map.Entry<String, TdApi.CountryInfo> foundEntry : foundCandidates.entrySet()) {
+          if (currentCountryCodes.contains(foundEntry.getKey())) {
+            bestMatch = foundEntry.getValue();
+            break;
+          }
+        }
+      }
+    }
+    if (bestMatch == null) {
+      bestMatch = foundCandidates.values().iterator().next();
+    }
+    boolean dispatch = false;
+    if (bestMatch != null && !StringUtils.isEmpty(callingCode)) {
+      dispatch = true;
+      for (TdApi.CountryInfo country : countries) {
+        for (String countryCallingCode : country.callingCodes) {
+          if (countryCallingCode.startsWith(callingCode) && countryCallingCode.length() > callingCode.length()) {
+            dispatch = false;
+            break;
+          }
+        }
+      }
+    }
+    boolean preserveSelectedByUser = false;
+    if (bestMatch != null && bestMatch == selectedCountry) {
+      preserveSelectedByUser = selectedCountryByUser;
+    }
+    setCountry(bestMatch, allowDispatch && dispatch, preserveSelectedByUser);
   }
 
   private boolean hasValidNumber () {
-    CharSequence code = codeView.getText();
-    CharSequence number = numberView.getText();
-    return code.length() > 0 && number.length() > 0;
+    CharSequence code = codeView != null ? codeView.getText() : "";
+    CharSequence number = numberView != null ? numberView.getText() : "";
+    return !StringUtils.isEmpty(code) && !StringUtils.isEmpty(number);
   }
 
   private boolean hasValidFirstName () {
@@ -716,7 +874,12 @@ public class PhoneController extends EditBaseController<Void> implements Setting
         int i = 0;
         boolean ok = true;
         for (ListItem item : items) {
-          if (adapter.getItems().get(i++).getData() != item.getData()) {
+          ListItem existingItem = adapter.getItems().get(i++);
+          if (
+            existingItem.getData() != item.getData() ||
+            existingItem.getHighlight() != item.getHighlight() ||
+            !StringUtils.equalsOrBothEmpty(existingItem.getStringValue(), item.getStringValue())
+          ) {
             ok = false;
             break;
           }
@@ -730,59 +893,120 @@ public class PhoneController extends EditBaseController<Void> implements Setting
     }
   }
 
+  private TdApi.CountryInfo[] countries;
+
+  @Override
+  public boolean needAsynchronousAnimation () {
+    return countries == null || currentCountryCode == null;
+  }
+
+  private TdApi.CountryInfo findCountry (TdApi.CountryInfo[] countries, String code) {
+    for (TdApi.CountryInfo country : countries) {
+      if (country.countryCode.equals(code)) {
+        return country;
+      }
+    }
+    return null;
+  }
+
+  private void loadCountries () {
+    Runnable check = () -> {
+      if (countries != null && currentCountryCode != null) {
+        Set<String> countryCodes = tdlib.possibleCountryCodes(currentCountryCode);
+        AtomicReference<TdApi.CountryInfo> initialCountryRef = new AtomicReference<>();
+        for (String countryCode : countryCodes) {
+          TdApi.CountryInfo countryInfo = findCountry(countries, countryCode);
+          if (countryInfo != null) {
+            initialCountryRef.set(countryInfo);
+            break;
+          }
+        }
+        runOnUiThreadOptional(() -> {
+          if (!StringUtils.isEmpty(selectedCallingCode)) {
+            findAndUpdateCountry(selectedCallingCode, enteredPhoneNumber, false);
+          } else {
+            TdApi.CountryInfo initialCountry = initialCountryRef.get();
+            if (initialCountry != null) {
+              setCountry(initialCountry, false, true);
+              String phoneNumberCountryCode = tdlib.account().getPhoneNumberCountryCode();
+              String finalCode = !StringUtils.isEmpty(phoneNumberCountryCode) && ArrayUtils.contains(initialCountry.callingCodes, phoneNumberCountryCode) ? phoneNumberCountryCode : initialCountry.callingCodes[0];
+              if (codeView != null) {
+                codeView.setText(finalCode);
+              } else {
+                selectedCallingCode = finalCode;
+              }
+            }
+          }
+          executeScheduledAnimation();
+        });
+      }
+    };
+    tdlib.getCountries(countries -> {
+      this.countries = countries;
+      check.run();
+    });
+    tdlib.send(new TdApi.GetCountryCode(), (countryCode, error) -> {
+      this.currentCountryCode = countryCode != null ? countryCode.text : "";
+      check.run();
+    });
+  }
+
   private void searchCountry (@Nullable final String inputPrefix) {
     String prefix = StringUtils.isEmpty(inputPrefix) || !isCountryDefault ? inputPrefix : "";
     lastSearchPrefix = prefix;
-    if (prefix == null) {
+    if (prefix == null || countries == null || countries.length == 0) {
       setItems(baseItems, false);
       return;
     }
     Background.instance().post(() -> {
-      String[][] countries = TGCountry.instance().getAll();
-      String number = Strings.getNumber(prefix);
-      // ArrayList<String[]> result = new ArrayList<>(countries.length);
-      int[] level = new int[1];
-      final ArrayList<ListItem> results = new ArrayList<>(countries.length + 1);
-      final Comparator<ListItem> comparator = (o1, o2) -> {
-        int level1 = o1.getSliderValue();
-        int level2 = o2.getSliderValue();
+      final ArrayList<ListItem> results = new ArrayList<>(countries.length);
 
-        if (level1 != level2) {
-          return level1 < level2 ? -1 : 1;
+      boolean search = !StringUtils.isEmpty(prefix);
+      String numberPrefix = Strings.getNumber(prefix);
+
+      for (TdApi.CountryInfo country : countries) {
+        if (country.isHidden && !search)
+          continue;
+
+        String emoji = Emoji.getEmojiFlagFromCountry(country.countryCode);
+        String emojiPrefix = !StringUtils.isEmpty(emoji) ? emoji + " " : "";
+
+        Highlight nativeNameHighlight = Highlight.valueOf(country.name, prefix);
+        boolean nativeNameMatches = Highlight.isExactWordMatch(country.name, nativeNameHighlight);
+        if (!nativeNameMatches) {
+          nativeNameHighlight = null;
+        }
+        boolean nameInEnglishMatches = Highlight.isExactWordMatch(country.englishName, Highlight.valueOf(country.englishName, prefix));
+
+        boolean emojiMatches = search && emoji != null && emoji.equals(prefix);
+        boolean countryCodeMatches = country.countryCode.equalsIgnoreCase(prefix);
+
+        String displayText;
+        if (!emojiPrefix.isEmpty()) {
+          displayText = emojiPrefix + country.name;
+          if (nativeNameHighlight != null) {
+            nativeNameHighlight = nativeNameHighlight.offset(emojiPrefix.length());
+          }
+        } else {
+          displayText = country.name;
         }
 
-        String c1 = o1.getString().toString();
-        String c2 = o2.getString().toString();
-
-        int cmp = c1.compareTo(c2);
-
-        return cmp != 0 ? cmp : ((String) o1.getData()).compareTo((String) o2.getData());
-      };
-
-      for (String[] country : countries) {
-        String name = country[2].toLowerCase();
-        if (!number.isEmpty() && country[0].startsWith(number)) {
-          level[0] = -1;
-        } else if (!Strings.anyWordStartsWith(name, prefix, level)) {
-          String clean = Strings.clean(name);
-          if (StringUtils.equalsOrBothEmpty(name, clean) || !Strings.anyWordStartsWith(clean, prefix, level)) {
+        for (String callingCode : country.callingCodes) {
+          boolean numberMatchesPrefix = search && !numberPrefix.isEmpty() && callingCode.startsWith(numberPrefix);
+          if (search && !nativeNameMatches && !nameInEnglishMatches && !numberMatchesPrefix && !emojiMatches && !countryCodeMatches) {
             continue;
           }
-        }
-        ListItem item = new ListItem(ListItem.TYPE_COUNTRY, R.id.result, 0, country[2], false).setData("+" + country[0]).setSliderInfo(null, level[0]);
-        int i = Collections.binarySearch(results, item, comparator);
-        if (i < 0) {
-          results.add(-(++i), item);
+
+          ListItem item = new ListItem(ListItem.TYPE_COUNTRY, R.id.result, 0, displayText, false)
+            .setData(country)
+            .setStringValue(callingCode)
+            .setHighlight(nativeNameHighlight);
+          results.add(item);
         }
       }
 
       if (results.isEmpty()) {
         results.add(new ListItem(ListItem.TYPE_EMPTY, 0, 0, R.string.RegionNotFound));
-      } else {
-        //results.add(new SettingItem(SettingItem.TYPE_EMPTY_OFFSET_SMALL));
-        /*for (String[] country : result) {
-          results.add();
-        }*/
       }
 
       runOnUiThreadOptional(() -> {
@@ -812,14 +1036,14 @@ public class PhoneController extends EditBaseController<Void> implements Setting
           }
         }, 360l);
       }
-      searchCountry(inCountryMode ? countryView.getText().toString().trim().toLowerCase() : null);
+      searchCountry(inCountryMode ? countryView.getText().toString().trim() : null);
     }
   }
 
   private void updateHint (boolean useOffsetLeft, CharSequence text, boolean isError) {
     int offsetLeft = useOffsetLeft ? Screen.dp(89f) : 0;
-    int textColorId = isError ? R.id.theme_color_textNegative : R.id.theme_color_textLight;
-    if (offsetLeft != hintItem.getTextPaddingLeft() || hintItem.getTextColorId(R.id.theme_color_background_textLight) != textColorId || !StringUtils.equalsOrBothEmpty(hintItem.getString(), text)) {
+    @PorterDuffColorId int textColorId = isError ? ColorId.textNegative : ColorId.textLight;
+    if (offsetLeft != hintItem.getTextPaddingLeft() || hintItem.getTextColorId(ColorId.background_textLight) != textColorId || !StringUtils.equalsOrBothEmpty(hintItem.getString(), text)) {
       hintItem.setTextPaddingLeft(offsetLeft);
       hintItem.setTextColorId(textColorId);
       hintItem.setString(text);
@@ -908,10 +1132,10 @@ public class PhoneController extends EditBaseController<Void> implements Setting
 
     switch (mode) {
       case MODE_ADD_CONTACT:
-        function = new TdApi.ImportContacts(new TdApi.Contact[] {new TdApi.Contact(phone, getFirstName(), getLastName(), null, 0)});
+        function = new TdApi.ImportContacts(new TdApi.ImportedContact[] {new TdApi.ImportedContact(phone, getFirstName(), getLastName(), null)});
         break;
       case MODE_CHANGE_NUMBER:
-        function = new TdApi.ChangePhoneNumber(phone, tdlib.phoneNumberAuthenticationSettings(context));
+        function = new TdApi.SendPhoneNumberCode(phone, tdlib.phoneNumberAuthenticationSettings(context), new TdApi.PhoneNumberCodeTypeChange());
         break;
       case MODE_LOGIN:
         function = new TdApi.SetAuthenticationPhoneNumber(phone, tdlib.phoneNumberAuthenticationSettings(context));
@@ -962,10 +1186,10 @@ public class PhoneController extends EditBaseController<Void> implements Setting
               if (message instanceof Spannable) {
                 CustomTypefaceSpan[] spans = ((Spannable) message).getSpans(0, message.length(), CustomTypefaceSpan.class);
                 for (CustomTypefaceSpan span : spans) {
-                  if (span.getEntityType() != null && span.getEntityType().getConstructor() == TdApi.TextEntityTypeItalic.CONSTRUCTOR) {
+                  if (span.getTextEntityType() != null && Td.isItalic(span.getTextEntityType())) {
                     span.setTypeface(null);
-                    span.setColorId(R.id.theme_color_textLink);
-                    span.setEntityType(new TdApi.TextEntityTypeEmailAddress());
+                    span.setColorId(ColorId.textLink);
+                    span.setTextEntityType(new TdApi.TextEntityTypeEmailAddress());
                     int start = ((Spannable) message).getSpanStart(span);
                     int end = ((Spannable) message).getSpanEnd(span);
                     ((Spannable) message).setSpan(new NoUnderlineClickableSpan() {
@@ -1056,7 +1280,7 @@ public class PhoneController extends EditBaseController<Void> implements Setting
     } else {
       msg = Lang.getStringBold(R.string.SuggestInvitingUser, getFirstName());
     }
-    showOptions(msg, new int[] {R.id.btn_invite, R.id.btn_cancel}, new String[] {Lang.getString(R.string.Invite), Lang.getString(R.string.Cancel)}, new int[] {OPTION_COLOR_BLUE, OPTION_COLOR_NORMAL}, new int[] {R.drawable.baseline_person_add_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
+    showOptions(msg, new int[] {R.id.btn_invite, R.id.btn_cancel}, new String[] {Lang.getString(R.string.Invite), Lang.getString(R.string.Cancel)}, new int[] {OptionColor.BLUE, OptionColor.NORMAL}, new int[] {R.drawable.baseline_person_add_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
       if (id == R.id.btn_invite) {
         tdlib.cache().getInviteText(text -> {
           Intents.sendSms(getPhoneNumber(), text.text);
@@ -1071,7 +1295,7 @@ public class PhoneController extends EditBaseController<Void> implements Setting
   private boolean oneShot;
 
   public void onAuthorizationReady () {
-    if (UI.inTestMode()) {
+    if (UI.inTestMode() && recyclerView != null && isFocused()) {
       makeRequest();
     }
   }
@@ -1094,9 +1318,102 @@ public class PhoneController extends EditBaseController<Void> implements Setting
     }
   }
 
+  private AlertDialog emulatorPrompt;
+
+  private void showEmulatorPrompt () {
+    if (mode != MODE_LOGIN) {
+      return;
+    }
+    context.forceRunEmulatorChecks(detectionResult -> executeOnUiThreadOptional(() -> {
+      if (detectionResult == null || !detectionResult.isEmulatorDetected()) {
+        return;
+      }
+      if (emulatorPrompt != null && emulatorPrompt.isShowing()) {
+        return;
+      }
+      boolean mayBeFalsePositive = detectionResult.mayBeFalsePositive();
+      AlertDialog.Builder b = new AlertDialog.Builder(context, Theme.dialogTheme());
+      b.setTitle(Lang.getString(R.string.EmulatorWarningTitle));
+      b.setMessage(Lang.getMarkdownStringSecure(this, mayBeFalsePositive ? R.string.EmulatorWarning : R.string.EmulatorWarningStrict));
+      b.setPositiveButton(Lang.getString(R.string.EmulatorWarningBtnOk), (dialog, which) -> dialog.dismiss());
+      if (mayBeFalsePositive) {
+        b.setNeutralButton(Lang.getString(R.string.EmulatorWarningBtnReport), (dialog, which) -> {
+          try {
+            Uri uri = Uri.parse(BuildConfig.REMOTE_URL);
+            String title = Lang.getString(R.string.EmulatorDetectorReport_title, Build.BRAND, Build.MODEL);
+            String metadata = U.getUsefulMetadata(tdlib);
+            String body = Lang.getString(R.string.EmulatorDetectorReport_text,
+              Build.BRAND,
+              Build.MODEL,
+              Build.PRODUCT,
+              Build.DEVICE,
+              Build.HARDWARE,
+              metadata,
+              detectionResult.toHumanReadableFormat()
+            );
+            Uri reportUri = uri
+              .buildUpon()
+              .appendEncodedPath("issues/new")
+              .appendQueryParameter("title", title)
+              .appendQueryParameter("body", body)
+              .build();
+
+            IntList ids = new IntList(3);
+            StringList strings = new StringList(3);
+            IntList icons = new IntList(3);
+            ids.append(R.id.btn_openIn);
+            strings.append(R.string.EmulatorWarningReportBtn);
+            icons.append(R.drawable.baseline_github_24);
+
+            ids.append(R.id.btn_copyLink);
+            strings.append(R.string.CopyLink);
+            icons.append(R.drawable.baseline_link_24);
+
+            if (tdlib.context().hasActiveAccounts()) {
+              ids.append(R.id.btn_share);
+              strings.append(R.string.Share);
+              icons.append(R.drawable.baseline_forward_24);
+            }
+            showOptions(Lang.getMarkdownStringSecure(this, R.string.EmulatorWarningReport), ids.get(), strings.get(), null, icons.get(), (optionItemView, id) -> {
+              if (id == R.id.btn_openIn) {
+                Intents.openUriInBrowser(reportUri);
+              } else if (id == R.id.btn_copyLink) {
+                UI.copyText(reportUri.toString(), R.string.CopiedLink);
+              } else if (id == R.id.btn_share) {
+                String text = reportUri.toString();
+                ShareController c = new ShareController(context, context.currentTdlib());
+                c.setArguments(new ShareController.Args(text).setExport(text));
+                c.show();
+              }
+              return true;
+            });
+          } catch (Throwable t) {
+            Log.e(t);
+            UI.showToast("Unable to create report: " + Log.toString(t), Toast.LENGTH_SHORT);
+          }
+        });
+      }
+      b.setCancelable(false);
+      emulatorPrompt = showAlert(b);
+    }));
+  }
+
+  @Override
+  public void onActivityResume () {
+    super.onActivityResume();
+    showEmulatorPrompt();
+  }
+
+  @Override
+  public void destroy () {
+    super.destroy();
+    TGLegacyManager.instance().removeEmojiListener(adapter);
+  }
+
   @Override
   public void onFocus () {
     super.onFocus();
+    showEmulatorPrompt();
     if (oneShot) {
       return;
     }
@@ -1113,8 +1430,14 @@ public class PhoneController extends EditBaseController<Void> implements Setting
         if (UI.inTestMode()) {
           makeTestRequest();
         }
+        if (Config.ENABLE_BASELINE_PROFILE_HOOKS) {
+          tdlib.awaitConnection(() -> runOnUiThreadOptional(this::addStartupMarker));
+        }
         break;
       }
+    }
+    if (mode == MODE_LOGIN && UI.inTestMode()) {
+      makeRequest();
     }
   }
 }

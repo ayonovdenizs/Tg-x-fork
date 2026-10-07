@@ -25,8 +25,8 @@ import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.emoji.MediaStickersAdapter;
 import org.thunderdog.challegram.component.sticker.StickerSmallView;
@@ -36,17 +36,34 @@ import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.StickersListener;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.tool.Views;
+import org.thunderdog.challegram.util.CancellableResultHandler;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 import me.vkryl.android.widget.FrameLayoutFix;
+import me.vkryl.core.StringUtils;
+import me.vkryl.core.collection.LongSet;
 import me.vkryl.core.lambda.CancellableRunnable;
 
 public class StickersTrendingController extends ViewController<Void> implements StickerSmallView.StickerMovementCallback, Client.ResultHandler, TGStickerObj.DataProvider, StickersListener, TGStickerSetInfo.ViewCallback {
-  public StickersTrendingController (Context context, Tdlib tdlib) {
+  private final boolean isEmoji;
+  private final boolean needKeyboardTop;
+
+  public StickersTrendingController (Context context, Tdlib tdlib, boolean isEmoji) {
     super(context, tdlib);
+    this.isEmoji = isEmoji;
+    this.needKeyboardTop = false;
+  }
+
+  public StickersTrendingController (Context context, Tdlib tdlib, boolean isEmoji, boolean needKeyboardTop) {
+    super(context, tdlib);
+    this.isEmoji = isEmoji;
+    this.needKeyboardTop = needKeyboardTop;
   }
 
   @Override
@@ -58,24 +75,36 @@ public class StickersTrendingController extends ViewController<Void> implements 
   private MediaStickersAdapter adapter;
 
   @Override
+  public boolean supportsBottomInset () {
+    return true;
+  }
+
+  @Override
+  protected void onBottomInsetChanged (int extraBottomInset, int extraBottomInsetWithoutIme, boolean isImeInset) {
+    super.onBottomInsetChanged(extraBottomInset, extraBottomInsetWithoutIme, isImeInset);
+    Views.applyBottomInset(recyclerView, extraBottomInset);
+  }
+
+  @Override
   protected View onCreateView (Context context) {
-    adapter = new MediaStickersAdapter(this, this, true, this);
+    adapter = new MediaStickersAdapter(this, this, !isEmoji, this);
     adapter.setIsBig();
 
-    GridLayoutManager manager = new GridLayoutManager(context, 5);
+    GridLayoutManager manager = new GridLayoutManager(context, getSpanCount());
     manager.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
       @Override
       public int getSpanSize (int position) {
-        return adapter.getItemViewType(position) == MediaStickersAdapter.StickerHolder.TYPE_STICKER ? 1 : 5;
+        return adapter.getItemViewType(position) == MediaStickersAdapter.StickerHolder.TYPE_STICKER ? 1 : getSpanCount();
       }
     });
 
     recyclerView = (RecyclerView) Views.inflate(context(), R.layout.recycler, null);
+    Views.applyBottomInset(recyclerView, extraBottomInset);
     Views.setScrollBarPosition(recyclerView);
-    recyclerView.setItemAnimator(null);
+    // recyclerView.setItemAnimator(null);
     recyclerView.setLayoutManager(manager);
     recyclerView.setAdapter(adapter);
-    ViewSupport.setThemedBackground(recyclerView, R.id.theme_color_filling, this);
+    ViewSupport.setThemedBackground(recyclerView, ColorId.filling, this);
     recyclerView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
     adapter.setManager(recyclerView.getLayoutManager());
     adapter.setItem(new MediaStickersAdapter.StickerItem(MediaStickersAdapter.StickerHolder.TYPE_PROGRESS));
@@ -114,6 +143,10 @@ public class StickersTrendingController extends ViewController<Void> implements 
     return !loadingTrending;
   }
 
+  private int getSpanCount () {
+    return isEmoji ? 8 : 5;
+  }
+
   @Override
   public void destroy () {
     super.destroy();
@@ -126,7 +159,7 @@ public class StickersTrendingController extends ViewController<Void> implements 
 
   @Override
   public void onInstalledStickerSetsUpdated (long[] stickerSetIds, TdApi.StickerType stickerType) {
-    if (stickerType.getConstructor() != TdApi.StickerTypeRegular.CONSTRUCTOR)
+    if (isNeedIgnoreStickersUpdate(stickerType))
       return;
     final LongSparseArray<TGStickerSetInfo> sets = new LongSparseArray<>(stickerSetIds.length);
     for (long setId : stickerSetIds) {
@@ -147,7 +180,7 @@ public class StickersTrendingController extends ViewController<Void> implements 
 
   @Override
   public void onStickerSetArchived (TdApi.StickerSetInfo stickerSet) {
-    if (stickerSet.stickerType.getConstructor() != TdApi.StickerTypeRegular.CONSTRUCTOR)
+    if (isNeedIgnoreStickersUpdate(stickerSet.stickerType))
       return;
     final long stickerSetId = stickerSet.id;
     runOnUiThreadOptional(() -> {
@@ -163,7 +196,7 @@ public class StickersTrendingController extends ViewController<Void> implements 
 
   @Override
   public void onStickerSetRemoved (TdApi.StickerSetInfo removedStickerSet) {
-    if (removedStickerSet.stickerType.getConstructor() != TdApi.StickerTypeRegular.CONSTRUCTOR)
+    if (isNeedIgnoreStickersUpdate(removedStickerSet.stickerType))
       return;
     final long removedStickerSetId = removedStickerSet.id;
     runOnUiThreadOptional(() -> {
@@ -180,7 +213,7 @@ public class StickersTrendingController extends ViewController<Void> implements 
 
   @Override
   public void onStickerSetInstalled (TdApi.StickerSetInfo installedStickerSet) {
-    if (installedStickerSet.stickerType.getConstructor() != TdApi.StickerTypeRegular.CONSTRUCTOR)
+    if (isNeedIgnoreStickersUpdate(installedStickerSet.stickerType))
       return;
     final long installedStickerSetId = installedStickerSet.id;
     runOnUiThreadOptional(() -> {
@@ -198,58 +231,109 @@ public class StickersTrendingController extends ViewController<Void> implements 
   public boolean canFindChildViewUnder (StickerSmallView view, int recyclerX, int recyclerY) {
     return true;
   }
-
+/*
   @Override
   public void onTrendingStickersUpdated (final TdApi.StickerType stickerType, final TdApi.TrendingStickerSets stickerSets, int unreadCount) {
-    if (stickerType.getConstructor() != TdApi.StickerTypeRegular.CONSTRUCTOR || stickerSets.sets.length == 0)
+    if (isNeedIgnoreStickersUpdate(stickerType) || stickerSets.sets.length == 0)
       return;
     runOnUiThreadOptional(() -> {
-      if (!loadingTrending) {
+      if (!loadingTrending && StringUtils.isEmpty(searchRequest)) {
         loadTrending(0, 20, 0);
       }
     });
   }
+*/
 
   @Override
   public void onFavoriteStickersUpdated (int[] stickerIds) { }
 
   private boolean loadingTrending, canLoadMoreTrending;
 
+  private @Nullable String searchRequest;
+
+  public void search (@Nullable String request) {
+    if (trendingHandler != null) {
+      trendingHandler.cancel();
+    }
+    loadingTrending = false;
+    canLoadMoreTrending = false;
+    stickerSets.clear();
+    searchRequest = request;
+    if (getWrapUnchecked() != null) {
+      adapter.setItem(new MediaStickersAdapter.StickerItem(MediaStickersAdapter.StickerHolder.TYPE_PROGRESS));
+      loadTrending(0, 20, 0);
+    }
+  }
+
   private void loadTrending (int offset, int limit, int cellCount) {
     if (!loadingTrending) {
       loadingTrending = true;
-      tdlib.client().send(new TdApi.GetTrendingStickerSets(new TdApi.StickerTypeRegular(), offset, limit), result -> {
-        switch (result.getConstructor()) {
-          case TdApi.TrendingStickerSets.CONSTRUCTOR: {
-            final TdApi.TrendingStickerSets trendingStickerSets = (TdApi.TrendingStickerSets) result;
-            final ArrayList<MediaStickersAdapter.StickerItem> stickerItems = new ArrayList<>();
-            final ArrayList<TGStickerSetInfo> stickerSets;
 
-            TdApi.StickerSetInfo[] sets = trendingStickerSets.sets;
-            if (sets.length > 0) {
-              stickerSets = new ArrayList<>(sets.length);
-              EmojiMediaListController.parseTrending(tdlib, stickerSets, stickerItems, cellCount, sets, this, this, true);
-            } else {
-              stickerSets = null;
-              if (offset == 0)
-                stickerItems.add(new MediaStickersAdapter.StickerItem(MediaStickersAdapter.StickerHolder.TYPE_COME_AGAIN_LATER));
-            }
+      TdApi.StickerType stickerType = getStickerType();
+      String searchRequest = this.searchRequest;
+      CancellableResultHandler handler = trendingHandler(offset, cellCount, searchRequest);
 
-            tdlib.ui().post(() -> {
-              if (!isDestroyed()) {
-                addStickerSets(stickerSets, stickerItems, offset, cellCount);
-                getParentOrSelf().executeScheduledAnimation();
-              }
-            });
-            break;
-          }
-          case TdApi.Error.CONSTRUCTOR: {
-            UI.showError(result);
-            break;
-          }
+      if (StringUtils.isEmpty(searchRequest)) {
+        tdlib.client().send(
+          new TdApi.GetTrendingStickerSets(stickerType, offset, limit),
+          handler
+        );
+        return;
+      }
+
+      // TODO: rework properly to tdlib.ui().getEmojiStickers(..)
+
+      if (offset > 0) {
+        handler.onResult(new TdApi.StickerSets(0, new TdApi.StickerSetInfo[0]));
+        return;
+      }
+
+      tdlib.send(new TdApi.SearchInstalledStickerSets(stickerType, searchRequest, 200), (foundInstalledStickerSets, error) -> {
+        if (handler.isCancelled())
+          return;
+        if (error != null || foundInstalledStickerSets.sets.length == 0) {
+          tdlib.client().send(new TdApi.SearchStickerSets(stickerType, searchRequest), handler);
+          return;
         }
+        tdlib.send(new TdApi.SearchStickerSets(stickerType, searchRequest), (foundStickerSets, error1) -> {
+          if (error1 != null || foundInstalledStickerSets.sets.length == 0) {
+            handler.onResult(foundInstalledStickerSets);
+            return;
+          }
+          List<TdApi.StickerSetInfo> stickerSets = new ArrayList<>();
+          Collections.addAll(stickerSets, foundInstalledStickerSets.sets);
+          LongSet idsSet = new LongSet(foundInstalledStickerSets.sets.length);
+          for (TdApi.StickerSetInfo setInfo : foundInstalledStickerSets.sets) {
+            idsSet.add(setInfo.id);
+          }
+          for (TdApi.StickerSetInfo setInfo : foundStickerSets.sets) {
+            if (!idsSet.has(setInfo.id)) {
+              stickerSets.add(setInfo);
+            }
+          }
+          TdApi.StickerSets mergedStickerSets = new TdApi.StickerSets(
+            foundInstalledStickerSets.totalCount + foundStickerSets.totalCount,
+            stickerSets.toArray(new TdApi.StickerSetInfo[0])
+          );
+          handler.onResult(mergedStickerSets);
+        });
       });
     }
+  }
+
+  private TdApi.StickerType getStickerType () {
+    if (isEmoji) {
+      return new TdApi.StickerTypeCustomEmoji();
+    } else {
+      return new TdApi.StickerTypeRegular();
+    }
+  }
+
+  private boolean isNeedIgnoreStickersUpdate (final TdApi.StickerType stickerType) {
+    if (isEmoji) {
+      return stickerType.getConstructor() != TdApi.StickerTypeCustomEmoji.CONSTRUCTOR;
+    }
+    return stickerType.getConstructor() != TdApi.StickerTypeRegular.CONSTRUCTOR;
   }
 
   private final ArrayList<TGStickerSetInfo> stickerSets = new ArrayList<>();
@@ -296,7 +380,7 @@ public class StickersTrendingController extends ViewController<Void> implements 
             setIds[i] = pendingViewStickerSets.keyAt(i);
           }
           pendingViewStickerSets.clear();
-          tdlib.client().send(new TdApi.ViewTrendingStickerSets(setIds), tdlib.okHandler());
+          tdlib.send(new TdApi.ViewTrendingStickerSets(setIds), tdlib.typedOkHandler());
         }
       }
     };
@@ -424,5 +508,57 @@ public class StickersTrendingController extends ViewController<Void> implements 
   @Override
   public int getStickersListTop () {
     return Views.getLocationInWindow(recyclerView)[1];
+  }
+
+
+
+  private CancellableResultHandler trendingHandler;
+
+  private CancellableResultHandler trendingHandler (int offset, int cellCount, String searchRequest) {
+    return trendingHandler = new CancellableResultHandler() {
+      private void processResultImpl (TdApi.StickerSetInfo[] sets) {
+        final ArrayList<MediaStickersAdapter.StickerItem> stickerItems = new ArrayList<>();
+        final ArrayList<TGStickerSetInfo> stickerSets;
+
+        if (sets.length > 0) {
+          stickerSets = new ArrayList<>(sets.length);
+          if (offset == 0 && needKeyboardTop)
+            stickerItems.add(new MediaStickersAdapter.StickerItem(MediaStickersAdapter.StickerHolder.TYPE_KEYBOARD_TOP));
+          EmojiMediaListController.parseTrending(tdlib, stickerSets, stickerItems, cellCount, sets, StickersTrendingController.this, StickersTrendingController.this, true, false, searchRequest);
+        } else {
+          stickerSets = null;
+          if (offset == 0)
+            stickerItems.add(new MediaStickersAdapter.StickerItem(MediaStickersAdapter.StickerHolder.TYPE_COME_AGAIN_LATER));
+        }
+
+        tdlib.ui().post(() -> {
+          if (!isDestroyed()) {
+            addStickerSets(stickerSets, stickerItems, offset, cellCount);
+            getParentOrSelf().executeScheduledAnimation();
+          }
+        });
+      }
+
+      @Override
+      public void processResult (TdApi.Object result) {
+        switch (result.getConstructor()) {
+          case TdApi.TrendingStickerSets.CONSTRUCTOR: {
+            final TdApi.TrendingStickerSets trendingStickerSets = (TdApi.TrendingStickerSets) result;
+            processResultImpl(trendingStickerSets.sets);
+            break;
+          }
+          case TdApi.StickerSets.CONSTRUCTOR: {
+            final TdApi.StickerSets stickerSets = (TdApi.StickerSets) result;
+            processResultImpl(stickerSets.sets);
+            break;
+          }
+          case TdApi.Error.CONSTRUCTOR: {
+            UI.showError(result);
+            processResultImpl(new TdApi.StickerSetInfo[0]);
+            break;
+          }
+        }
+      }
+    };
   }
 }

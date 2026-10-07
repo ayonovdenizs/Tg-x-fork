@@ -11,9 +11,8 @@ import androidx.annotation.DrawableRes;
 
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.navigation.ViewController;
-import org.thunderdog.challegram.theme.ThemeColorId;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Screen;
-import org.thunderdog.challegram.ui.MessagesController;
 import org.thunderdog.challegram.widget.CircleButton;
 
 import me.vkryl.android.AnimatorUtils;
@@ -73,7 +72,7 @@ public class CircleCounterBadgeView extends FrameLayout implements FactorAnimato
     setEnabled(true, false);
   }
 
-  public void init (@DrawableRes int icon, float size, float padding, @ThemeColorId int backgroundColorId, @ThemeColorId int iconColorId) {
+  public void init (@DrawableRes int icon, float size, float padding, @ColorId int backgroundColorId, @ColorId int iconColorId) {
     circleButton.init(icon, size, padding, backgroundColorId, iconColorId);
   }
 

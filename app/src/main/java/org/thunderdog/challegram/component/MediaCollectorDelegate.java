@@ -16,11 +16,13 @@ package org.thunderdog.challegram.component;
 
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.mediaview.MediaViewController;
 import org.thunderdog.challegram.mediaview.data.MediaStack;
 
 public interface MediaCollectorDelegate {
-  MediaStack collectMedias (long fromMessageId, @Nullable TdApi.SearchMessagesFilter filter);
+  default MediaStack collectMedias (long fromMessageId, boolean isSponsored, @Nullable TdApi.SearchMessagesFilter filter) {
+    return null;
+  }
   void modifyMediaArguments (Object cause, MediaViewController.Args args);
 }

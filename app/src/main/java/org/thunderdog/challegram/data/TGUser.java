@@ -18,7 +18,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.component.dialogs.ChatView;
@@ -26,6 +26,7 @@ import org.thunderdog.challegram.component.user.UserView;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.loader.ImageFile;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.telegram.TdlibAccentColor;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Strings;
 import org.thunderdog.challegram.util.UserProvider;
@@ -34,10 +35,10 @@ import org.thunderdog.challegram.util.text.Text;
 import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
 
-import me.vkryl.core.StringUtils;
 import me.vkryl.core.BitwiseUtils;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.Td;
+import me.vkryl.core.StringUtils;
+import tgx.td.ChatId;
+import tgx.td.Td;
 
 public class TGUser implements UserProvider {
   private static final int FLAG_LOCAL = 0x01;
@@ -141,7 +142,7 @@ public class TGUser implements UserProvider {
   }
 
   private void buildContact () {
-    avatarPlaceholderMetadata = new AvatarPlaceholder.Metadata(TD.getAvatarColorId(rawContactId, tdlib.myUserId()), TD.getLetters(firstName, lastName));
+    avatarPlaceholderMetadata = new AvatarPlaceholder.Metadata(TdlibAccentColor.defaultAccentColorForUserId(tdlib, rawContactId), TD.getLetters(firstName, lastName));
     updateName();
     updateStatus();
   }
@@ -165,6 +166,7 @@ public class TGUser implements UserProvider {
   public static String getActionDateStatus (Tdlib tdlib, int actionDateSeconds, TdApi.Message viewedMessage) {
     int stringRes = R.string.viewed;
     if (viewedMessage != null) {
+      //noinspection SwitchIntDef
       switch (viewedMessage.content.getConstructor()) {
         case TdApi.MessageVoiceNote.CONSTRUCTOR:
           stringRes = R.string.opened_voice;
@@ -209,6 +211,7 @@ public class TGUser implements UserProvider {
         updateStatus();
       } else {
         this.statusText = statusText;
+        this.statusWidth = U.measureText(statusText, UserView.getStatusPaint());
         this.flags |= FLAG_CUSTOM_STATUS_TEXT;
         this.flags &= ~FLAG_ONLINE;
       }
@@ -239,14 +242,16 @@ public class TGUser implements UserProvider {
     }
   }
 
+  public boolean belongsToSenderId (@NonNull TdApi.MessageSender senderId) {
+    return getChatId() == Td.getSenderId(senderId);
+  }
+
   public void setChat (long chatId, @Nullable TdApi.Chat chat) {
     this.user = null;
     this.chatId = chatId;
     avatarPlaceholderMetadata = tdlib.chatPlaceholderMetadata(chatId, chat, false);
     imageFile = tdlib.chatAvatar(chatId);
-    this.nameText = tdlib.chatTitle(chat);
-    this.nameFake = Text.needFakeBold(nameText);
-    this.nameWidth = U.measureText(nameText, Paints.getTitleBigPaint());
+    updateName();
     updateStatus();
   }
 
@@ -262,7 +267,7 @@ public class TGUser implements UserProvider {
       flags &= ~FLAG_GROUP_CREATOR;
     }
     if (user == null || TD.isPhotoEmpty(user.profilePhoto)) {
-      avatarPlaceholderMetadata = new AvatarPlaceholder.Metadata(TD.getAvatarColorId(user, tdlib.myUserId()), TD.getLetters(user));
+      avatarPlaceholderMetadata = new AvatarPlaceholder.Metadata(tdlib.cache().userAccentColor(user), TD.getLetters(user));
     } else {
       imageFile = new ImageFile(tdlib, user.profilePhoto.small);
       imageFile.setSize(ChatView.getDefaultAvatarCacheSize());
@@ -280,7 +285,14 @@ public class TGUser implements UserProvider {
 
   public boolean updateName () {
     if ((flags & FLAG_CHAT_TITLE_AS_USER_NAME) != 0) return false;
-    String nameText = (flags & FLAG_LOCAL) != 0 ? TD.getUserName(firstName, lastName) : TD.getUserName(userId, user);
+    String nameText;
+    if (BitwiseUtils.hasFlag(flags, FLAG_LOCAL)) {
+      nameText = TD.getUserName(firstName, lastName);
+    } else if (user != null || userId != 0) {
+      nameText = TD.getUserName(userId, user);
+    } else {
+      nameText = tdlib.chatTitle(chatId);
+    }
     if (!StringUtils.equalsOrBothEmpty(this.nameText, nameText)) {
       this.nameText = nameText;
       this.nameFake = Text.needFakeBold(nameText);
@@ -337,6 +349,10 @@ public class TGUser implements UserProvider {
 
   public String getName () {
     return nameText;
+  }
+
+  public String getShorterName () {
+    return TD.getShorterUserNameOrNull(getFirstName(), getLastName());
   }
 
   public float getNameWidth () {

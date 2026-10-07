@@ -30,16 +30,16 @@ import androidx.annotation.StringRes;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.TdApi;
-import org.thunderdog.challegram.R;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.navigation.BackHeaderButton;
 import org.thunderdog.challegram.navigation.HeaderView;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.support.ViewSupport;
-import org.thunderdog.challegram.theme.ThemeColorId;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Views;
+import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.util.HapticMenuHelper;
 import org.thunderdog.challegram.widget.EmptyTextView;
 
@@ -91,12 +91,12 @@ public abstract class MediaBottomBaseController<T> extends ViewController<T> {
 
   @Override
   protected final int getHeaderTextColorId () {
-    return R.id.theme_color_text;
+    return ColorId.text;
   }
 
   @Override
   protected final int getHeaderColorId () {
-    return R.id.theme_color_filling;
+    return ColorId.filling;
   }
 
   @Override
@@ -106,7 +106,7 @@ public abstract class MediaBottomBaseController<T> extends ViewController<T> {
 
   @Override
   protected final int getHeaderIconColorId () {
-    return R.id.theme_color_headerLightIcon;
+    return ColorId.headerLightIcon;
   }
 
   @Override
@@ -115,12 +115,14 @@ public abstract class MediaBottomBaseController<T> extends ViewController<T> {
   }
 
   @Override
-  public boolean onBackPressed (boolean fromTop) {
+  public boolean performOnBackPressed (boolean fromTop, boolean commit) {
     if (inSearchMode()) {
-      mediaLayout.getHeaderView().closeSearchMode(true, null);
+      if (commit) {
+        mediaLayout.getHeaderView().closeSearchMode(true, null);
+      }
       return true;
     }
-    return false;
+    return super.performOnBackPressed(fromTop, commit);
   }
 
   public boolean canMoveRecycler () {
@@ -148,7 +150,7 @@ public abstract class MediaBottomBaseController<T> extends ViewController<T> {
   }
 
   private int getBarHeightIfAvailable () {
-    return mediaLayout.inSpecificMode() ? 0 : MediaBottomBar.getBarHeight();
+    return mediaLayout.inSpecificMode() && mediaLayout.getMode() != MediaLayout.MODE_CUSTOM_ADAPTER ? 0 : MediaBottomBar.getBarHeight() + (Settings.instance().useEdgeToEdge() ? context.getRootView().getSystemInsetsWithoutIme().bottom : 0);
   }
 
   private void resetStartHeights (boolean initial) {
@@ -204,7 +206,7 @@ public abstract class MediaBottomBaseController<T> extends ViewController<T> {
     return true;
   }
 
-  public boolean showExitWarning (boolean isExitingSelection) {
+  public boolean showExitWarning (boolean isExitingSelection, boolean commit) {
     // override
     return false;
   }
@@ -229,8 +231,8 @@ public abstract class MediaBottomBaseController<T> extends ViewController<T> {
     }
   }
 
-  private static int getTargetHeight () {
-    return Screen.currentHeight() - HeaderView.getTopOffset();
+  private int getTargetHeight () {
+    return context.getRootView().getMeasuredHeight() - HeaderView.getTopOffset();
   }
 
   private void updateRecyclerTop (int height) {
@@ -248,6 +250,17 @@ public abstract class MediaBottomBaseController<T> extends ViewController<T> {
   protected MediaBottomBaseRecyclerView recyclerView;
   private EmptyTextView emptyView;
 
+  @Override
+  public boolean supportsBottomInset () {
+    return true;
+  }
+
+  @Override
+  protected void onBottomInsetChanged (int extraBottomInset, int extraBottomInsetWithoutIme, boolean isImeInset) {
+    super.onBottomInsetChanged(extraBottomInset, extraBottomInsetWithoutIme, isImeInset);
+    Views.applyBottomInset(recyclerView, extraBottomInsetWithoutIme);
+  }
+
   protected final MediaContentView buildContentView (boolean needProgress) {
     contentView = new MediaContentView(context());
     contentView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -259,6 +272,7 @@ public abstract class MediaBottomBaseController<T> extends ViewController<T> {
     params.bottomMargin = HeaderView.getTopOffset();
 
     recyclerView = new MediaBottomBaseRecyclerView(context());
+    Views.applyBottomInset(recyclerView, extraBottomInsetWithoutIme);
     recyclerView.addItemDecoration(new RecyclerView.ItemDecoration() {
       @Override
       public void getItemOffsets (Rect outRect, View view, RecyclerView parent, RecyclerView.State state) {
@@ -302,8 +316,8 @@ public abstract class MediaBottomBaseController<T> extends ViewController<T> {
 
   }
 
-  protected @ThemeColorId int getRecyclerBackgroundColorId () {
-    return R.id.theme_color_filling;
+  protected @ColorId int getRecyclerBackgroundColorId () {
+    return ColorId.filling;
   }
 
   public void dispatchRecyclerTouchEvent (MotionEvent e) {
@@ -560,7 +574,7 @@ public abstract class MediaBottomBaseController<T> extends ViewController<T> {
     return y >= recyclerView.getTranslationY() && y <= recyclerView.getTranslationY() + recyclerView.getMeasuredHeight();
   }
 
-  public static int getMaxHeight () {
+  public final int getMaxHeight () {
     return getTargetHeight(); //  - HeaderView.getSize();
   }
 

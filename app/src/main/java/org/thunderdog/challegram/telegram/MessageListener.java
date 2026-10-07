@@ -16,20 +16,22 @@ package org.thunderdog.challegram.telegram;
 
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 
 public interface MessageListener {
   default void onNewMessage (TdApi.Message message) { }
   default void onMessageSendAcknowledged (long chatId, long messageId) { }
   default void onMessageSendSucceeded (TdApi.Message message, long oldMessageId) { }
-  default void onMessageSendFailed (TdApi.Message message, long oldMessageId, int errorCode, String errorMessage) { }
+  default void onMessageSendFailed (TdApi.Message message, long oldMessageId, TdApi.Error error) { }
   default void onMessageContentChanged (long chatId, long messageId, TdApi.MessageContent newContent) { }
+  default void onMessageEphemeralContentChanged (long chatId, long messageId, @Nullable TdApi.EphemeralMessageContent newEphemeralContent) { }
   default void onMessageEdited (long chatId, long messageId, int editDate, @Nullable TdApi.ReplyMarkup replyMarkup) { }
   default void onMessagePinned (long chatId, long messageId, boolean isPinned) { }
   default void onMessageOpened (long chatId, long messageId) { }
   default void onAnimatedEmojiMessageClicked (long chatId, long messageId, TdApi.Sticker sticker) { }
   default void onMessageMentionRead (long chatId, long messageId) { }
   default void onMessageInteractionInfoChanged (long chatId, long messageId, @Nullable TdApi.MessageInteractionInfo interactionInfo) { }
+  default void onMessageUnreadPollVotesChanged (long chatId, long messageId, boolean hasUnreadPollVote, int unreadPollVoteCount) { }
   default void onMessageUnreadReactionsChanged (long chatId, long messageId, @Nullable TdApi.UnreadReaction[] unreadReactions, int unreadReactionCount) { }
   default void onMessagesDeleted (long chatId, long[] messageIds) { }
   default void onMessageLiveLocationViewed (long chatId, long messageId) { }

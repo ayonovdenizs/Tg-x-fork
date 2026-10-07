@@ -14,23 +14,22 @@
  */
 package org.thunderdog.challegram;
 
+import static tgx.flavor.VideoTransformer.setLegacyTranscoderLogLevel;
+
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Message;
-import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import com.otaliastudios.transcoder.internal.utils.Logger;
-
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.BaseThread;
 import org.thunderdog.challegram.telegram.TdlibManager;
 import org.thunderdog.challegram.tool.Screen;
-import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 
 import java.io.File;
@@ -66,7 +65,7 @@ public class Log {
    * @return Log storage directory. @null in case of error
    */
   public static @Nullable File getLogDir () {
-    File logsDirectory = new File(UI.getAppContext().getFilesDir(), "logs");
+    File logsDirectory = new File(AppContext.get().getFilesDir(), "logs");
     if (!FileUtils.createDirectory(logsDirectory)) {
       android.util.Log.e(LOG_TAG, "Couldn't open logs directory: " + logsDirectory.getAbsolutePath());
       return null;
@@ -381,7 +380,6 @@ public class Log {
   public static final int TAG_PLAYER = 1 << 19;
   public static final int TAG_NDK = 1 << 20;
   public static final int TAG_ACCOUNTS = 1 << 21;
-  public static final int TAG_LANGUAGE = 1 << 22;
 
   public static final int TAG_TDLIB_FILES = 1 << 29;
   public static final int TAG_TDLIB_OPTIONS = 1 << 30;
@@ -408,7 +406,6 @@ public class Log {
     TAG_YOUTUBE,
     TAG_CAMERA,
     TAG_EMOJI,
-    TAG_LANGUAGE,
     TAG_TDLIB_FILES,
     TAG_TDLIB_OPTIONS
   };
@@ -422,22 +419,8 @@ public class Log {
   // == Settings ==
 
   private static void setThirdPartyLogLevels (int level) {
-    switch (level) {
-      case LEVEL_WARNING:
-        Logger.setLogLevel(Logger.LEVEL_WARNING);
-        break;
-      case LEVEL_INFO:
-      case LEVEL_DEBUG:
-        Logger.setLogLevel(Logger.LEVEL_INFO);
-        break;
-      case LEVEL_VERBOSE:
-        Logger.setLogLevel(Logger.LEVEL_VERBOSE);
-        break;
-      case LEVEL_ASSERT:
-      case LEVEL_ERROR:
-      default:
-        Logger.setLogLevel(Logger.LEVEL_ERROR);
-        break;
+    if (Config.LEGACY_VIDEO_TRANSCODING_ENABLED) {
+      setLegacyTranscoderLogLevel(level);
     }
   }
 
@@ -456,18 +439,42 @@ public class Log {
         level = Log.LEVEL_VERBOSE;
         tags = TAG_NDK | TAG_CRASH;
       } else {
-        settings = prefs.getInt(Settings.KEY_LOG_SETTINGS, 0);
-        level = prefs.getInt(Settings.KEY_LOG_LEVEL, Log.LEVEL_ASSERT);
-        long defaultTags = Log.TAG_CRASH | Log.TAG_FCM | Log.TAG_ACCOUNTS;
+        int defaultLogSettings = BuildConfig.DEBUG ? Log.SETTING_ANDROID_LOG : 0;
+        int defaultLogLevel = BuildConfig.DEBUG ? Log.LEVEL_VERBOSE : Log.LEVEL_ASSERT;
+        long defaultLogTags = Log.TAG_CRASH | Log.TAG_FCM | Log.TAG_ACCOUNTS;
         if (Config.DEBUG_GALAXY_TAB_2) {
-          defaultTags |= Log.TAG_INTRO;
+          defaultLogTags |= Log.TAG_INTRO;
         }
-        tags = prefs.getLong(Settings.KEY_LOG_TAGS, defaultTags);
+        settings = prefs.getInt(Settings.KEY_LOG_SETTINGS, defaultLogSettings);
+        level = prefs.getInt(Settings.KEY_LOG_LEVEL, defaultLogLevel);
+        tags = prefs.getLong(Settings.KEY_LOG_TAGS, defaultLogTags);
       }
 
       setLogLevelImpl(level);
       setLogTagsImpl(tags);
       setThirdPartyLogLevels(level);
+
+      androidx.media3.common.util.Log.setLogger(new androidx.media3.common.util.Log.Logger() {
+        @Override
+        public void i (@NonNull String tag, @NonNull String message, @Nullable Throwable throwable) {
+          Log.i("[media3:%s]: %s", throwable, tag, message);
+        }
+
+        @Override
+        public void d (@NonNull String tag, @NonNull String message, @Nullable Throwable throwable) {
+          Log.d("[media3:%s]: %s", throwable, tag, message);
+        }
+
+        @Override
+        public void w (@NonNull String tag, @NonNull String message, @Nullable Throwable throwable) {
+          Log.w("[media3:%s]: %s", throwable, tag, message);
+        }
+
+        @Override
+        public void e (@NonNull String tag, @NonNull String message, @Nullable Throwable throwable) {
+          Log.e("[media3:%s]: %s", throwable, tag, message);
+        }
+      });
 
       loaded = true;
     }
@@ -591,6 +598,7 @@ public class Log {
           if (logDir != null) {
             pool = new BaseThread("Log") {
               @Override
+              @SuppressWarnings("unchecked")
               protected void process (Message msg) {
                 synchronized (Log.class) {
                   switch (msg.what) {
@@ -603,14 +611,12 @@ public class Log {
                       break;
                     }
                     case ACTION_GET_LOG_FILES: {
-                      //noinspection unchecked
                       ((RunnableData<LogFiles>) msg.obj).runWithData(getLogFilesImpl());
                       break;
                     }
                     case ACTION_DELETE_ALL: {
                       Object[] args = (Object[]) msg.obj;
 
-                      //noinspection unchecked
                       deleteAllImpl((LogFiles) args[0], (RunnableData<LogFiles>) args[1], (RunnableData<LogFiles>) args[2]);
 
                       args[0] = null;
@@ -756,7 +762,7 @@ public class Log {
           if (b.length() > 0) {
             b.append('\n');
           }
-          toStringBuilder(t, 10, b);
+          toStringBuilder(t, 10, true, b);
           fileMessage = b.toString();
         } else {
           fileMessage = sourceMessage;
@@ -941,27 +947,8 @@ public class Log {
     log(0, LEVEL_ASSERT, fmt, args);
   }
 
-  public static void unexpectedTdlibResponse (TdApi.Object response, @SuppressWarnings("rawtypes") Class<? extends TdApi.Function> function, Class<?>... objects) {
-    StringBuilder b = new StringBuilder("Unexpected TDLib response");
-    if (function != null) {
-      b.append(" for ");
-      b.append(function.getName());
-    }
-    b.append(". Expected: ");
-    boolean first = true;
-    for (Class<?> object : objects) {
-      if (first) {
-        first = false;
-      } else {
-        b.append(", ");
-      }
-      b.append(object.getName());
-    }
-    b.append(" but received: ");
-    b.append(response != null ? response : "null");
-    String message = b.toString();
-    UI.showToast(message, Toast.LENGTH_LONG);
-    Log.a("%s", message);
+  public static <T extends TdApi.Object> void ensureReturnType (Class<? extends TdApi.Function<T>> function, Class<T> expectedReturnType) {
+    // Do nothing.
   }
 
   public static void fixme () {
@@ -1003,25 +990,64 @@ public class Log {
     }
   }
 
+  public static String toErrorString (Throwable e) {
+
+    if (e == null) return "NULL";
+    String str = "";
+    if (e.getClass() != null && e.getClass().getSimpleName() != null) {
+      str = e.getClass().getSimpleName();
+      if (str == null) str = "";
+    }
+    if (e.getMessage() != null) {
+      if (str.length() > 0) str += ": ";
+      str += e.getMessage();
+    }
+    return str;
+  }
+
   public static String toString (Throwable t) {
+    return toString(t, true);
+  }
+  public static String toString (Throwable t, boolean includePreview) {
     StringBuilder b = new StringBuilder();
-    toStringBuilder(t, 10, b);
+    toStringBuilder(t, 10, includePreview, b);
     return b.toString();
   }
 
-  public static String toString (Throwable t, int limitCauseNum) {
+  public static String toPreviewString (Throwable t) {
     StringBuilder b = new StringBuilder();
-    toStringBuilder(t, limitCauseNum, b);
+    messagesToStringBuilder(t, b);
     return b.toString();
   }
 
-  public static void toStringBuilder (Throwable t, int limitCauseNum, StringBuilder b) {
-    toStringBuilder(t, limitCauseNum, b, 0);
+  public static void toStringBuilder (Throwable t, int limitCauseNum, boolean includePreview, StringBuilder b) {
+    toStringBuilder(t, limitCauseNum, includePreview, b, 0);
   }
 
-  private static void toStringBuilder (Throwable t, int limitCauseNum, StringBuilder b, int causeNo) {
+  private static int messagesToStringBuilder (Throwable t, StringBuilder b) {
+    Throwable current = t;
+    int addedCount = 0;
+    do {
+      String message = current.getMessage();
+      if (!StringUtils.isEmpty(message)) {
+        if (addedCount > 0) {
+          b.append("\n");
+        }
+        b.append(message);
+        addedCount++;
+      }
+      current = current.getCause();
+    } while (current != null);
+    return addedCount;
+  }
+
+  private static void toStringBuilder (Throwable t, int limitCauseNum, boolean includePreview, StringBuilder b, int causeNo) {
     if (causeNo != 0) {
       b.append('\n');
+    } else if (includePreview) {
+      if (messagesToStringBuilder(t, b) > 0) {
+        b.append("\n\n");
+      }
     }
     b.append("=== ");
     if (causeNo != 0) {
@@ -1041,7 +1067,7 @@ public class Log {
     Throwable cause = t.getCause();
     if (cause != null && causeNo + 1 < limitCauseNum) {
       if (b.length() > 0) {
-        toStringBuilder(cause, limitCauseNum, b, causeNo + 1);
+        toStringBuilder(cause, limitCauseNum, includePreview, b, causeNo + 1);
       }
     }
   }

@@ -14,7 +14,7 @@
  */
 package org.thunderdog.challegram.data;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.util.text.Highlight;
 
@@ -28,7 +28,7 @@ public class TGFoundMessage {
     this.chat = new TGFoundChat(tdlib, chatList, chat, null);
     this.message = message;
     // Strings.highlightWords(Strings.replaceNewLines(copyText), query, 0, InlineResultEmojiSuggestion.SPECIAL_SPLITTERS);
-    TD.ContentPreview preview = TD.getChatListPreview(tdlib, message.chatId, message);
+    ContentPreview preview = ContentPreview.getChatListPreview(tdlib, message.chatId, message, true);
     this.text = preview.buildFormattedText(false);
     this.highlight = Highlight.valueOf(text.text, query);
   }

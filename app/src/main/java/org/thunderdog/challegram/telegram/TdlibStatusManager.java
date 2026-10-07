@@ -16,9 +16,10 @@ package org.thunderdog.challegram.telegram;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.StringRes;
 import androidx.annotation.UiThread;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.core.Lang;
@@ -41,8 +42,8 @@ import me.vkryl.android.animator.BoolAnimator;
 import me.vkryl.android.animator.FactorAnimator;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.reference.ReferenceMap;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.Td;
+import tgx.td.ChatId;
+import tgx.td.Td;
 
 public class TdlibStatusManager implements CleanupStartupDelegate {
   public static final int CHANGE_FLAG_TEXT = 1; // update text
@@ -50,8 +51,8 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
   public static final int CHANGE_FLAG_POSITION = 1 << 2; // update position of main content & activity
 
   public interface ChatStateListener {
-    void onChatActionsChanged (long chatId, long messageThreadId, @NonNull ChatState chatState, int changeFlags);
-    default boolean canAnimateAction (long chatId, long messageThreadId, @NonNull ChatState chatState) { return false; }
+    void onChatActionsChanged (long chatId, @Nullable TdApi.MessageTopic topicId, @NonNull ChatState chatState, int changeFlags);
+    default boolean canAnimateAction (long chatId,  @Nullable TdApi.MessageTopic topicId, @NonNull ChatState chatState) { return false; }
   }
 
   public static class Action {
@@ -68,16 +69,17 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
     private final TdlibStatusManager context;
     private final Tdlib tdlib;
 
-    private final long chatId, messageThreadId;
+    private final long chatId;
+    private final TdApi.MessageTopic topicId;
     private final String key;
     private final boolean isUser;
 
-    public ChatState (TdlibStatusManager context, Tdlib tdlib, long chatId, long messageThreadId) {
+    public ChatState (TdlibStatusManager context, Tdlib tdlib, long chatId, @Nullable TdApi.MessageTopic topicId) {
       this.context = context;
       this.tdlib = tdlib;
       this.chatId = chatId;
-      this.messageThreadId = messageThreadId;
-      this.key = makeKey(chatId, messageThreadId);
+      this.topicId = topicId;
+      this.key = makeKey(chatId, topicId);
       this.isUser = ChatId.isUserChat(chatId);
     }
 
@@ -93,7 +95,7 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
     private void setVisibilityFactor (float factor) {
       if (this.visibilityFactor != factor) {
         this.visibilityFactor = factor;
-        notifyChatActionsChanged(chatId, messageThreadId, this, CHANGE_FLAG_POSITION, context.listeners.iterator(key));
+        notifyChatActionsChanged(chatId, topicId, this, CHANGE_FLAG_POSITION, context.listeners.iterator(key));
       }
     }
 
@@ -334,9 +336,9 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
         }
       }
       if (this.isVisible != isVisible) {
-        setIsVisible(isVisible, context.canAnimate(chatId, messageThreadId, key, this));
+        setIsVisible(isVisible, context.canAnimate(chatId, topicId, key, this));
       }
-      notifyChatActionsChanged(chatId, messageThreadId, this, changeFlags, context.listeners.iterator(key));
+      notifyChatActionsChanged(chatId, topicId, this, changeFlags, context.listeners.iterator(key));
     }
   }
 
@@ -383,27 +385,28 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
       }
     }
 
-    private long chatId, messageThreadId;
+    private long chatId;
+    private TdApi.MessageTopic topicId;
 
-    public void attachToChat (long chatId, long messageThreadId) {
-      if (this.chatId != chatId || this.messageThreadId != messageThreadId) {
+    public void attachToChat (long chatId, @Nullable TdApi.MessageTopic topicId) {
+      if (this.chatId != chatId || !Td.equalsTo(this.topicId, topicId)) {
         if (this.chatId != 0) {
-          tdlib.status().removeListener(this.chatId, this.messageThreadId, this);
+          tdlib.status().removeListener(this.chatId, this.topicId, this);
         }
         this.chatId = chatId;
-        this.messageThreadId = messageThreadId;
+        this.topicId = topicId;
         if (chatId != 0) {
-          tdlib.status().addListener(chatId, messageThreadId, this);
+          tdlib.status().addListener(chatId, topicId, this);
         }
-        setState(tdlib.status().state(chatId, messageThreadId), -1);
+        setState(tdlib.status().state(chatId, topicId), -1);
       }
     }
 
     public void detachFromAnyChat () {
       if (this.chatId != 0) {
-        tdlib.status().removeListener(this.chatId, this.messageThreadId, this);
+        tdlib.status().removeListener(this.chatId, this.topicId, this);
         this.chatId = 0;
-        this.messageThreadId = 0;
+        this.topicId = null;
         setState(null, -1);
       }
     }
@@ -462,12 +465,12 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
     }
 
     @Override
-    public void onChatActionsChanged (long chatId, long messageThreadId, @NonNull TdlibStatusManager.ChatState chatState, int changeFlags) {
+    public void onChatActionsChanged (long chatId, @Nullable TdApi.MessageTopic topicId, @NonNull TdlibStatusManager.ChatState chatState, int changeFlags) {
       setState(chatState, changeFlags);
     }
 
     @Override
-    public boolean canAnimateAction (long chatId, long messageThreadId, @NonNull ChatState chatState) {
+    public boolean canAnimateAction (long chatId, @Nullable TdApi.MessageTopic topicId, @NonNull ChatState chatState) {
       return target.canAnimate();
     }
   }
@@ -506,29 +509,29 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
 
   // Status
 
-  private void addListener (long chatId, long messageThreadId, ChatStateListener listener) {
-    listeners.add(makeKey(chatId, messageThreadId), listener);
+  private void addListener (long chatId, @Nullable TdApi.MessageTopic topicId, ChatStateListener listener) {
+    listeners.add(makeKey(chatId, topicId), listener);
   }
 
-  private void removeListener (long chatId, long messageThreadId, ChatStateListener listener) {
-    listeners.remove(makeKey(chatId, messageThreadId), listener);
+  private void removeListener (long chatId, @Nullable TdApi.MessageTopic topicId, ChatStateListener listener) {
+    listeners.remove(makeKey(chatId, topicId), listener);
   }
 
-  public @Nullable ChatState state (long chatId, long messageThreadId) {
-    return chatStates.get(makeKey(chatId, messageThreadId));
+  public @Nullable ChatState state (long chatId, @Nullable TdApi.MessageTopic topicId) {
+    return chatStates.get(makeKey(chatId, topicId));
   }
 
-  public boolean hasStatus (long chatId, long messageThreadId) {
-    ChatState state = chatStates.get(makeKey(chatId, messageThreadId));
+  public boolean hasStatus (long chatId, @Nullable TdApi.MessageTopic topicId) {
+    ChatState state = chatStates.get(makeKey(chatId, topicId));
     return state != null && !state.actions.isEmpty();
   }
 
-  private boolean canAnimate (long chatId, long messageThreadId, String key, ChatState state) {
+  private boolean canAnimate (long chatId, @Nullable TdApi.MessageTopic topicId, String key, ChatState state) {
     boolean animated = false;
     Iterator<ChatStateListener> itr = listeners.iterator(key);
     if (itr != null) {
       while (itr.hasNext()) {
-        if (itr.next().canAnimateAction(chatId, messageThreadId, state)) {
+        if (itr.next().canAnimateAction(chatId, topicId, state)) {
           animated = true;
         }
       }
@@ -536,8 +539,8 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
     return animated;
   }
 
-  private static String makeKey (long chatId, long messageThreadId) {
-    return messageThreadId != 0 ? chatId + "_" + messageThreadId : Long.toString(chatId);
+  private static String makeKey (long chatId, @Nullable TdApi.MessageTopic topicId) {
+    return topicId != null ? chatId + "_" + Td.cacheKey(topicId) : Long.toString(chatId);
   }
 
   @UiThread
@@ -546,22 +549,22 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
       // TODO?
       return;
     }
-    String key = makeKey(update.chatId, update.messageThreadId);
+    String key = makeKey(update.chatId, update.topicId);
     ChatState state = chatStates.get(key);
     if (state == null) {
       if (update.action.getConstructor() == TdApi.ChatActionCancel.CONSTRUCTOR) {
         return;
       }
-      state = new ChatState(this, tdlib, update.chatId, update.messageThreadId);
+      state = new ChatState(this, tdlib, update.chatId, update.topicId);
       chatStates.put(key, state);
     }
     state.setAction(update.senderId, update.action);
   }
 
-  private static void notifyChatActionsChanged (long chatId, long messageThreadId, ChatState chatState, int changeFlags, @Nullable Iterator<ChatStateListener> list) {
+  private static void notifyChatActionsChanged (long chatId, @Nullable TdApi.MessageTopic topicId, ChatState chatState, int changeFlags, @Nullable Iterator<ChatStateListener> list) {
     if (list != null) {
       while (list.hasNext()) {
-        list.next().onChatActionsChanged(chatId, messageThreadId, chatState, changeFlags);
+        list.next().onChatActionsChanged(chatId, topicId, chatState, changeFlags);
       }
     }
   }
@@ -627,11 +630,11 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
     throw new IllegalArgumentException(chat.type.toString());
   }
 
-  public String getPrivateChatSubtitle (long userId) {
+  public CharSequence getPrivateChatSubtitle (long userId) {
     return getPrivateChatSubtitle(userId, tdlib.cache().user(userId), true, true);
   }
 
-  public String getPrivateChatSubtitle (long userId, @Nullable TdApi.User user, boolean allowMyself) {
+  public CharSequence getPrivateChatSubtitle (long userId, @Nullable TdApi.User user, boolean allowMyself) {
     return getPrivateChatSubtitle(userId, user, allowMyself, true);
   }
 
@@ -642,7 +645,11 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
     return user != null && user.type.getConstructor() == TdApi.UserTypeRegular.CONSTRUCTOR && user.status.getConstructor() == TdApi.UserStatusOnline.CONSTRUCTOR;
   }
 
-  public String getPrivateChatSubtitle (long userId, @Nullable TdApi.User user, boolean allowMyself, boolean allowDuration) {
+  public CharSequence getPrivateChatSubtitle (long userId, @Nullable TdApi.User user, boolean allowMyself, boolean allowDuration) {
+    return getPrivateChatSubtitle(userId, user, allowMyself, allowDuration, false);
+  }
+
+  public CharSequence getPrivateChatSubtitle (long userId, @Nullable TdApi.User user, boolean allowMyself, boolean allowDuration, boolean fallbackToContactStatus) {
     if (allowMyself && tdlib.isSelfUserId(userId)) {
       return Lang.lowercase(Lang.getString(R.string.ChatWithYourself));
     }
@@ -661,6 +668,10 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
     }
     switch (user.type.getConstructor()) {
       case TdApi.UserTypeBot.CONSTRUCTOR: {
+        TdApi.UserTypeBot bot = (TdApi.UserTypeBot) user.type;
+        if (bot.activeUserCount > 0) {
+          return Lang.pluralBold(R.string.xBotUsers, bot.activeUserCount);
+        }
         return Lang.getString(R.string.Bot);
       }
       case TdApi.UserTypeDeleted.CONSTRUCTOR: {
@@ -668,6 +679,20 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
       }
       case TdApi.UserTypeUnknown.CONSTRUCTOR: {
         return Lang.getString(R.string.unknownUser);
+      }
+      case TdApi.UserTypeRegular.CONSTRUCTOR: {
+        if (fallbackToContactStatus) {
+          return Lang.getString(
+            user.isMutualContact ? R.string.ChatTypeMutualContact :
+            user.isContact ? R.string.ChatTypeContact :
+            R.string.ChatTypeNonContact
+          );
+        }
+        break;
+      }
+      default: {
+        Td.assertUserType_233bc6f4();
+        throw Td.unsupported(user.type);
       }
     }
     return Lang.getUserStatus(tdlib, user.status, allowDuration);
@@ -694,17 +719,26 @@ public class TdlibStatusManager implements CleanupStartupDelegate {
     }
 
     TdApi.Supergroup supergroup = tdlib.cache().supergroup(supergroupId);
-    if (memberCount == 0) {
-      memberCount = supergroup != null ? supergroup.memberCount : 0;
+    boolean isDirectMessages = supergroup != null && supergroup.isDirectMessagesGroup;
+    if (!isDirectMessages) {
+      if (memberCount == 0) {
+        memberCount = supergroup != null ? supergroup.memberCount : 0;
+      }
+      if (memberCount > 0) {
+        return Lang.pluralMembers(memberCount, tdlib.chatOnlineMemberCount(ChatId.fromSupergroupId(supergroupId)), supergroup != null && supergroup.isChannel);
+      }
+      if (supergroup == null) {
+        return "channel unavailable";
+      }
     }
-
-    if (memberCount > 0) {
-      return Lang.pluralMembers(memberCount, tdlib.chatOnlineMemberCount(ChatId.fromSupergroupId(supergroupId)), supergroup != null && supergroup.isChannel);
+    @StringRes int resource;
+    if (supergroup.isDirectMessagesGroup) {
+      resource = R.string.DirectMessages;
+    } else if (supergroup.isChannel) {
+      resource = !Td.hasUsername(supergroup) ? R.string.ChannelPrivate : R.string.Channel;
+    } else {
+      resource = !Td.isEmpty(supergroup.usernames) ? R.string.PublicGroup : R.string.Group;
     }
-    if (supergroup == null) {
-      return "channel unavailable";
-    }
-    int resource = supergroup.isChannel ? (!Td.hasUsername(supergroup) ? R.string.ChannelPrivate : R.string.Channel) : (!Td.isEmpty(supergroup.usernames) ? R.string.PublicGroup : R.string.Group);
     return Lang.lowercase(Lang.getString(resource));
   }
 }

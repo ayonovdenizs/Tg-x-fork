@@ -16,7 +16,6 @@ package org.thunderdog.challegram.tool;
 
 import android.animation.Animator;
 import android.animation.ValueAnimator;
-import android.annotation.TargetApi;
 import android.app.Dialog;
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -25,6 +24,7 @@ import android.graphics.Paint;
 import android.graphics.Typeface;
 import android.os.Build;
 import android.text.Editable;
+import android.text.Layout;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -37,23 +37,26 @@ import android.view.ViewParent;
 import android.view.animation.Interpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.RelativeLayout;
 import android.widget.TextView;
 
 import androidx.annotation.DrawableRes;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import org.drinkmore.Tracer;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
+import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.core.DiffMatchPatch;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.support.ViewTranslator;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
-import org.thunderdog.challegram.theme.ThemeColorId;
 import org.thunderdog.challegram.util.TextSelection;
 import org.thunderdog.challegram.util.WebViewHolder;
 import org.thunderdog.challegram.util.text.Text;
@@ -139,7 +142,7 @@ public class Views {
     }
   }
 
-  public static ImageView newImageButton (Context context, @DrawableRes int icon, @ThemeColorId int colorId, @Nullable ViewController<?> themeProvider) {
+  public static ImageView newImageButton (Context context, @DrawableRes int icon, @ColorId int colorId, @Nullable ViewController<?> themeProvider) {
     ImageView imageView = new ImageView(context);
     imageView.setScaleType(ImageView.ScaleType.CENTER);
     imageView.setImageResource(icon);
@@ -214,6 +217,15 @@ public class Views {
   @Deprecated
   public static int getParentsTop (View view, int limit) {
     return getParentsTop(view, limit, false);
+  }
+
+  @SuppressWarnings("deprecation")
+  public static int saveLayerAlpha (Canvas c, float left, float top, float right, float bottom, int alpha, int flags) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+      return c.saveLayerAlpha(left, top, right, bottom, alpha);
+    } else {
+      return c.saveLayerAlpha(left, top, right, bottom, alpha, flags);
+    }
   }
 
   private static int getParentsTop (View view, int limit, boolean includeTranslation) {
@@ -576,13 +588,13 @@ public class Views {
     }
   }
 
+  @SuppressWarnings({"DiscouragedPrivateApi", "JavaReflectionMemberAccess"})
   public static void setCursorDrawable (android.widget.EditText editText, @DrawableRes int res) {
     if (editText != null) {
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         editText.setTextCursorDrawable(res);
       } else {
         try {
-          //noinspection JavaReflectionMemberAccess
           Field mCursorDrawableRes = TextView.class.getDeclaredField("mCursorDrawableRes");
           mCursorDrawableRes.setAccessible(true);
           mCursorDrawableRes.setInt(editText, res);
@@ -605,6 +617,7 @@ public class Views {
     return (e.getAction() != MotionEvent.ACTION_DOWN || (Views.isValid(view) && Views.isValid((View) view.getParent())));
   }
 
+  @SuppressWarnings("DiscouragedApi")
   public static View tryFindAndroidView (Context context, Dialog dialog, String name) {
     if (dialog == null)
       return null;
@@ -709,7 +722,7 @@ public class Views {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       setSimpleStateListAnimator(view);
       view.setOutlineProvider(new android.view.ViewOutlineProvider() {
-        @TargetApi (Build.VERSION_CODES.LOLLIPOP)
+        @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
         @Override
         public void getOutline (View view, android.graphics.Outline outline) {
           int p = Screen.dp(padding);
@@ -724,7 +737,7 @@ public class Views {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       setSimpleStateListAnimator(view);
       view.setOutlineProvider(new android.view.ViewOutlineProvider() {
-        @TargetApi (Build.VERSION_CODES.LOLLIPOP)
+        @RequiresApi (Build.VERSION_CODES.LOLLIPOP)
         @Override
         public void getOutline (View view, android.graphics.Outline outline) {
           int p = Screen.dp(padding);
@@ -797,6 +810,19 @@ public class Views {
     }
   }
 
+  public static boolean applyBottomInset (ViewGroup viewGroup, int bottomInset) {
+    if (viewGroup != null) {
+      boolean changed = setPaddingBottom(viewGroup, bottomInset);
+      viewGroup.setClipToPadding(bottomInset == 0);
+      return changed;
+    }
+    return false;
+  }
+
+  public static int getAppliedBottomInset (ViewGroup viewGroup) {
+    return viewGroup != null ? viewGroup.getPaddingBottom() : 0;
+  }
+
   public static void removeRule (RelativeLayout.LayoutParams params, int verb) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
       params.removeRule(verb);
@@ -807,6 +833,26 @@ public class Views {
 
   public static boolean setMargins (View view, int left, int top, int right, int bottom) {
     return view != null && setMargins((ViewGroup.MarginLayoutParams) view.getLayoutParams(), left, top, right, bottom);
+  }
+
+  @Nullable
+  @SuppressWarnings("unchecked")
+  public static <T extends View> T findAncestor (View view, Class<T> clazz, boolean root) {
+    if (view != null) {
+      T found = null;
+      ViewParent parent = view.getParent();
+      while (parent != null) {
+        if (clazz.isAssignableFrom(parent.getClass())) {
+          found = (T) parent;
+          if (!root) {
+            return found;
+          }
+        }
+        parent = parent.getParent();
+      }
+      return found;
+    }
+    return null;
   }
 
   public static void translateMarginsToPadding (View view) {
@@ -832,6 +878,18 @@ public class Views {
     return false;
   }
 
+  public static boolean setLayoutHeight (View view, int height) {
+    if (view != null) {
+      ViewGroup.LayoutParams params = view.getLayoutParams();
+      if (params != null && params.height != height) {
+        params.height = height;
+        view.setLayoutParams(params);
+        return true;
+      }
+    }
+    return false;
+  }
+
   public static void setTopMargin (View view, int margin) {
     if (view != null) {
       ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) view.getLayoutParams();
@@ -842,14 +900,31 @@ public class Views {
     }
   }
 
-  public static void setBottomMargin (View view, int margin) {
+  public static boolean setPaddingBottom (View view, int paddingBottom) {
+    if (view != null) {
+      int prevPaddingBottom = view.getPaddingBottom();
+      view.setPadding(view.getPaddingLeft(), view.getPaddingTop(), view.getPaddingRight(), paddingBottom);
+      return prevPaddingBottom != paddingBottom;
+    }
+    return false;
+  }
+
+  public static void setPaddingTop (View view, int paddingTop) {
+    if (view != null) {
+      view.setPadding(view.getPaddingLeft(), paddingTop, view.getPaddingRight(), view.getPaddingBottom());
+    }
+  }
+
+  public static boolean setBottomMargin (View view, int margin) {
     if (view != null) {
       ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) view.getLayoutParams();
       if (params.bottomMargin != margin) {
         params.bottomMargin = margin;
         view.setLayoutParams(params);
+        return true;
       }
     }
+    return false;
   }
 
   public static void setRightMargin (View view, int margin) {
@@ -860,6 +935,46 @@ public class Views {
         view.setLayoutParams(params);
       }
     }
+  }
+
+  public static void setLeftMargin (View view, int margin) {
+    if (view != null) {
+      ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) view.getLayoutParams();
+      if (params.leftMargin != margin) {
+        params.leftMargin = margin;
+        view.setLayoutParams(params);
+      }
+    }
+  }
+
+  public static int getLeftMargin (View view) {
+    if (view != null) {
+      ViewGroup.LayoutParams params = view.getLayoutParams();
+      if (params instanceof ViewGroup.MarginLayoutParams) {
+        return ((ViewGroup.MarginLayoutParams) params).leftMargin;
+      }
+    }
+    return 0;
+  }
+
+  public static int getTopMargin (View view) {
+    if (view != null) {
+      ViewGroup.LayoutParams params = view.getLayoutParams();
+      if (params instanceof ViewGroup.MarginLayoutParams) {
+        return ((ViewGroup.MarginLayoutParams) params).topMargin;
+      }
+    }
+    return 0;
+  }
+
+  public static int getRightMargin (View view) {
+    if (view != null) {
+      ViewGroup.LayoutParams params = view.getLayoutParams();
+      if (params instanceof ViewGroup.MarginLayoutParams) {
+        return ((ViewGroup.MarginLayoutParams) params).rightMargin;
+      }
+    }
+    return 0;
   }
 
   public static int getBottomMargin (View view) {
@@ -926,5 +1041,99 @@ public class Views {
     if (flags != newFlags) {
       view.setPaintFlags(newFlags);
     }
+  }
+
+  public static int getRecyclerFirstElementTop (RecyclerView recyclerView) {
+    return getRecyclerViewElementTop(recyclerView, 0, 0);
+  }
+
+  public static int getRecyclerFirstElementTop (RecyclerView recyclerView, int valueIfPositionNotFound) {
+    return getRecyclerViewElementTop(recyclerView, 0, valueIfPositionNotFound);
+  }
+
+  public static int getRecyclerViewElementTop (RecyclerView recyclerView, int position) {
+    return getRecyclerViewElementTop(recyclerView, position, 0);
+  }
+
+  public static int getRecyclerViewElementTop (RecyclerView recyclerView, int position, int valueIfPositionNotFound) {
+    if (recyclerView == null || recyclerView.getLayoutManager() == null) {
+      return valueIfPositionNotFound;
+    }
+
+    View view = recyclerView.getLayoutManager().findViewByPosition(position);
+    if (view != null) {
+      return view.getTop() + recyclerView.getTop();
+    }
+
+    return valueIfPositionNotFound;
+  }
+
+  public static void getCharacterCoordinates(TextView textView, int offset, int[] coordinates) {
+    if (coordinates.length != 2)
+      throw new IllegalArgumentException();
+    coordinates[0] = coordinates[1] = 0;
+
+    Editable editable = textView.getEditableText();
+    Layout layout = textView.getLayout();
+
+    if (layout != null) {
+      int line = layout.getLineForOffset(offset);
+      int lineStartOffset = layout.getLineStart(line);
+      int xPos = (int) U.measureEmojiText(editable.subSequence(lineStartOffset, offset), layout.getPaint());
+      int yPos = layout.getLineBaseline(line) - textView.getScrollY();
+      coordinates[0] = xPos;
+      coordinates[1] = yPos;
+    }
+  }
+
+  public static int findFirstCompletelyVisibleItemPositionWithOffset (LinearLayoutManager manager, int topOffset) {
+    int i = manager.findFirstCompletelyVisibleItemPosition();
+    if (i == -1) {
+      i = manager.findFirstVisibleItemPosition();
+    }
+
+    View v = manager.findViewByPosition(i);
+    while (v != null) {
+      if (v.getTop() >= topOffset) {
+        return i;
+      }
+      v = manager.findViewByPosition(++i);
+    }
+
+    return -1;
+  }
+
+  public static int getLayoutGravity (@Nullable ViewGroup.LayoutParams params) {
+    if (params instanceof FrameLayout.LayoutParams) {
+      int gravity = ((FrameLayout.LayoutParams) params).gravity;
+      return gravity < 0 ? Gravity.TOP | Gravity.START : gravity;
+    }
+    if (params instanceof LinearLayout.LayoutParams) {
+      int gravity = ((LinearLayout.LayoutParams) params).gravity;
+      return gravity < 0 ? Gravity.NO_GRAVITY : gravity;
+    }
+    return Gravity.NO_GRAVITY;
+  }
+
+  public static boolean isFocusedViewVisible (RecyclerView recyclerView, View view) {
+    View target = view;
+    while (target != null && target.getParent() != recyclerView) {
+      target = (View) target.getParent();
+    }
+    if (target == null) {
+      return false;
+    }
+    RecyclerView.ViewHolder holder = recyclerView.findContainingViewHolder(target);
+    if (holder == null) {
+      return false;
+    }
+    int position = holder.getBindingAdapterPosition();
+    if (position == RecyclerView.NO_POSITION) {
+      return false;
+    }
+    LinearLayoutManager manager = (LinearLayoutManager) recyclerView.getLayoutManager();
+    int first = manager.findFirstVisibleItemPosition();
+    int last = manager.findLastVisibleItemPosition();
+    return position >= first && position <= last;
   }
 }

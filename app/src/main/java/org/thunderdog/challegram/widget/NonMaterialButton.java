@@ -109,7 +109,7 @@ public class NonMaterialButton extends View implements FactorAnimator.Target, Cl
   private int iconRes;
 
   public void setText (@StringRes int res) {
-    this.text = res != 0 ? new Letters(Lang.getString(res).toUpperCase()) : null;
+    this.text = res != 0 ? new Letters(Lang.uppercase(Lang.getString(res))) : null;
     this.textWidth = text != null ? (int) U.measureText(text.text, Paints.getBoldPaint15(text.needFakeBold)) : 0;
 
     this.icon = null;
@@ -126,7 +126,14 @@ public class NonMaterialButton extends View implements FactorAnimator.Target, Cl
 
   @Override
   protected void onMeasure (int widthMeasureSpec, int heightMeasureSpec) {
-    setMeasuredDimension(MeasureSpec.makeMeasureSpec(textWidth + Screen.dp(15f) * 2 + getPaddingLeft() + getPaddingRight(), MeasureSpec.EXACTLY), getDefaultSize(getSuggestedMinimumHeight(), heightMeasureSpec));
+    int measuredWidth;
+    if (MeasureSpec.getMode(widthMeasureSpec) == MeasureSpec.EXACTLY) {
+      measuredWidth = MeasureSpec.getSize(widthMeasureSpec);
+    } else {
+      measuredWidth = textWidth + Screen.dp(15f) * 2 + getPaddingLeft() + getPaddingRight();
+    }
+    int measuredHeight = getDefaultSize(getSuggestedMinimumHeight(), heightMeasureSpec);
+    setMeasuredDimension(measuredWidth, measuredHeight);
 
     updatePath();
     setProgressBounds();
@@ -346,7 +353,7 @@ public class NonMaterialButton extends View implements FactorAnimator.Target, Cl
     int width = getMeasuredWidth();
     int height = getMeasuredHeight();
 
-    int padding = (int) (getStrokeWidth() / 2);
+    int padding = getStrokeWidth() / 2;
     int left = padding; // + (int) ((float) (width - Screen.dp(14f) * 2) * doneFactor);
     rect.set(left, padding, width - padding, height - padding);
 
@@ -356,7 +363,7 @@ public class NonMaterialButton extends View implements FactorAnimator.Target, Cl
 
   private void setProgressBounds () {
     if (progress != null) {
-      int padding = (int) (getStrokeWidth() / 2);
+      int padding = (getStrokeWidth() / 2);
       int width = getMeasuredWidth();
       progress.setBounds((width - Screen.dp(13f) - padding), padding, width - padding, padding + Screen.dp(13f));
     }
@@ -433,7 +440,7 @@ public class NonMaterialButton extends View implements FactorAnimator.Target, Cl
       RectF rectF = Paints.getRectF();
       int radius = Screen.dp(3f);
 
-      int padding = (int) (getStrokeWidth() / 2);
+      int padding = (getStrokeWidth() / 2);
       rectF.set(padding, padding, width - padding, height - padding);
 
       final boolean saved = buttonFactor != 1f;

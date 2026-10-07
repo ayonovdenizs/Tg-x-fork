@@ -6,7 +6,7 @@ STYLE_ERROR="$(tput bold)$(tput setaf 1)"
 STYLE_WARN="$(tput setaf 3)"
 STYLE_INFO="$(tput setaf 6)"
 
-test -f version.properties || (echo -e "${STYLE_ERROR}You must call this script from the root folder.${STYLE_END}" && exit 1)
+test -f version.properties || { echo -e "${STYLE_ERROR}You must call this script from the root folder.${STYLE_END}" >&2; exit 1; }
 
 PLATFORM="$(uname -s)"
 case "${PLATFORM}" in
@@ -15,21 +15,18 @@ case "${PLATFORM}" in
     BUILD_PLATFORM=darwin-x86_64
     CPU_COUNT=$(sysctl -n hw.logicalcpu_max)
     DEFAULT_ANDROID_SDK_ROOT=~/Library/Android/sdk
-    SED="gsed"
     ;;
   Linux*)
     PLATFORM=linux
     BUILD_PLATFORM=linux-x86_64
     CPU_COUNT=$(lscpu -p | grep -Evc '^#')
     DEFAULT_ANDROID_SDK_ROOT=~/Android/Sdk
-    SED="sed"
     ;;
   MINGW*|MSYS*)
     PLATFORM=windows
     BUILD_PLATFORM=windows-x86_64
     CPU_COUNT=$(nproc --all)
     DEFAULT_ANDROID_SDK_ROOT=~/AppData/Local/Android/Sdk
-    SED="sed"
     WIN_PATCH_REQUIRED=true
     ;;
   *)
@@ -54,23 +51,25 @@ if [ ! "$IGNORE_SDK" ]; then
     fi
   fi
 
-  NDK_VERSION=$("$(dirname "$0")"/read-property.sh version.properties version.ndk)
-  CMAKE_VERSION=$("$(dirname "$0")"/read-property.sh version.properties version.cmake)
-  if [[ ! "$NDK_VERSION" =~ ^[_0-9\.]+$ ]]; then
-    echo "${STYLE_ERROR}Invalid NDK version: $NDK_VERSION!${STYLE_END}"
+  CMAKE_VERSION=$(scripts/./read-property.sh version.properties version.cmake)
+  if [[ ! "$CMAKE_VERSION" =~ ^[_0-9\.]+$ ]]; then
+    echo "${STYLE_ERROR}Invalid CMake version: $CMAKE_VERSION!${STYLE_END}"
     exit 1
   fi
 
-  ANDROID_NDK="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
+  ANDROID_NDK_VERSION_PRIMARY=$(scripts/./read-property.sh version.properties version.ndk_primary)
+  ANDROID_NDK_VERSION_LEGACY=$(scripts/./read-property.sh version.properties version.ndk_legacy)
 
-  CC="$ANDROID_NDK/toolchains/llvm/prebuilt/$BUILD_PLATFORM/bin/clang"
-  CXX="$ANDROID_NDK/toolchains/llvm/prebuilt/$BUILD_PLATFORM/bin/clang++"
-  LD="$ANDROID_NDK/toolchains/llvm/prebuilt/$BUILD_PLATFORM/bin/ld.lld"
+  test -d "$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION_PRIMARY" || echo -e "${STYLE_WARN}Android NDK $ANDROID_NDK_VERSION_PRIMARY is not installed.${STYLE_END}"
+  test -d "$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION_LEGACY" || echo -e "${STYLE_WARN}Android NDK $ANDROID_NDK_VERSION_LEGACY is not installed.${STYLE_END}"
 
-  PATH="$ANDROID_NDK/prebuilt/$BUILD_PLATFORM/bin:$ANDROID_SDK_ROOT/cmake/$CMAKE_VERSION/bin:$ANDROID_NDK:$ANDROID_SDK_ROOT/tools/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
+  PATH="$ANDROID_SDK_ROOT/cmake/$CMAKE_VERSION/bin:$ANDROID_SDK_ROOT/tools/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
 
-  (test -d "$ANDROID_SDK_ROOT" && (test -d "$ANDROID_NDK" || echo -e "${STYLE_WARN}Android NDK $NDK_VERSION is not installed.${STYLE_END}")) || echo -e "${STYLE_WARN}Android SDK is not installed.${STYLE_END}"
+  test -d "$ANDROID_SDK_ROOT" || echo -e "${STYLE_WARN}Android SDK is not installed.${STYLE_END}"
 fi
+
+FLAVORS=$(scripts/./read-property.sh version.properties version.flavors)
+export FLAVORS
 
 # Export
 
@@ -78,13 +77,10 @@ export CPU_COUNT
 export BUILD_PLATFORM
 
 if [ ! "$IGNORE_SDK" ]; then
-  export NDK_VERSION
   export CMAKE_VERSION
-  export ANDROID_NDK
+  export ANDROID_NDK_VERSION_LEGACY
+  export ANDROID_NDK_VERSION_PRIMARY
   export ANDROID_SDK_ROOT
-  export CC
-  export CXX
-  export LD
 fi
 
 export STYLE_END
@@ -92,9 +88,7 @@ export STYLE_ERROR
 export STYLE_WARN
 export STYLE_INFO
 
-export SED
-
-THIRDPARTY_LIBRARIES=$(pwd)/app/jni/thirdparty
+THIRDPARTY_LIBRARIES="$(pwd)/app/jni/third_party"
 export THIRDPARTY_LIBRARIES
 
 PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$(pwd)/scripts:$(pwd)/scripts/private:$PATH"

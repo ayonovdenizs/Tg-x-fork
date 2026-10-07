@@ -23,7 +23,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 import androidx.core.os.CancellationSignal;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.base.SettingView;
 import org.thunderdog.challegram.core.Lang;
@@ -33,6 +33,7 @@ import org.thunderdog.challegram.navigation.NavigationController;
 import org.thunderdog.challegram.telegram.FileUpdateListener;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibFilesManager;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.unsorted.Settings;
@@ -44,8 +45,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 import me.vkryl.core.lambda.RunnableData;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
+@SuppressWarnings("unchecked")
 public abstract class SettingsCloudController<T extends Settings.CloudSetting> extends RecyclerViewController<SettingsCloudController.Args<T>> implements View.OnClickListener, FileUpdateListener, TdlibFilesManager.FileListener {
   private final long tutorialFlag;
   private final @StringRes int tutorialStringRes, currentStringRes, builtinStringRes, installedStringRes, updateStringRes, installingStringRes;
@@ -64,6 +66,7 @@ public abstract class SettingsCloudController<T extends Settings.CloudSetting> e
   public static class Args <T extends Settings.CloudSetting> {
     T applySetting;
     SettingsThemeController parentController;
+    SettingsStickersAndEmojiController parentControllerStickers;
 
     public Args (T applySetting) {
       this.applySetting = applySetting;
@@ -72,10 +75,18 @@ public abstract class SettingsCloudController<T extends Settings.CloudSetting> e
     public Args (SettingsThemeController parentController) {
       this.parentController = parentController;
     }
+
+    public Args (SettingsStickersAndEmojiController parentController) {
+      this.parentControllerStickers = parentController;
+    }
   }
 
   protected final SettingsThemeController getThemeController () {
     return getArguments() != null ? getArguments().parentController : null;
+  }
+
+  protected final SettingsStickersAndEmojiController getStickersAndEmojiController () {
+    return getArguments() != null ? getArguments().parentControllerStickers : null;
   }
 
   protected abstract T getCurrentSetting ();
@@ -91,32 +102,30 @@ public abstract class SettingsCloudController<T extends Settings.CloudSetting> e
       @Override
       protected void setValuedSetting (ListItem item, SettingView view, boolean isUpdate) {
         view.setDrawModifier(item.getDrawModifier());
-        switch (item.getId()) {
-          case R.id.btn_settings: {
-            T setting = (T) item.getData();
-            T currentSetting = getCurrentSetting();
-            boolean isCurrent = setting.equals(currentSetting);
-            boolean isPending = installingSetting != null && installingSetting.equals(setting);
-            if (isCurrent) {
-              view.setData(currentStringRes);
-            } else if (isPending) {
-              view.setData(Lang.getDownloadStatus(isInstalling ? null : setting.getFile(), installingStringRes, false));
-            } else {
-              int installState = setting.getInstallState(true);
-              boolean isInstalled = installState == Settings.CloudSetting.STATE_INSTALLED;
-              view.setData(Lang.getDownloadStatus(isInstalled ? null : setting.getFile(), setting.isBuiltIn() ? builtinStringRes : installState == Settings.CloudSetting.STATE_UPDATE_NEEDED ? updateStringRes : installedStringRes, !isInstalled));
-            }
-            boolean isEffective = installingSetting == null ? isCurrent : isPending;
-            RadioView radioView = view.findRadioView();
-            if (!isUpdate || isEffective) {
-              radioView.setActive(isCurrent, isUpdate);
-            }
-            radioView.setChecked(isEffective, isUpdate);
-            view.setDataColorId(isCurrent && isEffective ? R.id.theme_color_textNeutral : 0);
-
-            view.getReceiver().requestFile(setting.getPreviewFile());
-            break;
+        final int itemId = item.getId();
+        if (itemId == R.id.btn_settings) {
+          T setting = (T) item.getData();
+          T currentSetting = getCurrentSetting();
+          boolean isCurrent = setting.equals(currentSetting);
+          boolean isPending = installingSetting != null && installingSetting.equals(setting);
+          if (isCurrent) {
+            view.setData(currentStringRes);
+          } else if (isPending) {
+            view.setData(Lang.getDownloadStatus(isInstalling ? null : setting.getFile(), installingStringRes, false));
+          } else {
+            int installState = setting.getInstallState(true);
+            boolean isInstalled = installState == Settings.CloudSetting.STATE_INSTALLED;
+            view.setData(Lang.getDownloadStatus(isInstalled ? null : setting.getFile(), setting.isBuiltIn() ? builtinStringRes : installState == Settings.CloudSetting.STATE_UPDATE_NEEDED ? updateStringRes : installedStringRes, !isInstalled));
           }
+          boolean isEffective = installingSetting == null ? isCurrent : isPending;
+          RadioView radioView = view.findRadioView();
+          if (!isUpdate || isEffective) {
+            radioView.setActive(isCurrent, isUpdate);
+          }
+          radioView.setChecked(isEffective, isUpdate);
+          view.setDataColorId(isCurrent && isEffective ? ColorId.textNeutral : 0);
+
+          view.getReceiver().requestFile(setting.getPreviewFile());
         }
       }
     };
@@ -185,12 +194,14 @@ public abstract class SettingsCloudController<T extends Settings.CloudSetting> e
   }
 
   @Override
-  public boolean onBackPressed (boolean fromTop) {
+  public boolean performOnBackPressed (boolean fromTop, boolean commit) {
     if (installingSetting != null) {
-      showUnsavedChangesPromptBeforeLeaving(() -> selectSetting(getCurrentSetting()));
+      if (commit) {
+        showUnsavedChangesPromptBeforeLeaving(() -> selectSetting(getCurrentSetting()));
+      }
       return true;
     }
-    return super.onBackPressed(fromTop);
+    return super.performOnBackPressed(fromTop, commit);
   }
 
   private void updateSetting (T setting) {
@@ -224,20 +235,17 @@ public abstract class SettingsCloudController<T extends Settings.CloudSetting> e
 
   @Override
   public void onClick (View v) {
-    switch (v.getId()) {
-      case R.id.btn_settings: {
-        T setting = (T) ((ListItem) v.getTag()).getData();
-        if (tutorialFlag != 0 && tutorialStringRes != 0 && Settings.instance().needTutorial(tutorialFlag)) {
-          showWarning(Lang.getMarkdownString(this, tutorialStringRes), success -> {
-            if (success) {
-              Settings.instance().markTutorialAsComplete(tutorialFlag);
-              selectSetting(setting);
-            }
-          });
-        } else {
-          selectSetting(setting);
-        }
-        break;
+    if (v.getId() == R.id.btn_settings) {
+      T setting = (T) ((ListItem) v.getTag()).getData();
+      if (tutorialFlag != 0 && tutorialStringRes != 0 && Settings.instance().needTutorial(tutorialFlag)) {
+        showWarning(Lang.getMarkdownString(this, tutorialStringRes), success -> {
+          if (success) {
+            Settings.instance().markTutorialAsComplete(tutorialFlag);
+            selectSetting(setting);
+          }
+        });
+      } else {
+        selectSetting(setting);
       }
     }
   }
@@ -317,7 +325,7 @@ public abstract class SettingsCloudController<T extends Settings.CloudSetting> e
               }
             });
           } else {
-            tdlib.files().addCloudReference(file, this, false);
+            tdlib.files().addCloudReference(file, TdlibFilesManager.PRIORITY_SERVICE_FILES, this, false);
           }
         }
       });

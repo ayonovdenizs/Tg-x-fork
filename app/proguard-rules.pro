@@ -26,6 +26,16 @@
 -keep class org.thunderdog.challegram.N { *; }
 -keep class org.thunderdog.challegram.N$* { *; }
 -keepclassmembers class org.thunderdog.challegram.N { *; }
+# Keep TdApi.java
+-keep class org.drinkless.tdlib.TdApi { *; }
+-keep class org.drinkless.tdlib.TdApi$* { *; }
+-keepclassmembers class org.drinkless.tdlib.TdApi { *; }
+# Keep
+-keepclassmembers class org.drinkless.tdlib.Client$LogMessageHandler {
+    *;
+}
+-keep,allowoptimization interface org.drinkless.tdlib.Client$LogMessageHandler
+
 # Keep log
 -keep class org.thunderdog.challegram.Log
 -keepclassmembers class org.thunderdog.challegram.Log { *; }
@@ -35,8 +45,15 @@
 # Keep sync services
 -keep class org.thunderdog.challegram.sync.**
 
+# https://github.com/androidx/media/issues/2535
+-keep class androidx.media3.transformer.ExoPlayerAssetLoader$Factory { *; }
+
 # https://developers.google.com/ml-kit/known-issues#android_issues
 -keep class com.google.mlkit.nl.languageid.internal.LanguageIdentificationJni { *; }
+-keep class com.google.mlkit.nl.languageid.internal.ThickLanguageIdentifier { *; }
+-keepclasseswithmembernames class com.google.mlkit.nl.languageid.internal.LanguageIdentificationJni {
+  native <methods>;
+}
 
 # == THIRDPARTY ==
 
@@ -59,6 +76,17 @@
 # OkHttp platform used only on JVM and when Conscrypt dependency is available.
 -dontwarn okhttp3.internal.platform.ConscryptPlatform
 -dontwarn org.conscrypt.ConscryptHostnameVerifier
+-dontwarn org.conscrypt.Conscrypt$Version
+-dontwarn org.conscrypt.Conscrypt
 
-# TODO remove once fixed in Android Gradle Plugin
--dontoptimize
+# Other
+
+-dontwarn org.bouncycastle.jsse.BCSSLParameters
+-dontwarn org.bouncycastle.jsse.BCSSLSocket
+-dontwarn org.bouncycastle.jsse.provider.BouncyCastleJsseProvider
+
+-dontwarn org.openjsse.javax.net.ssl.SSLParameters
+-dontwarn org.openjsse.javax.net.ssl.SSLSocket
+-dontwarn org.openjsse.net.ssl.OpenJSSE
+
+-dontwarn com.google.firebase.analytics.connector.AnalyticsConnector

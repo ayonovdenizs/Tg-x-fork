@@ -39,11 +39,11 @@ public abstract class ThemeObject implements ThemeDelegate {
   }
 
   @Override
-  public float getProperty (int propertyId) {
+  public float getProperty (@PropertyId int propertyId) {
     switch (propertyId) {
-      case ThemeProperty.WALLPAPER_ID:
+      case PropertyId.WALLPAPER_ID:
         return TGBackground.getDefaultWallpaperId(id);
-      case ThemeProperty.PARENT_THEME:
+      case PropertyId.PARENT_THEME:
         return ThemeId.NONE;
     }
     throw Theme.newError(propertyId, "propertyId");
@@ -51,7 +51,5 @@ public abstract class ThemeObject implements ThemeDelegate {
 
   @ColorInt
   @Override
-  public int getColor (int colorId) {
-    throw Theme.newError(colorId, "colorId");
-  }
+  public abstract int getColor (@ColorId int colorId);
 }

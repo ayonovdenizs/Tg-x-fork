@@ -36,6 +36,7 @@ import org.thunderdog.challegram.loader.ImageGalleryFile;
 import org.thunderdog.challegram.loader.ImageReader;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 
 import java.io.File;
@@ -46,7 +47,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -54,8 +54,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import me.vkryl.core.StringUtils;
 import me.vkryl.core.BitwiseUtils;
+import me.vkryl.core.StringUtils;
 
 public class Media {
   public static final String DATE_COLUMN = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ? MediaStore.Images.Media.DATE_MODIFIED : MediaStore.Images.Media.DATE_TAKEN;
@@ -276,6 +276,11 @@ public class Media {
             fail = false;
           }
         }
+        if (fail && Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+          if (context.checkSelfPermission(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) {
+            fail = false;
+          }
+        }
         if (fail) {
           return null;
         }
@@ -283,7 +288,7 @@ public class Media {
     }
     Cursor cursor = null;
     try {
-      ContentResolver resolver = UI.getAppContext().getContentResolver();
+      ContentResolver resolver = AppContext.get().getContentResolver();
 
       Uri contentUri = allowVideos ? MediaStore.Files.getContentUri("external") : MediaStore.Images.Media.getContentUri("external");
 
@@ -486,7 +491,7 @@ public class Media {
                 updatedSizes.put(MediaStore.Images.Media.WIDTH, width);
                 updatedSizes.put(MediaStore.Images.Media.HEIGHT, height);
                 ms = SystemClock.uptimeMillis();
-                UI.getAppContext().getContentResolver().update(MediaStore.Images.Media.getContentUri("external"), updatedSizes, MediaStore.Images.Media._ID + " = " + imageId, null);
+                AppContext.get().getContentResolver().update(MediaStore.Images.Media.getContentUri("external"), updatedSizes, MediaStore.Images.Media._ID + " = " + imageId, null);
                 Log.i("updated size for imageId = %d to %dx%d in %dms", imageId, width, height, SystemClock.uptimeMillis() - ms);
               } catch (Throwable t) {
                 Log.i("Unable to update content resolver data", t);
@@ -769,7 +774,7 @@ public class Media {
     }
 
     public boolean isCameraBucket () {
-      return (name != null && (name.toLowerCase().contains("camera") || name.toLowerCase().contains("dcim")));
+      return U.isCameraFolder(name);
     }
 
     public boolean isAllPhotosBucket () {
@@ -777,11 +782,11 @@ public class Media {
     }
 
     public boolean isDownloadsBucket () {
-      return name != null && (name.toLowerCase().contains("download"));
+      return U.isDownloadsFolder(name);
     }
 
     public boolean isScreenshotBucket () {
-      return name != null && (name.toLowerCase().contains("screenshot"));
+      return U.isScreenshotFolder(name);
     }
 
     public ImageFile getPreviewImage () {

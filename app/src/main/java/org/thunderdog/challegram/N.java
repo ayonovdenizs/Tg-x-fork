@@ -16,21 +16,27 @@ package org.thunderdog.challegram;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.os.Build;
+import android.text.TextUtils;
 
 import androidx.annotation.Keep;
+import androidx.media3.common.C;
+import androidx.media3.decoder.ffmpeg.FfmpegLibrary;
+import androidx.media3.decoder.flac.FlacLibrary;
+import androidx.media3.decoder.opus.OpusLibrary;
+import androidx.media3.decoder.vp9.VpxLibrary;
 
 import org.thunderdog.challegram.config.Config;
-import org.thunderdog.challegram.unsorted.NLoader;
 
 import java.nio.ByteBuffer;
+import java.util.Locale;
+
+import me.vkryl.leveldb.LevelDB;
+import tgx.flavor.NLoader;
 
 @SuppressWarnings ({"JniMissingFunction", "SpellCheckingInspection"})
 public final class N {
   private N () { }
-
-  public static boolean init () {
-    return NLoader.loadLibrary();
-  }
 
   // image.c
   public native static void calcCDT (ByteBuffer hsvBuffer, int width, int height, ByteBuffer buffer);
@@ -66,15 +72,15 @@ public final class N {
   public static native void onSurfaceChanged (int a_width_px, int a_height_px, float a_scale_factor, int a1);
 
   // gif.c
-  public static native void gifInit ();
-  public static native long createDecoder (String path, int[] metadata, double startMediaTimestamp);
+  public static final int DECODER_METADATA_ARRAY_SIZE = 5;
+  public static native long createDecoder (String path, long[] metadata, double startMediaTimestamp);
   public static native long createLottieDecoder (String path, String jsonData, double[] metadata, int fitzpatrickType);
   public static native void getLottieSize (long ptr, int[] size);
   public static native void cancelLottieDecoder (long ptr);
   public static native int createLottieCache (long ptr, String cachePath, Bitmap firstFrame, Bitmap bitmap, boolean allowCreate, boolean limitFps); // 0 = ok, 1 = need create, 2 = error
   public static native void destroyDecoder (long ptr);
   public static native boolean destroyLottieDecoder (long ptr);
-  public static native int getVideoFrame (long ptr, Bitmap bitmap, int[] metadata);
+  public static native int getVideoFrame (long ptr, Bitmap bitmap, long[] metadata);
   public static native boolean getLottieFrame (long ptr, Bitmap bitmap, long frameNo);
   public static native boolean isVideoBroken (long ptr);
   public static native boolean seekVideoToStart (long ptr);
@@ -82,9 +88,22 @@ public final class N {
 
   // TODO remove rendering, because it is no longer used
   // audio.c
-  public static native int startRecord (String path);
+  public static int startRecord (String path) {
+    return startRecord(path, 48000);
+  }
+
+  public static int resumeRecord (String path) {
+    return resumeRecord(path, 48000);
+  }
+
+  public static void stopRecord () {
+    stopRecord(false);
+  }
+
+  public static native int startRecord (String path, int sampleRate);
+  public static native int resumeRecord (String path, int sampleRate);
   public static native int writeFrame (ByteBuffer frame, int len);
-  public static native void stopRecord ();
+  public static native void stopRecord (boolean allowResuming);
   public static native int openOpusFile (String path);
   public static native int seekOpusFile (float position);
   public static native int isOpusFile (String path);
@@ -115,6 +134,40 @@ public final class N {
   }
 
   public native static void onFatalError (String msg, int cause);
-  public native static void throwDirect (String msg);
 
+  // Unavailable in legacy flavor
+  public static native String[] getTgCallsVersions ();
+  public static native String toHexString (byte[] array);
+
+  private static boolean loaded;
+
+  public static boolean init () {
+    if (!loaded) {
+      NLoader.loadLibraries();
+      loaded = true;
+    }
+    return true;
+  }
+
+  public static void setupLibraries () {
+    // Crashes if any of the libraries were not properly loaded
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+      OpusLibrary.setLibraries(C.CRYPTO_TYPE_UNSUPPORTED);
+      VpxLibrary.setLibraries(C.CRYPTO_TYPE_UNSUPPORTED);
+      FlacLibrary.setLibraries();
+      FfmpegLibrary.setLibraries();
+      if (BuildConfig.DEBUG) {
+        android.util.Log.v("tgx", String.format(Locale.US,
+          "leveldb %s, libopus %s, libvpx %s, ffmpeg %s, tgcalls %s",
+          LevelDB.getVersion(),
+          OpusLibrary.getVersion(),
+          VpxLibrary.getVersion(),
+          FfmpegLibrary.getVersion(),
+          BuildConfig.CALLS_AVAILABLE ?
+            TextUtils.join("+", N.getTgCallsVersions()) :
+            "disabled"
+        ));
+      }
+    }
+  }
 }

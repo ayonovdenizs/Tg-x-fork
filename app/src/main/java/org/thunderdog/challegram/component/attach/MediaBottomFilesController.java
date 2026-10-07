@@ -14,7 +14,6 @@
  */
 package org.thunderdog.challegram.component.attach;
 
-import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
@@ -34,43 +33,54 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
+import org.thunderdog.challegram.BuildConfig;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
+import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Background;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.core.Media;
 import org.thunderdog.challegram.data.InlineResult;
 import org.thunderdog.challegram.data.InlineResultCommon;
+import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.loader.ImageFile;
 import org.thunderdog.challegram.loader.ImageGalleryFile;
 import org.thunderdog.challegram.navigation.HeaderView;
 import org.thunderdog.challegram.navigation.Menu;
 import org.thunderdog.challegram.player.TGPlayerController;
 import org.thunderdog.challegram.telegram.RightId;
+import org.thunderdog.challegram.telegram.SessionSnapshot;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Intents;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Strings;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.ui.ListItem;
 import org.thunderdog.challegram.ui.SettingsAdapter;
+import org.thunderdog.challegram.unsorted.AppContext;
+import org.thunderdog.challegram.util.HapticMenuHelper;
 import org.thunderdog.challegram.util.Permissions;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
+import me.vkryl.android.StorageUtils;
 import me.vkryl.core.DateUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.RunnableData;
@@ -92,11 +102,8 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
 
   @Override
   public void fillMenuItems (int id, HeaderView header, LinearLayout menu) {
-    switch (id) {
-      case R.id.menu_more: {
-        header.addMoreButton(menu, this);
-        break;
-      }
+    if (id == R.id.menu_more) {
+      header.addMoreButton(menu, this);
     }
   }
 
@@ -107,22 +114,25 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
     }
   }
 
-  @TargetApi(Build.VERSION_CODES.JELLY_BEAN_MR2)
+  @RequiresApi(Build.VERSION_CODES.JELLY_BEAN_MR2)
   private void showSystemPicker (boolean forceDownloads) {
     RunnableData<Set<Uri>> callback = uris -> {
       if (uris != null && !uris.isEmpty()) {
-        List<String> files = new ArrayList<>(uris.size());
-        for (Uri uri : uris) {
-          String filePath = U.tryResolveFilePath(uri);
-          if (!StringUtils.isEmpty(filePath) && U.canReadFile(filePath)) {
-            files.add(filePath);
-          } else {
-            files.add(uri.toString());
+        Media.instance().post(() -> {
+          final ArrayList<InlineResult<?>> results = new ArrayList<>(uris.size());
+          final TD.FileInfo fileInfo = new TD.FileInfo();
+          for (Uri uri : uris) {
+            String filePath = U.tryResolveFilePath(uri);
+            if (!StringUtils.isEmpty(filePath) && U.canReadFile(filePath)) {
+              results.add(createItem(context, tdlib, new File(filePath), null));
+            } else {
+              final String path = uri.toString();
+              TD.createInputFile(path, null, fileInfo);
+              results.add(createItem(context, tdlib, path, R.drawable.baseline_insert_drive_file_24, fileInfo.title, Strings.buildSize(fileInfo.knownSize)));
+            }
           }
-        }
-        mediaLayout.pickDateOrProceed((sendOptions, disableMarkdown) ->
-          mediaLayout.sendFilesMixed(mediaLayout.getTarget() != null ? mediaLayout.getTarget().getAttachButton() : null, files, null, sendOptions, false)
-        );
+          UI.post(() -> mediaLayout.getFilesControllerDelegate().onFilesSelected(results, false));
+        });
       }
     };
     final Intent intent = new Intent(Intent.ACTION_GET_CONTENT)
@@ -167,6 +177,7 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
   private static final String KEY_BUCKET = "bucket";
   private static final String KEY_MUSIC = "music";
   private static final String KEY_DOWNLOADS = "downloads";
+  private static final String KEY_SNAPSHOT = "snapshot";
   private static final String KEY_FOLDER = "dir://";
   private static final String KEY_FILE = "file://";
   private static final String KEY_UPPER = "..";
@@ -183,10 +194,9 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
     ArrayList<ListItem> items = new ArrayList<>();
 
     if (currentPath != null && !currentPath.isEmpty()) {
-      if (!isUpper && mediaLayout.getTarget() != null) {
+      if (!isUpper) {
         boolean isMusic = KEY_MUSIC.equals(currentPath);
-        boolean res = mediaLayout.getTarget().showRestriction(view, isMusic ? RightId.SEND_AUDIO : RightId.SEND_DOCS);
-        if (res) {
+        if (mediaLayout.getFilesControllerDelegate().showRestriction(view, isMusic ? RightId.SEND_AUDIO : RightId.SEND_DOCS)) {
           return;
         }
       }
@@ -200,14 +210,22 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
         operation = buildDownloads();
       } else if (KEY_BUCKET.equals(currentPath)) {
         operation = buildBucket(data);
+      } else if (KEY_SNAPSHOT.equals(currentPath)) {
+        operation = buildSnapshot(view);
+        before = after -> showOptions(Lang.getMarkdownString(this, R.string.SessionSnapshotWarning), new int[] {R.id.btn_done, R.id.btn_cancel}, new String[] {Lang.getString(R.string.ApplicationFolderWarningConfirm), Lang.getString(R.string.Cancel)}, new int[] {OptionColor.RED, OptionColor.NORMAL}, new int[] {R.drawable.baseline_warning_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
+          if (id == R.id.btn_done) {
+            after.run();
+          }
+          return true;
+        });
       } else if (currentPath.startsWith(KEY_FOLDER)) {
         String path = currentPath.substring(KEY_FOLDER.length());
         operation = buildFolder(path, parentPath);
-        String internalPath = UI.getAppContext().getFilesDir().getPath();
-        File external = UI.getAppContext().getExternalFilesDir(null);
+        String internalPath = AppContext.get().getFilesDir().getPath();
+        File external = AppContext.get().getExternalFilesDir(null);
         String externalPath = external != null ? external.getPath() : null;
         if (!isUpper && (path.equals(internalPath) || path.equals(externalPath))) {
-          before = after -> showOptions(Lang.getMarkdownString(this, R.string.ApplicationFolderWarning), new int[] {R.id.btn_done, R.id.btn_cancel}, new String[] {Lang.getString(R.string.ApplicationFolderWarningConfirm), Lang.getString(R.string.Cancel)}, new int[] {OPTION_COLOR_RED, OPTION_COLOR_NORMAL}, new int[] {R.drawable.baseline_warning_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
+          before = after -> showOptions(Lang.getMarkdownString(this, R.string.ApplicationFolderWarning), new int[] {R.id.btn_done, R.id.btn_cancel}, new String[] {Lang.getString(R.string.ApplicationFolderWarningConfirm), Lang.getString(R.string.Cancel)}, new int[] {OptionColor.RED, OptionColor.NORMAL}, new int[] {R.drawable.baseline_warning_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
             if (id == R.id.btn_done) {
               after.run();
             }
@@ -235,15 +253,15 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
         final String environmentPath = baseExternalDir.getPath();
         final boolean isRemovable = Environment.isExternalStorageRemovable();
         StatFs fs = new StatFs(environmentPath);
-        String text = Lang.getString(R.string.FreeXofY, Strings.buildSize(U.getFreeMemorySize(fs)), Strings.buildSize(U.getTotalMemorySize(fs)));
-        InlineResultCommon internalStorage = new InlineResultCommon(context, tdlib, KEY_FOLDER + environmentPath, R.id.theme_color_fileAttach, isRemovable ? R.drawable.baseline_sd_storage_24 : R.drawable.baseline_storage_24, Lang.getString(isRemovable ? R.string.SdCard : R.string.InternalStorage), text);
+        String text = Lang.getString(R.string.FreeXofY, Strings.buildSize(StorageUtils.freeMemorySize(fs)), Strings.buildSize(StorageUtils.totalMemorySize(fs)));
+        InlineResultCommon internalStorage = new InlineResultCommon(context, tdlib, KEY_FOLDER + environmentPath, ColorId.fileAttach, isRemovable ? R.drawable.baseline_sd_storage_24 : R.drawable.baseline_storage_24, Lang.getString(isRemovable ? R.string.SdCard : R.string.InternalStorage), text).setDisableProgressInteract(true);
         items.add(createItem(internalStorage, R.id.btn_internalStorage));
       }
 
       final ArrayList<String> externalStorageFiles = U.getExternalStorageDirectories(baseExternalDir != null ? baseExternalDir.getPath() : null, false);
       if (externalStorageFiles != null) {
         for (String dir : externalStorageFiles) {
-          InlineResultCommon internalStorage = new InlineResultCommon(context, tdlib, KEY_FOLDER + dir, R.id.theme_color_fileAttach, R.drawable.baseline_storage_24, Lang.getString(R.string.Storage), dir);
+          InlineResultCommon internalStorage = new InlineResultCommon(context, tdlib, KEY_FOLDER + dir, ColorId.fileAttach, R.drawable.baseline_storage_24, Lang.getString(R.string.Storage), dir).setDisableProgressInteract(true);
           items.add(createItem(internalStorage, R.id.btn_internalStorage));
         }
       }
@@ -300,7 +318,7 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
           text = Lang.plural(R.string.xFolders, foldersCount);
         else
           text = Lang.plural(R.string.xFiles, filesCount);
-        InlineResultCommon rootDirectory = new InlineResultCommon(context, tdlib, KEY_FOLDER + rootDir.getPath(), R.id.theme_color_fileAttach, R.drawable.baseline_folder_24, Lang.getString(R.string.RootDirectory), text);
+        InlineResultCommon rootDirectory = new InlineResultCommon(context, tdlib, KEY_FOLDER + rootDir.getPath(), ColorId.fileAttach, R.drawable.baseline_folder_24, Lang.getString(R.string.RootDirectory), text).setDisableProgressInteract(true);
         items.add(createItem(rootDirectory, R.id.btn_folder));
         hasRoot = true;
       }
@@ -656,7 +674,7 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
           MediaStore.Downloads.IS_PENDING
         };
         try {
-          try (Cursor c = UI.getAppContext().getContentResolver().query(MediaStore.Downloads.EXTERNAL_CONTENT_URI, projection, MediaStore.Downloads.IS_PENDING + " != 1", null, MediaStore.Downloads.DATE_MODIFIED + " desc, " + MediaStore.Downloads.DATE_ADDED + " desc")) {
+          try (Cursor c = AppContext.get().getContentResolver().query(MediaStore.Downloads.EXTERNAL_CONTENT_URI, projection, MediaStore.Downloads.IS_PENDING + " != 1", null, MediaStore.Downloads.DATE_MODIFIED + " desc, " + MediaStore.Downloads.DATE_ADDED + " desc")) {
             if (c == null) {
               openAlert(this, R.string.AppName, R.string.AccessError);
               return null;
@@ -689,7 +707,7 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
 
             for (FileEntry entry : entries) {
               final String subtitle = Lang.getFileTimestamp(Math.max(entry.getDateModified(), entry.getDateAdded()), TimeUnit.SECONDS, entry.getSize());
-              InlineResultCommon fileItem = new InlineResultCommon(context, tdlib, new File(entry.getData()), entry.getDisplayName(), subtitle, entry, false);
+              InlineResultCommon fileItem = new InlineResultCommon(context, tdlib, new File(entry.getData()), entry.getDisplayName(), subtitle, entry, false).setDisableProgressInteract(true);
               items.add(createItem(fileItem, R.id.btn_file));
             }
 
@@ -720,7 +738,7 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
           MediaStore.Audio.Media.ALBUM_ID,
         };
         try {
-          Cursor c = UI.getAppContext().getContentResolver().query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, MediaStore.Audio.Media.IS_MUSIC + " != 0", null, MediaStore.Audio.Media.DATE_ADDED + " desc");
+          Cursor c = AppContext.get().getContentResolver().query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, projection, MediaStore.Audio.Media.IS_MUSIC + " != 0", null, MediaStore.Audio.Media.DATE_ADDED + " desc");
           if (c == null) {
             openAlert(this, R.string.AppName, R.string.AccessError);
             return null;
@@ -758,7 +776,7 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
           items.add(createItem(result, R.id.btn_folder_upper));
 
           for (MusicEntry entry : entries) {
-            items.add(new ListItem(ListItem.TYPE_CUSTOM_INLINE, R.id.btn_file).setData(new InlineResultCommon(context, tdlib, entry, MediaBottomFilesController.this)));
+            items.add(new ListItem(ListItem.TYPE_CUSTOM_INLINE, R.id.btn_file).setData(new InlineResultCommon(context, tdlib, entry, MediaBottomFilesController.this).setDisableProgressInteract(true)));
           }
 
           return new Result(items, true);
@@ -824,6 +842,27 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
     });
   }
 
+  private LoadOperation buildSnapshot (View view) {
+    return new LoadOperation(this) {
+      @Override
+      Result act () {
+        try {
+          File snapshot = SessionSnapshot.createSnapshotWithAllAccounts();
+          UI.post(() -> {
+            if (!isDestroyed()) {
+              mediaLayout.sendFile(view, snapshot.getAbsolutePath());
+            }
+          });
+          return null;
+          // TODO send snapshot
+        } catch (IOException e) {
+          Log.w("Unable to create snapshot", e);
+          return null;
+        }
+      }
+    };
+  }
+
   private LoadOperation buildFolder (final String path, final String parent) {
     return new LoadOperation(this) {
       @Override
@@ -886,6 +925,10 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
     } catch (Throwable t) {
       Log.e(t);
     }
+    if (Config.ENABLE_BASELINE_PROFILE_HOOKS || BuildConfig.DEBUG) {
+      InlineResultCommon snapshot = createItem(context, tdlib, KEY_SNAPSHOT, R.drawable.baseline_lock_24, Lang.getString(R.string.SessionSnapshot), Lang.getString(R.string.SessionSnapshotDesc));
+      items.add(createItem(snapshot, R.id.btn_folder));
+    }
   }
 
   private static String normalizePath (String path) {
@@ -902,7 +945,8 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
     }
 
     if (d1) {
-      return o1.compareTo(o2);
+      int res = o1.compareTo(o2);
+      return Integer.compare(res, 0);
     }
 
     final long t1 = o1.lastModified();
@@ -918,7 +962,8 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
     String e2 = U.getExtension(n2);
 
     if (e1 == null && e2 == null) {
-      return n1.compareTo(n2);
+      int res = n1.compareTo(n2);
+      return Integer.compare(res, 0);
     }
     if (e1 == null) {
       return -1; // files without extension are higher
@@ -927,10 +972,10 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
       return 1;
     }
 
-    e1 = e1.toLowerCase();
-    e2 = e2.toLowerCase();
+    e1 = e1.toLowerCase(Locale.ROOT);
+    e2 = e2.toLowerCase(Locale.ROOT);
 
-    return e1.equals(e2) ? n1.compareTo(n2) : e1.compareTo(e2);
+    return Integer.compare(e1.equals(e2) ? n1.compareTo(n2) : e1.compareTo(e2), 0);
   }
 
   private void init () {
@@ -959,12 +1004,12 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
 
   public static InlineResultCommon createItem (BaseActivity context, Tdlib tdlib, File file, @Nullable Object tag, String title, long lastModifiedTime, String subtitle, boolean isFolder) {
     if (file.isDirectory()) {
-      return new InlineResultCommon(context, tdlib, KEY_FOLDER + file.getPath(), R.id.theme_color_fileAttach, R.drawable.baseline_folder_24, file.getName(), Lang.getString(R.string.Folder));
+      return new InlineResultCommon(context, tdlib, KEY_FOLDER + file.getPath(), ColorId.fileAttach, R.drawable.baseline_folder_24, file.getName(), Lang.getString(R.string.Folder)).setDisableProgressInteract(true);
     } else {
       if (subtitle == null) {
         subtitle = Lang.getFileTimestamp(lastModifiedTime, TimeUnit.MILLISECONDS, file.length());
       }
-      return new InlineResultCommon(context, tdlib, file, title != null ? title : file.getName(), subtitle, tag, isFolder);
+      return new InlineResultCommon(context, tdlib, file, title != null ? title : file.getName(), subtitle, tag, isFolder).setDisableProgressInteract(true);
     }
   }
 
@@ -973,7 +1018,7 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
   }
 
   public static InlineResultCommon createItem (BaseActivity context, Tdlib tdlib, String path, int iconRes, String title, String subtitle) {
-    return new InlineResultCommon(context, tdlib, path, R.id.theme_color_fileAttach, iconRes, title, subtitle);
+    return new InlineResultCommon(context, tdlib, path, ColorId.fileAttach, iconRes, title, subtitle).setDisableProgressInteract(true);
   }
 
   public static ListItem createItem (InlineResult<?> result, int id) {
@@ -994,19 +1039,36 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
   }
 
   @Override
-  public boolean onBackPressed (boolean fromTop) {
-    if (super.onBackPressed(fromTop)) {
+  public boolean performOnBackPressed (boolean fromTop, boolean commit) {
+    if (super.performOnBackPressed(fromTop, commit)) {
       return true;
     }
     if (inFileSelectMode) {
-      mediaLayout.cancelMultiSelection();
+      if (commit) {
+        mediaLayout.cancelMultiSelection();
+      }
       return true;
     }
     if (!stack.isEmpty()) {
-      navigateUpper();
+      if (commit) {
+        navigateUpper();
+      }
       return true;
     }
     return false;
+  }
+
+  @Override
+  protected void addCustomItems (View view, @NonNull List<HapticMenuHelper.MenuItem> hapticItems) {
+    hapticItems.add(0, new HapticMenuHelper.MenuItem(R.id.btn_addCaption, Lang.getString(R.string.AddCaption), R.drawable.baseline_file_caption_24).setOnClickListener(this::onHapticMenuItemClick));
+  }
+
+  private boolean onHapticMenuItemClick (View view, View parentView, HapticMenuHelper.MenuItem item) {
+    final int id = view.getId();
+    if (id == R.id.btn_addCaption) {
+      mediaLayout.getFilesControllerDelegate().onFilesSelected(new ArrayList<>(selectedItems), true);
+    }
+    return true;
   }
 
   @Override
@@ -1023,88 +1085,69 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
     ListItem item = (ListItem) tag;
     if (item.getViewType() == ListItem.TYPE_CUSTOM_INLINE) {
       InlineResultCommon result = (InlineResultCommon) item.getData();
-      switch (item.getId()) {
-        case R.id.btn_file:
-        case R.id.btn_music: {
-          if (inFileSelectMode) {
-            selectItem(item, result);
-          } else {
-            switch (result.getType()) {
-              case InlineResult.TYPE_AUDIO: {
-                mediaLayout.sendMusic(v, (MusicEntry) result.getTag());
-                break;
-              }
-              case InlineResult.TYPE_DOCUMENT: {
-                mediaLayout.sendFile(v, result.getId());
-                break;
-              }
-            }
-          }
-          break;
+      final int itemId = item.getId();
+      if (itemId == R.id.btn_file || itemId == R.id.btn_music) {
+        if (inFileSelectMode) {
+          selectItem(item, result);
+        } else {
+          mediaLayout.getFilesControllerDelegate().onFilesSelected(new ArrayList<>(Collections.singleton(result)), false);
         }
-        case R.id.btn_bucket: {
-          navigateInside(v, KEY_BUCKET, result);
-          break;
+      } else if (itemId == R.id.btn_bucket) {
+        navigateInside(v, KEY_BUCKET, result);
+      } else {
+        String path = result.getId();
+        boolean isMusic = KEY_MUSIC.equals(path);
+        if (mediaLayout.getFilesControllerDelegate().showRestriction(v, isMusic ? RightId.SEND_AUDIO : RightId.SEND_DOCS)) {
+          return;
         }
-        default: {
-          String path = result.getId();
-          boolean isMusic = KEY_MUSIC.equals(path);
-          if (mediaLayout.getTarget() != null) {
-            boolean res = mediaLayout.getTarget().showRestriction(v, isMusic ? RightId.SEND_AUDIO : RightId.SEND_DOCS);
-            if (res) {
-              return;
-            }
+        boolean isDownloads = KEY_DOWNLOADS.equals(path);
+        if (v.getId() == R.id.btn_internalStorage || isDownloads) {
+          if (!context.permissions().canManageStorage()) {
+            showSystemPicker(isDownloads);
+            return;
           }
-          boolean isDownloads = KEY_DOWNLOADS.equals(path);
-          if (v.getId() == R.id.btn_internalStorage || isDownloads) {
-            if (!context.permissions().canManageStorage()) {
+          if (context.permissions().requestReadExternalStorage(Permissions.ReadType.ALL, grantType -> {
+            if (grantType != Permissions.GrantResult.ALL || !context.permissions().canManageStorage()) {
               showSystemPicker(isDownloads);
-              return;
+            } else {
+              navigateTo(v, result);
             }
-            if (context.permissions().requestReadExternalStorage(Permissions.ReadType.ALL, grantType -> {
-              if (grantType != Permissions.GrantResult.ALL || !context.permissions().canManageStorage()) {
-                showSystemPicker(isDownloads);
-              } else {
-                navigateTo(v, result);
-              }
-            })) {
-              return;
-            }
+          })) {
+            return;
           }
-
-          if (path != null) {
-            switch (path) {
-              case KEY_GALLERY: {
-                if (context.permissions().requestReadExternalStorage(Permissions.ReadType.IMAGES_AND_VIDEOS, grantType -> {
-                  if (grantType == Permissions.GrantResult.ALL) {
-                    navigateTo(v, result);
-                  } else {
-                    // TODO 1-tap access to privacy settings?
-                    context.tooltipManager().builder(v).icon(R.drawable.baseline_warning_24).show(tdlib, R.string.MissingGalleryPermission).hideDelayed();
-                  }
-                })) {
-                  return;
-                }
-                break;
-              }
-              case KEY_MUSIC: {
-                if (context.permissions().requestReadExternalStorage(Permissions.ReadType.AUDIO, grantType -> {
-                  if (grantType == Permissions.GrantResult.ALL) {
-                    navigateTo(v, result);
-                  } else {
-                    // TODO 1-tap access to privacy settings?
-                    context.tooltipManager().builder(v).icon(R.drawable.baseline_warning_24).show(tdlib, R.string.MissingAudioPermission).hideDelayed();
-                  }
-                })) {
-                  return;
-                }
-                break;
-              }
-            }
-          }
-          navigateTo(v, result);
-          break;
         }
+
+        if (path != null) {
+          switch (path) {
+            case KEY_GALLERY: {
+              if (context.permissions().requestReadExternalStorage(Permissions.ReadType.IMAGES_AND_VIDEOS, grantType -> {
+                if (grantType == Permissions.GrantResult.ALL) {
+                  navigateTo(v, result);
+                } else {
+                  // TODO 1-tap access to privacy settings?
+                  context.tooltipManager().builder(v).icon(R.drawable.baseline_warning_24).show(tdlib, R.string.MissingGalleryPermission).hideDelayed();
+                }
+              })) {
+                return;
+              }
+              break;
+            }
+            case KEY_MUSIC: {
+              if (context.permissions().requestReadExternalStorage(Permissions.ReadType.AUDIO, grantType -> {
+                if (grantType == Permissions.GrantResult.ALL) {
+                  navigateTo(v, result);
+                } else {
+                  // TODO 1-tap access to privacy settings?
+                  context.tooltipManager().builder(v).icon(R.drawable.baseline_warning_24).show(tdlib, R.string.MissingAudioPermission).hideDelayed();
+                }
+              })) {
+                return;
+              }
+              break;
+            }
+          }
+        }
+        navigateTo(v, result);
       }
     }
   }
@@ -1112,7 +1155,13 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
   private void navigateTo (View view, InlineResultCommon result) {
     String path = result.getId();
     if (path != null) {
-      if (KEY_GALLERY.equals(path) || KEY_MUSIC.equals(path) || KEY_DOWNLOADS.equals(path) || KEY_BUCKET.equals(path) || path.startsWith(KEY_FOLDER)) {
+      if (
+        KEY_GALLERY.equals(path) ||
+        KEY_MUSIC.equals(path) ||
+        KEY_DOWNLOADS.equals(path) ||
+        KEY_BUCKET.equals(path) ||
+        KEY_SNAPSHOT.equals(path) ||
+        path.startsWith(KEY_FOLDER)) {
         navigateInside(view, path, result);
       } else if (KEY_UPPER.equals(path)) {
         navigateUpper();
@@ -1127,6 +1176,10 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
 
   @Override
   public boolean onLongClick (View v) {
+    if (mediaLayout.inSingleMediaMode()) {
+      return false;
+    }
+
     Object tag = v.getTag();
     if (tag != null && tag instanceof ListItem) {
       ListItem item = (ListItem) tag;
@@ -1302,6 +1355,11 @@ public class MediaBottomFilesController extends MediaBottomBaseController<Void> 
   @Override
   protected int getRecyclerHeaderOffset () {
     return Screen.dp(101f);
+  }
+
+  public interface Delegate {
+    boolean showRestriction (View view, @RightId int rightId);
+    void onFilesSelected (ArrayList<InlineResult<?>> results, boolean needShowKeyboard);
   }
 }
 

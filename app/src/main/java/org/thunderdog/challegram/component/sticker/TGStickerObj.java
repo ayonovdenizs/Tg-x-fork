@@ -19,14 +19,15 @@ import android.text.TextUtils;
 
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.loader.ImageFile;
 import org.thunderdog.challegram.loader.gif.GifFile;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.tool.Screen;
 
-import me.vkryl.td.Td;
+import me.vkryl.core.ArrayUtils;
+import tgx.td.Td;
 
 public class TGStickerObj {
   private Tdlib tdlib;
@@ -37,6 +38,8 @@ public class TGStickerObj {
   private GifFile previewAnimation, fullAnimation, premiumFullAnimation;
   private String foundByEmoji;
   private TdApi.ReactionType reactionType;
+  private boolean needThemedColorFilter;
+  private boolean isDefaultPremiumStar;
 
   private int flags;
   private float displayScale = 1f;
@@ -58,6 +61,13 @@ public class TGStickerObj {
     }
   }
 
+  public static TGStickerObj makeDefaultPremiumStar (Tdlib tdlib) {
+    TGStickerObj o = new TGStickerObj(tdlib, null, null, new TdApi.StickerTypeCustomEmoji());
+    o.isDefaultPremiumStar = true;
+    return o;
+  }
+
+
   public TGStickerObj setDisplayScale (float scale) {
     this.displayScale = scale;
     return this;
@@ -69,6 +79,18 @@ public class TGStickerObj {
 
   public boolean isCustomReaction () {
     return reactionType != null && reactionType.getConstructor() == TdApi.ReactionTypeCustomEmoji.CONSTRUCTOR;
+  }
+
+  public boolean isEmojiReaction () {
+    return reactionType != null && reactionType.getConstructor() == TdApi.ReactionTypeEmoji.CONSTRUCTOR;
+  }
+
+  public boolean isPaidReaction () {
+    return reactionType != null && reactionType.getConstructor() == TdApi.ReactionTypePaid.CONSTRUCTOR;
+  }
+
+  public boolean isCustomEmoji () {
+    return stickerType != null && stickerType.getConstructor() == TdApi.StickerTypeCustomEmoji.CONSTRUCTOR;
   }
 
   public boolean needGenericAnimation () {
@@ -89,7 +111,12 @@ public class TGStickerObj {
   }
 
   public TdApi.ReactionType getReactionType () {
-    return reactionType;
+    if (reactionType != null) {
+      return reactionType;
+    } else if (isCustomEmoji()) {
+      return new TdApi.ReactionTypeCustomEmoji(getCustomEmojiId());
+    }
+    return null;
   }
 
   public boolean set (Tdlib tdlib, @Nullable TdApi.Sticker sticker, TdApi.StickerFullType stickerType, String[] emojis) {
@@ -104,6 +131,7 @@ public class TGStickerObj {
     if (this.sticker == null || sticker == null || this.tdlib != tdlib || !Td.equalsTo(this.sticker, sticker)) {
       this.tdlib = tdlib;
       this.sticker = sticker;
+      this.needThemedColorFilter = TD.needThemedColorFilter(sticker);
       this.fullImage = null;
       this.previewAnimation = null;
       this.fullAnimation = null;
@@ -112,9 +140,9 @@ public class TGStickerObj {
       if (sticker != null && (sticker.thumbnail != null || !Td.isAnimated(sticker.format))) {
         this.preview = TD.toImageFile(tdlib, sticker.thumbnail);
         if (this.preview != null) {
-          this.preview.setSize(Screen.dp(82f));
-          this.preview.setWebp();
-          this.preview.setScaleType(ImageFile.FIT_CENTER);
+          this.preview.setSize(Screen.dp(isCustomEmoji() ? 40f : 82f));   // In some cases, emoji are drawn at more than 40 dp;
+          this.preview.setWebp();                                         // perhaps, in order not to lose quality when scaling,
+          this.preview.setScaleType(ImageFile.FIT_CENTER);                //  it is worth adding an arbitrary preview size
         }
       } else {
         this.preview = null;
@@ -126,6 +154,16 @@ public class TGStickerObj {
 
   public long getStickerSetId () {
     return stickerSetId != 0 ? stickerSetId : sticker != null ? sticker.setId : 0;
+  }
+
+  private long tag;
+
+  public void setTag (long tag) {
+    this.tag = tag;
+  }
+
+  public long getTag () {
+    return tag;
   }
 
   public boolean isPremium () {
@@ -152,6 +190,11 @@ public class TGStickerObj {
            (b.sticker != null && sticker != null && b.flags == flags && Td.equalsTo(b.sticker, sticker));
   }
 
+  @Override
+  public int hashCode () {
+    return ArrayUtils.hash(sticker, flags);
+  }
+
   public String getAllEmoji () {
     return emojis != null && emojis.length > 0 ? TextUtils.join(" ", emojis) : sticker != null ? sticker.emoji : "";
   }
@@ -169,7 +212,7 @@ public class TGStickerObj {
   }
 
   public Path getContour (int targetWidth, int targetHeight) {
-    return sticker != null ? Td.buildOutline(sticker, targetWidth, targetHeight) : null;
+    return null;
   }
 
   public ImageFile getImage () {
@@ -230,6 +273,18 @@ public class TGStickerObj {
     return premiumFullAnimation;
   }
 
+  public boolean needThemedColorFilter () {
+    return needThemedColorFilter || isDefaultPremiumStar();
+  }
+
+  public boolean isDefaultPremiumStar () {
+    return isDefaultPremiumStar;
+  }
+
+  public long getCustomEmojiId () {
+    return Td.customEmojiId(sticker);
+  }
+
   public void setIsRecent () {
     flags |= FLAG_RECENT;
   }
@@ -255,7 +310,7 @@ public class TGStickerObj {
   }
 
   public boolean isMasks () {
-    return stickerType.getConstructor() == TdApi.StickerTypeMask.CONSTRUCTOR;
+    return !isDefaultPremiumStar && stickerType.getConstructor() == TdApi.StickerTypeMask.CONSTRUCTOR;
   }
 
   public int getId () {
@@ -263,17 +318,17 @@ public class TGStickerObj {
   }
 
   public int getWidth () {
-    return sticker != null ? sticker.width : 0;
+    return isDefaultPremiumStar ? 512 : sticker != null ? sticker.width : 0;
   }
 
   public int getHeight () {
-    return sticker != null ? sticker.height : 0;
+    return isDefaultPremiumStar ? 512 : sticker != null ? sticker.height : 0;
   }
 
   // If sticker set is not loaded yet
 
   public boolean isEmpty () {
-    return sticker == null;
+    return sticker == null && !isDefaultPremiumStar;
   }
 
   private long stickerSetId;

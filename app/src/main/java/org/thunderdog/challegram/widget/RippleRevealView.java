@@ -18,15 +18,14 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.view.View;
 
-import org.thunderdog.challegram.R;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
-import org.thunderdog.challegram.theme.ThemeColorId;
 import org.thunderdog.challegram.tool.Paints;
 
 import me.vkryl.core.ColorUtils;
 
 public class RippleRevealView extends View {
-  private @ThemeColorId int colorId = R.id.theme_color_filling;
+  private @ColorId int colorId = ColorId.filling;
   private float revealFactor;
 
   public RippleRevealView (Context context) {
@@ -47,9 +46,9 @@ public class RippleRevealView extends View {
       c.drawColor(ColorUtils.alphaColor(revealFactor, color));
 
       float width = getMeasuredWidth();
-      float height = getMeasuredHeight();
+      float height = getMeasuredHeight() - getPaddingBottom() - getPaddingTop();
       float radius = (float) Math.sqrt(width * width + height * height) * .5f;
-      c.drawCircle(width / 2, height / 2, radius * revealFactor, Paints.fillingPaint(color));
+      c.drawCircle(width / 2f, getPaddingTop() + height / 2f, radius * revealFactor, Paints.fillingPaint(color));
     }
   }
 }

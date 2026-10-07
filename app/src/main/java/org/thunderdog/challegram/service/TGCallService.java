@@ -31,9 +31,7 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
-import android.media.AudioFormat;
 import android.media.AudioManager;
-import android.media.AudioTrack;
 import android.media.MediaPlayer;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
@@ -48,10 +46,11 @@ import android.text.style.ForegroundColorSpan;
 import android.view.KeyEvent;
 
 import androidx.annotation.DrawableRes;
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationManagerCompat;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BuildConfig;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
@@ -60,6 +59,7 @@ import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.player.TGPlayerController;
 import org.thunderdog.challegram.receiver.VoIPMediaButtonReceiver;
+import org.thunderdog.challegram.telegram.PrivateCallListener;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibAccount;
 import org.thunderdog.challegram.telegram.TdlibCache;
@@ -67,12 +67,20 @@ import org.thunderdog.challegram.telegram.TdlibManager;
 import org.thunderdog.challegram.telegram.TdlibNotificationChannelGroup;
 import org.thunderdog.challegram.telegram.TdlibNotificationManager;
 import org.thunderdog.challegram.telegram.TdlibNotificationUtils;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Intents;
 import org.thunderdog.challegram.tool.UI;
+import org.thunderdog.challegram.unsorted.AppContext;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.util.SoundPoolMap;
-import org.thunderdog.challegram.voip.VoIPController;
+import org.thunderdog.challegram.voip.ConnectionStateListener;
+import org.thunderdog.challegram.voip.NetworkStats;
+import org.thunderdog.challegram.voip.Socks5Proxy;
+import org.thunderdog.challegram.voip.VoIP;
+import org.thunderdog.challegram.voip.VoIPInstance;
+import org.thunderdog.challegram.voip.annotation.CallNetworkType;
+import org.thunderdog.challegram.voip.annotation.CallState;
 import org.thunderdog.challegram.voip.gui.CallSettings;
 import org.thunderdog.challegram.voip.gui.VoIPFeedbackActivity;
 
@@ -80,16 +88,17 @@ import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.concurrent.Executors;
 
 import me.vkryl.core.StringUtils;
+import me.vkryl.core.lambda.Filter;
 import me.vkryl.core.lambda.RunnableBool;
-import me.vkryl.td.ChatId;
+import tgx.td.ChatId;
 
 public class TGCallService extends Service implements
   TdlibCache.CallStateChangeListener,
   AudioManager.OnAudioFocusChangeListener,
-  SensorEventListener,
-  VoIPController.ConnectionStateListener, UI.StateListener {
+  SensorEventListener, UI.StateListener {
   @Override
   public IBinder onBind (Intent intent) {
     return null;
@@ -99,6 +108,8 @@ public class TGCallService extends Service implements
   private @Nullable TdApi.Call call;
   private @Nullable String callChannelId;
   private TdApi.User user;
+
+  private boolean callInitialized;
 
   @Override
   public int onStartCommand (Intent intent, int flags, int startId) {
@@ -124,7 +135,7 @@ public class TGCallService extends Service implements
       stopSelf();
       return START_NOT_STICKY;
     }
-    if (controller != null) {
+    if (callInitialized) {
       if (oldCallId != 0 && oldCallId != callId)
         throw new IllegalStateException();
     } else {
@@ -143,7 +154,7 @@ public class TGCallService extends Service implements
   }
 
   public long getCallDuration () {
-    return controller != null ? controller.getCallDuration() : -1;
+    return tgcalls != null ? tgcalls.getCallDuration() : VoIPInstance.DURATION_UNKNOWN;
   }
 
   private void setCallId (Tdlib tdlib, int callId) {
@@ -167,8 +178,8 @@ public class TGCallService extends Service implements
   }
 
   private SoundPoolMap soundPoolMap;
-  private @Nullable
-  VoIPController controller;
+  private @Nullable VoIPInstance tgcalls;
+  private @Nullable PrivateCallListener callListener;
   private PowerManager.WakeLock cpuWakelock;
   private BluetoothAdapter btAdapter;
 
@@ -241,11 +252,23 @@ public class TGCallService extends Service implements
 
   private static volatile WeakReference<TGCallService> reference;
 
-  public void updateOutputGainControlState(){
-    AudioManager am=(AudioManager) getSystemService(AUDIO_SERVICE);
-    if (controller != null) {
-      controller.setAudioOutputGainControlEnabled(hasEarpiece() && am != null && !am.isSpeakerphoneOn() && !am.isBluetoothScoOn() && !isHeadsetPlugged);
-      controller.setEchoCancellationStrength(isHeadsetPlugged || (hasEarpiece() && am != null && !am.isSpeakerphoneOn() && !am.isBluetoothScoOn() && !isHeadsetPlugged) ? 0 : 1);
+  private boolean audioGainControlEnabled;
+  private int echoCancellationStrength;
+
+  public void updateOutputGainControlState () {
+    AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+    boolean var;
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      android.media.AudioDeviceInfo deviceInfo = am.getCommunicationDevice();
+      var = deviceInfo == null || deviceInfo.getType() == android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE;
+    } else {
+      var = hasEarpiece() && am != null && !am.isSpeakerphoneOn() && !am.isBluetoothScoOn() && !isHeadsetPlugged;
+    }
+    this.audioGainControlEnabled = var;
+    this.echoCancellationStrength = isHeadsetPlugged || var ? 0 : 1;
+    if (tgcalls != null) {
+      tgcalls.setAudioOutputGainControlEnabled(audioGainControlEnabled);
+      tgcalls.setEchoCancellationStrength(echoCancellationStrength);
     }
   }
 
@@ -256,43 +279,35 @@ public class TGCallService extends Service implements
   @Override
   public void onCreate () {
     super.onCreate();
-    UI.initApp(getApplicationContext());
+    AppContext.init(getApplicationContext());
     reference = new WeakReference<>(this);
 
     soundPoolMap = new SoundPoolMap(AudioManager.STREAM_VOICE_CALL);
     soundPoolMap.prepare(R.raw.voip_connecting, R.raw.voip_ringback, R.raw.voip_fail, R.raw.voip_end, R.raw.voip_busy);
 
-    AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-    boolean success = false;
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1 && am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER) != null) {
-      int outFramesPerBuffer = StringUtils.parseInt(am.getProperty(AudioManager.PROPERTY_OUTPUT_FRAMES_PER_BUFFER));
-      if (outFramesPerBuffer != 0) {
-        VoIPController.setNativeBufferSize(outFramesPerBuffer);
-        success = true;
-      }
-    }
-    if (!success) {
-      VoIPController.setNativeBufferSize(AudioTrack.getMinBufferSize(48000, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT) / 2);
-    }
+    VoIP.initialize(this);
   }
 
+  private Object communicationDeviceChangedListener;
+
   private void initCall (Tdlib tdlib, TdApi.Call call) {
-    if (controller != null) {
+    if (callInitialized) {
       throw new IllegalStateException();
     }
     Log.v(Log.TAG_VOIP, "TGCallService.onCreate");
+    callInitialized = true;
     AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
     try {
-      controller = new VoIPController();
-      controller.setConnectionStateListener(this);
-      controller.setConfig(tdlib.callPacketTimeoutMs(), tdlib.callConnectTimeoutMs(), tdlib.files().getVoipDataSavingOption(), call.id);
-
       if (cpuWakelock == null) {
         cpuWakelock = ((PowerManager) getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "tgx:voip");
         cpuWakelock.acquire();
       }
 
-      btAdapter = am.isBluetoothScoAvailableOffCall() ? BluetoothAdapter.getDefaultAdapter() : null;
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+
+      } else {
+        btAdapter = am.isBluetoothScoAvailableOffCall() ? BluetoothAdapter.getDefaultAdapter() : null;
+      }
 
       IntentFilter filter = new IntentFilter();
       filter.addAction(ConnectivityManager.CONNECTIVITY_ACTION);
@@ -313,13 +328,22 @@ public class TGCallService extends Service implements
 
       am.registerMediaButtonEventReceiver(new ComponentName(this, VoIPMediaButtonReceiver.class));
 
-      if (btAdapter != null && btAdapter.isEnabled()) {
-        int headsetState = btAdapter.getProfileConnectionState(BluetoothProfile.HEADSET);
-        updateBluetoothHeadsetState(headsetState == BluetoothProfile.STATE_CONNECTED);
-        if (headsetState == BluetoothProfile.STATE_CONNECTED) {
-          am.setBluetoothScoOn(true);
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (communicationDeviceChangedListener == null) {
+          communicationDeviceChangedListener = (AudioManager.OnCommunicationDeviceChangedListener) device -> UI.post(this::notifyAudioSettingsChanged);
         }
+        am.addOnCommunicationDeviceChangedListener(Executors.newSingleThreadExecutor(), (AudioManager.OnCommunicationDeviceChangedListener) communicationDeviceChangedListener);
         notifyAudioSettingsChanged();
+      } else {
+        if (btAdapter != null && btAdapter.isEnabled()) {
+          //noinspection MissingPermission
+          int headsetState = btAdapter.getProfileConnectionState(BluetoothProfile.HEADSET);
+          updateBluetoothHeadsetState(headsetState == BluetoothProfile.STATE_CONNECTED);
+          if (headsetState == BluetoothProfile.STATE_CONNECTED) {
+            am.setBluetoothScoOn(true);
+          }
+          notifyAudioSettingsChanged();
+        }
       }
     } catch (Throwable t) {
       Log.e(Log.TAG_VOIP, "Error initializing call", t);
@@ -336,7 +360,7 @@ public class TGCallService extends Service implements
     cpuWakelock.release();
     final AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
     boolean isBtHeadsetConnected = this.isBtHeadsetConnected;
-    RunnableBool disconnectBt = isBtHeadsetConnected ? (delayed) -> {
+    RunnableBool disconnectBt = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && isBtHeadsetConnected ? (delayed) -> {
       am.stopBluetoothSco();
       Log.d(Log.TAG_VOIP, "AudioManager.stopBluetoothSco (in onDestroy), delayed: %b", delayed);
       am.setSpeakerphoneOn(false);
@@ -366,6 +390,11 @@ public class TGCallService extends Service implements
     } catch (Throwable ignored) { }
     if (haveAudioFocus) {
       am.abandonAudioFocus(this);
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      if (communicationDeviceChangedListener != null) {
+        am.removeOnCommunicationDeviceChangedListener((AudioManager.OnCommunicationDeviceChangedListener) communicationDeviceChangedListener);
+      }
     }
     am.unregisterMediaButtonEventReceiver(new ComponentName(this, VoIPMediaButtonReceiver.class));
     if (haveAudioFocus) {
@@ -428,14 +457,15 @@ public class TGCallService extends Service implements
   private boolean sentRating;
 
   private void updateCurrentState () {
-    if (call != null && call.state.getConstructor() == TdApi.CallStateDiscarded.CONSTRUCTOR && isInitiated) {
+    if (call != null && call.state.getConstructor() == TdApi.CallStateDiscarded.CONSTRUCTOR) {
       updateStats();
       if (!sentDebugLog && ((TdApi.CallStateDiscarded) call.state).needDebugInformation && !StringUtils.isEmpty(lastDebugLog)) {
         sentDebugLog = true;
-        tdlib.client().send(new TdApi.SendCallDebugInformation(call.id, lastDebugLog), tdlib.okHandler());
+        tdlib.send(new TdApi.SendCallDebugInformation(new TdApi.InputCallDiscarded(call.id), lastDebugLog.toString()), tdlib.typedOkHandler());
       }
-      if (!sentRating && (((TdApi.CallStateDiscarded) call.state).needRating || (BuildConfig.DEBUG && logViewed))) {
+      if (!sentRating && (((TdApi.CallStateDiscarded) call.state).needRating || BuildConfig.EXPERIMENTAL)) {
         sentRating = true;
+        // TODO new feedback pop-up
         startRatingActivity();
       }
     }
@@ -476,60 +506,135 @@ public class TGCallService extends Service implements
     }
   }
 
-  @Override
-  public void onCallUpgradeRequestReceived () {
-
-  }
-
-  @Override
-  public void onGroupCallKeyReceived (byte[] key) {
-
-  }
-
-  @Override
-  public void onGroupCallKeySent () {
-
-  }
-
   private int lastAudioMode;
 
   private void setAudioMode (int mode) {
-    Log.d(Log.TAG_VOIP, "setAudioMode: %s", mode == CallSettings.SPEAKER_MODE_BLUETOOTH ? "SPEAKER_MODE_BLUETOOTH" : mode == CallSettings.SPEAKER_MODE_NONE ? "SPEAKER_MODE_NONE" : mode == CallSettings.SPEAKER_MODE_SPEAKER_DEFAULT ? "SPEAKER_MODE_SPEAKER_DEFAULT" : Integer.toString(mode));
+    Log.d(Log.TAG_VOIP, "setAudioMode: %s", mode == CallSettings.SPEAKER_MODE_BLUETOOTH ? "SPEAKER_MODE_BLUETOOTH" : mode == CallSettings.SPEAKER_MODE_EARPIECE ? "SPEAKER_MODE_NONE" : mode == CallSettings.SPEAKER_MODE_SPEAKER_DEFAULT ? "SPEAKER_MODE_SPEAKER_DEFAULT" : Integer.toString(mode));
     lastAudioMode = mode;
     AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-    switch (mode) {
-      case CallSettings.SPEAKER_MODE_BLUETOOTH: {
-        am.setBluetoothScoOn(true);
-        am.setSpeakerphoneOn(false);
-        break;
-      }
-      case CallSettings.SPEAKER_MODE_NONE: {
-        am.setBluetoothScoOn(false);
-        am.setSpeakerphoneOn(false);
-        break;
-      }
-      case CallSettings.SPEAKER_MODE_SPEAKER: {
-        am.setBluetoothScoOn(false);
-        am.setSpeakerphoneOn(true);
-        break;
-      }
-      case CallSettings.SPEAKER_MODE_SPEAKER_DEFAULT: {
-        if (hasEarpiece()) {
-          am.setSpeakerphoneOn(true);
-        } else {
-          am.setBluetoothScoOn(true);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      android.media.AudioDeviceInfo selectedAudioDevice = null;
+      Filter<android.media.AudioDeviceInfo> filter = null;
+      switch (mode) {
+        case CallSettings.SPEAKER_MODE_EARPIECE: {
+          filter = device -> switch (device.getType()) {
+            case android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE ->
+              true;
+            default ->
+              false;
+          };
+          break;
         }
-        break;
+
+        case CallSettings.SPEAKER_MODE_BLUETOOTH: {
+          filter = device -> switch (device.getType()) {
+            case
+              android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+              android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+              android.media.AudioDeviceInfo.TYPE_BLE_HEADSET/*,
+              android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER,
+              android.media.AudioDeviceInfo.TYPE_BLE_BROADCAST*/ ->
+              true;
+            default ->
+              false;
+          };
+          break;
+        }
+
+        case CallSettings.SPEAKER_MODE_SPEAKER: {
+          filter = device -> switch (device.getType()) {
+            case
+              android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+              android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE,
+              android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER ->
+              true;
+            default ->
+              false;
+          };
+          break;
+        }
+
+        case CallSettings.SPEAKER_MODE_SPEAKER_DEFAULT: {
+          if (hasEarpiece()) {
+            filter = device -> switch (device.getType()) {
+              case
+                android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+                android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE,
+                android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER ->
+                true;
+              default ->
+                false;
+            };
+          } else {
+            filter = device -> switch (device.getType()) {
+              case
+                android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                android.media.AudioDeviceInfo.TYPE_BLE_HEADSET/*,
+              android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER,
+              android.media.AudioDeviceInfo.TYPE_BLE_BROADCAST*/ ->
+                true;
+              default ->
+                false;
+            };
+          }
+          break;
+        }
+        default:
+          throw new UnsupportedOperationException();
+      }
+      if (filter != null) {
+        List<android.media.AudioDeviceInfo> devices = am.getAvailableCommunicationDevices();
+        for (android.media.AudioDeviceInfo device : devices) {
+          if (filter.accept(device)) {
+            selectedAudioDevice = device;
+            break;
+          }
+        }
+      }
+      if (selectedAudioDevice != null) {
+        am.setCommunicationDevice(selectedAudioDevice);
+      } else {
+        am.clearCommunicationDevice();
+      }
+    } else {
+      switch (mode) {
+        case CallSettings.SPEAKER_MODE_BLUETOOTH: {
+          am.setBluetoothScoOn(true);
+          am.setSpeakerphoneOn(false);
+          break;
+        }
+        case CallSettings.SPEAKER_MODE_EARPIECE: {
+          am.setBluetoothScoOn(false);
+          am.setSpeakerphoneOn(false);
+          break;
+        }
+        case CallSettings.SPEAKER_MODE_SPEAKER: {
+          am.setBluetoothScoOn(false);
+          am.setSpeakerphoneOn(true);
+          break;
+        }
+        case CallSettings.SPEAKER_MODE_SPEAKER_DEFAULT: {
+          if (hasEarpiece()) {
+            am.setSpeakerphoneOn(true);
+          } else {
+            am.setBluetoothScoOn(true);
+          }
+          break;
+        }
       }
     }
   }
 
+  private CallSettings postponedCallSettings;
+
   @Override
   public void onCallSettingsChanged (int callId, CallSettings settings) {
-    if (controller != null) {
-      controller.setMicMute(settings != null && settings.isMicMuted());
+    this.postponedCallSettings = settings;
+    if (tgcalls != null) {
+      tgcalls.setMicDisabled(settings != null && settings.isMicMuted());
     }
-    setAudioMode(settings != null ? settings.getSpeakerMode() : CallSettings.SPEAKER_MODE_NONE);
+    setAudioMode(settings != null ? settings.getSpeakerMode() : CallSettings.SPEAKER_MODE_EARPIECE);
   }
 
   // Implementation
@@ -537,7 +642,7 @@ public class TGCallService extends Service implements
   private void acceptIncomingCall () {
     if (call != null) {
       tdlib.context().calls().acceptCall(this, tdlib, call.id);
-      if (UI.getUiState() != UI.STATE_RESUMED) {
+      if (UI.getUiState() != UI.State.RESUMED) {
         bringCallToFront();
       }
     }
@@ -550,7 +655,7 @@ public class TGCallService extends Service implements
   }
 
   public long getConnectionId () {
-    return controller != null && isInitiated ? controller.getPreferredRelayID() : 0;
+    return tgcalls != null ? tgcalls.getConnectionId() : 0;
   }
 
   private void hangUp () {
@@ -564,13 +669,13 @@ public class TGCallService extends Service implements
     updateCurrentState();
     boolean isPendingIncoming = call != null && !call.isOutgoing && call.state.getConstructor() == TdApi.CallStatePending.CONSTRUCTOR;
     if (isPendingIncoming) {
-      if (newState != UI.STATE_RESUMED && needShowIncomingNotification) {
+      if (newState != UI.State.RESUMED && needShowIncomingNotification) {
         needShowIncomingNotification = false;
         showIncomingNotification();
-      } else if (newState == UI.STATE_RESUMED) {
+      } else if (newState == UI.State.RESUMED) {
         needShowIncomingNotification = true;
         cleanupChannels((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE));
-        U.stopForeground(this, true, TdlibNotificationManager.ID_INCOMING_CALL_NOTIFICATION);
+        U.stopForeground(this, true, TdlibNotificationManager.ID_FOREGROUND_INCOMING_CALL_NOTIFICATION);
         incomingNotification = null;
       }
     }
@@ -594,7 +699,11 @@ public class TGCallService extends Service implements
 
       am.setMode(AudioManager.MODE_IN_COMMUNICATION);
       amChangeCounter++;
-      am.setSpeakerphoneOn(false);
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+
+      } else {
+        am.setSpeakerphoneOn(false);
+      }
       am.requestAudioFocus(this, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN);
       updateOutputGainControlState();
 
@@ -672,7 +781,7 @@ public class TGCallService extends Service implements
   private static final @DrawableRes int CALL_ICON_RES = R.drawable.baseline_phone_24_white;
 
   private void showNotification () {
-    boolean needNotification = call != null && (call.isOutgoing || call.state.getConstructor() == TdApi.CallStateExchangingKeys.CONSTRUCTOR || call.state.getConstructor() == TdApi.CallStateReady.CONSTRUCTOR) && !TD.isFinished(call) && UI.getUiState() != UI.STATE_RESUMED;
+    boolean needNotification = call != null && (call.isOutgoing || call.state.getConstructor() == TdApi.CallStateExchangingKeys.CONSTRUCTOR || call.state.getConstructor() == TdApi.CallStateReady.CONSTRUCTOR) && !TD.isFinished(call);
 
     if (needNotification == (ongoingCallNotification != null)) {
       return;
@@ -680,7 +789,7 @@ public class TGCallService extends Service implements
 
     if (!needNotification) {
       cleanupChannels((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE));
-      U.stopForeground(this, true, TdlibNotificationManager.ID_ONGOING_CALL_NOTIFICATION, TdlibNotificationManager.ID_INCOMING_CALL_NOTIFICATION);
+      U.stopForeground(this, true, TdlibNotificationManager.ID_FOREGROUND_ONGOING_CALL_NOTIFICATION, TdlibNotificationManager.ID_FOREGROUND_INCOMING_CALL_NOTIFICATION);
       incomingNotification = ongoingCallNotification = null;
       return;
     }
@@ -731,7 +840,7 @@ public class TGCallService extends Service implements
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       builder.setColor(tdlib.accountColor());
     }
-    Bitmap bitmap = TdlibNotificationUtils.buildLargeIcon(tdlib, user.profilePhoto != null ? user.profilePhoto.small : null, TD.getAvatarColorId(user, tdlib.myUserId()), TD.getLetters(user), false, true);
+    Bitmap bitmap = TdlibNotificationUtils.buildLargeIcon(tdlib, user.profilePhoto != null ? user.profilePhoto.small : null, tdlib.cache().userAccentColor(user), TD.getLetters(user), false, true);
     if (bitmap != null) {
       builder.setLargeIcon(bitmap);
     }
@@ -740,7 +849,7 @@ public class TGCallService extends Service implements
     } else {
       ongoingCallNotification = builder.getNotification();
     }
-    U.startForeground(this, TdlibNotificationManager.ID_ONGOING_CALL_NOTIFICATION, ongoingCallNotification);
+    U.startForeground(this, TdlibNotificationManager.ID_FOREGROUND_ONGOING_CALL_NOTIFICATION, ongoingCallNotification);
   }
 
   // Sound
@@ -777,7 +886,7 @@ public class TGCallService extends Service implements
       return needNotification;
     }
 
-    if (UI.getUiState() == UI.STATE_RESUMED) {
+    if (UI.getUiState() == UI.State.RESUMED) {
       needShowIncomingNotification = true;
       Log.i("No need to show incoming notification right now, but may in future.");
       return true;
@@ -828,7 +937,7 @@ public class TGCallService extends Service implements
       CharSequence endTitle = Lang.getString(R.string.DeclineCall);
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
         endTitle = new SpannableString(endTitle);
-        ((SpannableString) endTitle).setSpan(new ForegroundColorSpan(Theme.getColor(R.id.theme_color_circleButtonNegative)), 0, endTitle.length(), 0);
+        ((SpannableString) endTitle).setSpan(new ForegroundColorSpan(Theme.getColor(ColorId.circleButtonNegative)), 0, endTitle.length(), 0);
       }
       builder.addAction(R.drawable.round_call_end_24_white, endTitle, PendingIntent.getBroadcast(this, 0, endIntent, PendingIntent.FLAG_ONE_SHOT | Intents.mutabilityFlags(false)));
       Intent answerIntent = new Intent();
@@ -837,7 +946,7 @@ public class TGCallService extends Service implements
       CharSequence answerTitle = Lang.getString(R.string.AnswerCall);
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
         answerTitle = new SpannableString(answerTitle);
-        ((SpannableString) answerTitle).setSpan(new ForegroundColorSpan(Theme.getColor(R.id.theme_color_circleButtonPositive)), 0, answerTitle.length(), 0);
+        ((SpannableString) answerTitle).setSpan(new ForegroundColorSpan(Theme.getColor(ColorId.circleButtonPositive)), 0, answerTitle.length(), 0);
       }
       builder.addAction(R.drawable.round_call_24_white, answerTitle, PendingIntent.getBroadcast(this, 0, answerIntent, PendingIntent.FLAG_ONE_SHOT | Intents.mutabilityFlags(false)));
       builder.setPriority(Notification.PRIORITY_MAX);
@@ -851,7 +960,7 @@ public class TGCallService extends Service implements
       builder.setCategory(Notification.CATEGORY_CALL);
       builder.setFullScreenIntent(PendingIntent.getActivity(this, PendingIntent.FLAG_ONE_SHOT, Intents.valueOfCall(), Intents.mutabilityFlags(false)), true);
     }
-    Bitmap bitmap = user != null ? TdlibNotificationUtils.buildLargeIcon(tdlib, user.profilePhoto != null ? user.profilePhoto.small : null, TD.getAvatarColorId(user, tdlib.myUserId()), TD.getLetters(user), false, true) : null;
+    Bitmap bitmap = user != null ? TdlibNotificationUtils.buildLargeIcon(tdlib, user.profilePhoto != null ? user.profilePhoto.small : null, tdlib.cache().userAccentColor(user), TD.getLetters(user), false, true) : null;
     if (bitmap != null) {
       builder.setLargeIcon(bitmap);
     }
@@ -860,7 +969,7 @@ public class TGCallService extends Service implements
     } else {
       incomingNotification = builder.getNotification();
     }
-    U.startForeground(this, TdlibNotificationManager.ID_INCOMING_CALL_NOTIFICATION, incomingNotification);
+    U.startForeground(this, TdlibNotificationManager.ID_FOREGROUND_INCOMING_CALL_NOTIFICATION, incomingNotification);
     return true;
   }
 
@@ -905,7 +1014,7 @@ public class TGCallService extends Service implements
 
     if (!showIncomingNotification()) {
       Log.v(Log.TAG_VOIP, "Starting incall activity for incoming call");
-      if (UI.getUiState() != UI.STATE_RESUMED) {
+      if (UI.getUiState() != UI.State.RESUMED) {
         bringCallToFront();
       }
     }
@@ -937,7 +1046,7 @@ public class TGCallService extends Service implements
 
   private void stopRinging () {
     cleanupChannels((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE));
-    U.stopForeground(this, true, TdlibNotificationManager.ID_ONGOING_CALL_NOTIFICATION, TdlibNotificationManager.ID_INCOMING_CALL_NOTIFICATION);
+    U.stopForeground(this, true, TdlibNotificationManager.ID_FOREGROUND_ONGOING_CALL_NOTIFICATION, TdlibNotificationManager.ID_FOREGROUND_INCOMING_CALL_NOTIFICATION);
     incomingNotification = ongoingCallNotification = null;
     if (ringtonePlayer != null) {
       ringtonePlayer.stop();
@@ -961,19 +1070,12 @@ public class TGCallService extends Service implements
       setIsRinging(false);
     }
     if (callSound != 0) {
-      switch (callSound) {
-        case R.raw.voip_end:
-        case R.raw.voip_fail:
-          soundPoolMap.playUnique(callSound, 1, 1, 0, 0, 1);
-          break;
-        case R.raw.voip_busy:
-          soundPoolMap.playUnique(callSound, 1, 1, 0, 2, 1);
-          break;
-        case R.raw.voip_connecting:
-        case R.raw.voip_ringback:
-        default:
-          soundPoolMap.playUnique(callSound, 1, 1, 0, call.state.getConstructor() == TdApi.CallStateExchangingKeys.CONSTRUCTOR ? 0 : -1, 1);
-          break;
+      if (callSound == R.raw.voip_end || callSound == R.raw.voip_fail) {
+        soundPoolMap.playUnique(callSound, 1, 1, 0, 0, 1);
+      } else if (callSound == R.raw.voip_busy) {
+        soundPoolMap.playUnique(callSound, 1, 1, 0, 2, 1);
+      } else {
+        soundPoolMap.playUnique(callSound, 1, 1, 0, call.state.getConstructor() == TdApi.CallStateExchangingKeys.CONSTRUCTOR ? 0 : -1, 1);
       }
     } else {
       soundPoolMap.stopLastSound();
@@ -999,9 +1101,19 @@ public class TGCallService extends Service implements
       return mHasEarpiece;
     }
 
+    AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      for (android.media.AudioDeviceInfo deviceInfo : am.getAvailableCommunicationDevices()) {
+        if (deviceInfo.getType() == android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE) {
+          mHasEarpiece = true;
+          return true;
+        }
+      }
+    }
+
     // not calculated yet, do it now
     try {
-      AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
       Method method = AudioManager.class.getMethod("getDevicesForStream", Integer.TYPE);
       Field field = AudioManager.class.getField("DEVICE_OUT_EARPIECE");
       int earpieceFlag = field.getInt(null);
@@ -1027,12 +1139,16 @@ public class TGCallService extends Service implements
     if (this.isBtHeadsetConnected != isConnected) {
       this.isBtHeadsetConnected = isConnected;
       AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-      if (isConnected) {
-        Log.d(Log.TAG_VOIP, "AudioManager.startBluetoothSco()");
-        am.startBluetoothSco();
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+
       } else {
-        Log.d(Log.TAG_VOIP, "AudioManager.stopBluetoothSco()");
-        am.stopBluetoothSco();
+        if (isConnected) {
+          Log.d(Log.TAG_VOIP, "AudioManager.startBluetoothSco()");
+          am.startBluetoothSco();
+        } else {
+          Log.d(Log.TAG_VOIP, "AudioManager.stopBluetoothSco()");
+          am.stopBluetoothSco();
+        }
       }
       notifyAudioSettingsChanged();
     }
@@ -1053,7 +1169,48 @@ public class TGCallService extends Service implements
     Log.d(Log.TAG_VOIP, "notifyAudioSettingsChanged");
 
     AudioManager am = (AudioManager) getSystemService(AUDIO_SERVICE);
-    int mode = isBluetoothHeadsetConnected() && am.isBluetoothScoOn() ? CallSettings.SPEAKER_MODE_BLUETOOTH : am.isSpeakerphoneOn() ? CallSettings.SPEAKER_MODE_SPEAKER : CallSettings.SPEAKER_MODE_NONE;
+    int mode;
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      List<android.media.AudioDeviceInfo> audioDevices = am.getAvailableCommunicationDevices();
+      isBtHeadsetConnected = false;
+      for (android.media.AudioDeviceInfo audioDevice : audioDevices) {
+        switch (audioDevice.getType()) {
+          case android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO:
+          case android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP:
+          case android.media.AudioDeviceInfo.TYPE_BLE_HEADSET:
+            isBtHeadsetConnected = true;
+            break;
+        }
+      }
+      android.media.AudioDeviceInfo deviceInfo = am.getCommunicationDevice();
+      mode = CallSettings.SPEAKER_MODE_EARPIECE;
+      if (deviceInfo != null) {
+        switch (deviceInfo.getType()) {
+          case android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER:
+          case android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER:
+          case android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE: {
+            mode = CallSettings.SPEAKER_MODE_SPEAKER;
+            isHeadsetPlugged = false;
+            break;
+          }
+          case android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO:
+          case android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP:
+          case android.media.AudioDeviceInfo.TYPE_BLE_HEADSET: {
+            mode = CallSettings.SPEAKER_MODE_BLUETOOTH;
+            isHeadsetPlugged = true;
+            break;
+          }
+          case android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE: {
+            mode = CallSettings.SPEAKER_MODE_EARPIECE;
+            isHeadsetPlugged = false;
+            break;
+          }
+        }
+      }
+    } else {
+      mode = isBluetoothHeadsetConnected() && am.isBluetoothScoOn() ? CallSettings.SPEAKER_MODE_BLUETOOTH : am.isSpeakerphoneOn() ? CallSettings.SPEAKER_MODE_SPEAKER : CallSettings.SPEAKER_MODE_EARPIECE;
+    }
     if (this.lastAudioMode != mode) {
       CallSettings settings = getCallSettings();
       if (settings != null) {
@@ -1066,26 +1223,27 @@ public class TGCallService extends Service implements
   // Network type
 
   private NetworkInfo lastNetInfo;
+  private @CallNetworkType int lastNetworkType = CallNetworkType.UNKNOWN;
 
-  private void updateNetworkType (boolean force) {
+  private void updateNetworkType (boolean dispatchToTgCalls) {
     ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
     NetworkInfo info = cm.getActiveNetworkInfo();
     lastNetInfo = info;
-    int type = VoIPController.NET_TYPE_UNKNOWN;
+    @CallNetworkType int type = lastNetworkType;
     if (info != null) {
       switch (info.getType()) {
         case ConnectivityManager.TYPE_MOBILE:
           switch (info.getSubtype()) {
             case TelephonyManager.NETWORK_TYPE_GPRS:
-              type = VoIPController.NET_TYPE_GPRS;
+              type = CallNetworkType.MOBILE_GPRS;
               break;
             case TelephonyManager.NETWORK_TYPE_EDGE:
             case TelephonyManager.NETWORK_TYPE_1xRTT:
-              type = VoIPController.NET_TYPE_EDGE;
+              type = CallNetworkType.MOBILE_EDGE;
               break;
             case TelephonyManager.NETWORK_TYPE_UMTS:
             case TelephonyManager.NETWORK_TYPE_EVDO_0:
-              type = VoIPController.NET_TYPE_3G;
+              type = CallNetworkType.MOBILE_3G;
               break;
             case TelephonyManager.NETWORK_TYPE_HSDPA:
             case TelephonyManager.NETWORK_TYPE_HSPA:
@@ -1093,39 +1251,43 @@ public class TGCallService extends Service implements
             case TelephonyManager.NETWORK_TYPE_HSUPA:
             case TelephonyManager.NETWORK_TYPE_EVDO_A:
             case TelephonyManager.NETWORK_TYPE_EVDO_B:
-              type = VoIPController.NET_TYPE_HSPA;
+              type = CallNetworkType.MOBILE_HSPA;
               break;
             case TelephonyManager.NETWORK_TYPE_LTE:
-              type = VoIPController.NET_TYPE_LTE;
+              type = CallNetworkType.MOBILE_LTE;
               break;
             default:
-              type = VoIPController.NET_TYPE_OTHER_MOBILE;
+              type = CallNetworkType.OTHER_MOBILE;
               break;
           }
           break;
         case ConnectivityManager.TYPE_WIFI:
-          type = VoIPController.NET_TYPE_WIFI;
+          type = CallNetworkType.WIFI;
           break;
         case ConnectivityManager.TYPE_ETHERNET:
-          type = VoIPController.NET_TYPE_ETHERNET;
+          type = CallNetworkType.ETHERNET;
           break;
       }
     }
-    if (controller != null && (force || controller.getNetworkType() != type)) {
-      controller.setNetworkType(type);
+    this.lastNetworkType = type;
+    if (dispatchToTgCalls && tgcalls != null) {
+      tgcalls.setNetworkType(type);
     }
   }
 
-  private VoIPController.Stats stats = new VoIPController.Stats(), prevStats = new VoIPController.Stats();
+  private NetworkStats stats = new NetworkStats(), prevStats = new NetworkStats();
   private long prevDuration;
 
   private void updateStats () {
-    if (controller == null) {
+    if (tgcalls == null) {
       return;
     }
-    controller.getStats(stats);
+    tgcalls.getNetworkStats(stats);
 
     long newDuration = getCallDuration();
+    if (newDuration == VoIPInstance.DURATION_UNKNOWN) {
+      newDuration = 0;
+    }
 
     long wifiSentDiff = stats.bytesSentWifi - prevStats.bytesSentWifi;
     long wifiReceivedDiff = stats.bytesRecvdWifi - prevStats.bytesRecvdWifi;
@@ -1133,103 +1295,133 @@ public class TGCallService extends Service implements
     long mobileReceivedDiff = stats.bytesRecvdMobile - prevStats.bytesRecvdMobile;
     double durationDiff = (double) Math.max(0, newDuration - prevDuration) / 1000d;
 
-    VoIPController.Stats tmp = stats;
+    NetworkStats tmp = stats;
     stats = prevStats;
     prevStats = tmp;
     prevDuration = newDuration;
 
     if (wifiSentDiff > 0 || wifiReceivedDiff > 0 || durationDiff > 0) {
-      tdlib.client().send(new TdApi.AddNetworkStatistics(new TdApi.NetworkStatisticsEntryCall(new TdApi.NetworkTypeWiFi(), wifiSentDiff, wifiReceivedDiff, durationDiff)), tdlib.okHandler());
+      tdlib.send(new TdApi.AddNetworkStatistics(new TdApi.NetworkStatisticsEntryCall(new TdApi.NetworkTypeWiFi(), wifiSentDiff, wifiReceivedDiff, durationDiff)), tdlib.typedOkHandler());
     }
 
     if (mobileSentDiff > 0 || mobileReceivedDiff > 0 || durationDiff > 0) {
       TdApi.NetworkType type = lastNetInfo != null && lastNetInfo.isRoaming() ? new TdApi.NetworkTypeMobileRoaming() : new TdApi.NetworkTypeMobile();
-      tdlib.client().send(new TdApi.AddNetworkStatistics(new TdApi.NetworkStatisticsEntryCall(type, mobileSentDiff, mobileReceivedDiff, durationDiff)), tdlib.okHandler());
+      tdlib.send(new TdApi.AddNetworkStatistics(new TdApi.NetworkStatisticsEntryCall(type, mobileSentDiff, mobileReceivedDiff, durationDiff)), tdlib.typedOkHandler());
     }
   }
 
   // VoIP
 
-  private boolean isInitiated;
-  private String lastDebugLog;
+  private CharSequence lastDebugLog;
+
+  private void releaseTgCalls (@Nullable Tdlib tdlib, @Nullable TdApi.Call call) {
+    if (tgcalls != null) {
+      if (call == null) {
+        call = tgcalls.getCall();
+      }
+      if (tdlib == null) {
+        tdlib = tgcalls.tdlib();
+      }
+      lastDebugLog = tgcalls.collectDebugLog();
+      tgcalls.performDestroy();
+      tgcalls = null;
+    }
+    if (callListener != null && tdlib != null && call != null) {
+      tdlib.listeners().unsubscribeFromCallUpdates(call.id, callListener);
+      callListener = null;
+    }
+    callInitialized = false; // FIXME?
+  }
+
+  private boolean isInitiated () {
+    return tgcalls != null;
+  }
 
   private void checkInitiated () {
-    if (isInitiated || TD.isFinished(call)) {
+    if (isInitiated() || TD.isFinished(call)) {
       if (TD.isFinished(call)) {
-        if (controller != null) {
-          lastDebugLog = controller.getDebugLog();
-          controller.release();
-          controller = null;
-        }
+        releaseTgCalls(tdlib, call);
         cleanupChannels((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE));
-        U.stopForeground(this, true, TdlibNotificationManager.ID_ONGOING_CALL_NOTIFICATION, TdlibNotificationManager.ID_INCOMING_CALL_NOTIFICATION);
+        U.stopForeground(this, true, TdlibNotificationManager.ID_FOREGROUND_ONGOING_CALL_NOTIFICATION, TdlibNotificationManager.ID_FOREGROUND_INCOMING_CALL_NOTIFICATION);
         incomingNotification = ongoingCallNotification = null;
         stopSelf();
       }
       return;
     }
 
-    if (call == null || call.state.getConstructor() != TdApi.CallStateReady.CONSTRUCTOR || isInitiated || controller == null) {
+    if (call == null || call.state.getConstructor() != TdApi.CallStateReady.CONSTRUCTOR || !callInitialized || tdlib == null) {
       return;
     }
 
-    TdApi.CallStateReady state = (TdApi.CallStateReady) call.state;
-
-    controller.setEncryptionKey(state.encryptionKey, call.isOutgoing);
-    try {
-      controller.setRemoteEndpoints(state.servers, state.protocol.udpP2p && state.allowP2p, Settings.instance().forceTcpInCalls(), state.protocol.maxLayer);
-    } catch (IllegalArgumentException e) {
-      hangUp();
-      return;
-    }
+    updateOutputGainControlState();
+    updateNetworkType(false);
+    Socks5Proxy callProxy = null;
     int proxyId = Settings.instance().getEffectiveCallsProxyId();
     if (proxyId != Settings.PROXY_ID_NONE) {
       Settings.Proxy proxy = Settings.instance().getProxyConfig(proxyId);
       if (proxy != null && proxy.proxy != null && proxy.canUseForCalls()) {
-        if (proxy.proxy.type.getConstructor() == TdApi.ProxyTypeSocks5.CONSTRUCTOR) {
-          TdApi.ProxyTypeSocks5 socks5 = (TdApi.ProxyTypeSocks5) proxy.proxy.type;
-          controller.setProxy(proxy.proxy.server, proxy.proxy.port, socks5.username, socks5.password);
-        } else {
-          Log.e("Unsupported proxy type for calls: %s", proxy.proxy.type);
-        }
+        callProxy = new Socks5Proxy(proxy.proxy);
       }
     }
-    controller.start();
-    updateNetworkType(false);
-    controller.connect();
+    boolean isMicDisabled = postponedCallSettings != null && postponedCallSettings.isMicMuted();
+    boolean forceTcp = Settings.instance().forceTcpInCalls();
 
-    isInitiated = true;
-  }
+    Tdlib tdlib = this.tdlib;
+    TdApi.Call call = this.call;
+    TdApi.CallStateReady state = (TdApi.CallStateReady) call.state;
 
-  @Override
-  public void onConnectionStateChanged (int newState) {
-    try {
-      if (tdlib == null || call == null) {
-        return;
-      }
-      switch (newState) {
-        case VoIPController.STATE_ESTABLISHED: {
+    ConnectionStateListener stateListener = new ConnectionStateListener() {
+      @Override
+      public void onConnectionStateChanged (VoIPInstance context, @CallState int newState) {
+        if (newState == CallState.ESTABLISHED) {
           tdlib.dispatchCallStateChanged(call.id, newState);
-          break;
-        }
-        case VoIPController.STATE_FAILED: {
-          tdlib.context().calls().hangUp(tdlib, call.id, true, getConnectionId());
-          break;
+        } else if (newState == CallState.FAILED) {
+          long connectionId = context.getConnectionId();
+          tdlib.context().calls().hangUp(tdlib, call.id, true, connectionId);
         }
       }
-    } catch (Throwable t) {
-      Log.e(Log.TAG_VOIP, "Error", t);
-    }
-  }
 
-  @Override
-  public void onSignalBarCountChanged (int newCount) {
-    try {
-      if (tdlib != null && call != null) {
+      @Override
+      public void onSignalBarCountChanged (int newCount) {
         tdlib.dispatchCallBarsCount(call.id, newCount);
       }
+
+      @Override
+      public void onSignallingDataEmitted (byte[] data) {
+        tdlib.client().send(new TdApi.SendCallSignalingData(call.id, data), tdlib.silentHandler());
+      }
+    };
+
+    VoIPInstance tgcallsTemp;
+    try {
+      tgcallsTemp = VoIP.instantiateAndConnect(
+        tdlib,
+        call,
+        state,
+        stateListener,
+        forceTcp,
+        callProxy,
+        lastNetworkType,
+        audioGainControlEnabled,
+        echoCancellationStrength,
+        isMicDisabled
+      );
     } catch (Throwable t) {
-      Log.e(Log.TAG_VOIP, "Error", t);
+      tgcallsTemp = null;
+    }
+    final VoIPInstance tgcalls = tgcallsTemp;
+
+    if (tgcalls != null) {
+      this.callListener = new PrivateCallListener() {
+        @Override
+        public void onNewCallSignalingDataArrived (int callId, byte[] data) {
+          tgcalls.handleIncomingSignalingData(data);
+        }
+      };
+      tdlib.listeners().subscribeToCallUpdates(call.id, callListener);
+      this.tgcalls = tgcalls;
+    } else {
+      hangUp();
     }
   }
 
@@ -1252,12 +1444,21 @@ public class TGCallService extends Service implements
     }
   }
 
-  public static String getLog () {
-    TGCallService service = currentInstance();
-    if (service != null && service.controller != null) {
-      return service.controller.getDebugString();
-    } else {
-      return "instance not found";
+  @NonNull
+  public CharSequence getLibraryNameAndVersion () {
+    return tgcalls != null ?
+      tgcalls.getLibraryName() + " " + tgcalls.getLibraryVersion() :
+      "unknown";
+  }
+
+  @NonNull
+  public CharSequence getDebugString () {
+    if (tgcalls != null) {
+      CharSequence log = tgcalls.collectDebugLog();
+      if (log != null) {
+        return log;
+      }
     }
+    return "";
   }
 }

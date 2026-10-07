@@ -17,7 +17,6 @@ package org.thunderdog.challegram.navigation;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -42,14 +41,14 @@ import androidx.annotation.DrawableRes;
 import androidx.annotation.IdRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.base.SwitchDrawable;
-import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.telegram.TGLegacyManager;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
-import org.thunderdog.challegram.theme.ThemeColorId;
 import org.thunderdog.challegram.theme.ThemeDeprecated;
 import org.thunderdog.challegram.theme.ThemeListenerList;
 import org.thunderdog.challegram.tool.Fonts;
@@ -63,6 +62,7 @@ import org.thunderdog.challegram.v.HeaderEditText;
 import org.thunderdog.challegram.widget.ClearButton;
 import org.thunderdog.challegram.widget.EmojiTextView;
 import org.thunderdog.challegram.widget.PopupLayout;
+import org.thunderdog.challegram.widget.RootFrameLayout;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -77,7 +77,7 @@ import me.vkryl.core.lambda.RunnableData;
 import me.vkryl.core.util.ColorChanger;
 
 @SuppressWarnings("unused")
-public class HeaderView extends FrameLayoutFix implements View.OnClickListener, View.OnLongClickListener, Destroyable, Lang.Listener, Screen.StatusBarHeightChangeListener, TGLegacyManager.EmojiLoadListener {
+public class HeaderView extends FrameLayoutFix implements View.OnClickListener, View.OnLongClickListener, Destroyable, Lang.Listener, RootFrameLayout.InsetsChangeListener, TGLegacyManager.EmojiLoadListener {
   private static boolean BACK_BUTTON_ON_TOP = true;
 
   private static final float TRANSLATION_FACTOR = .14f;
@@ -133,7 +133,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       setOutlineProvider(new android.view.ViewOutlineProvider() {
-        @TargetApi (Build.VERSION_CODES.LOLLIPOP)
+        @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
         @Override
         public void getOutline (View view, android.graphics.Outline outline) {
           Rect bounds = filling.getBounds();
@@ -172,7 +172,6 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     this.filling = new HeaderFilling(this, null);
     if (needOffsets) {
       filling.setNeedOffsets();
-      setHeaderOffset(getTopOffset());
       setClipToPadding(false);
     } else {
       setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, getSize(false) + filling.getExtraHeight(), Gravity.TOP));
@@ -183,14 +182,34 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     TGLegacyManager.instance().addEmojiListener(this);
     Lang.addLanguageListener(this);
     controller.addDestroyListener(this);
+  }
+
+  private RootFrameLayout rootView;
+
+  @Override
+  protected void onAttachedToWindow () {
+    super.onAttachedToWindow();
     if (needOffsets) {
-      Screen.addStatusBarHeightListener(this);
+      rootView = Views.findAncestor(this, RootFrameLayout.class, false);
+      if (rootView != null) {
+        rootView.addInsetsChangeListener(this);
+        setHeaderOffset(rootView.getTopInset());
+      }
     }
   }
 
   @Override
-  public void onStatusBarHeightChanged (int newHeight) {
-    setHeaderOffset(getTopOffset());
+  protected void onDetachedFromWindow () {
+    super.onDetachedFromWindow();
+    if (rootView != null) {
+      rootView.removeInsetsChangeListener(this);
+      rootView = null;
+    }
+  }
+
+  @Override
+  public void onInsetsChanged (RootFrameLayout viewGroup, Rect effectiveInsets, Rect effectiveInsetsWithoutIme, Rect systemInsets, Rect systemInsetsWithoutIme, boolean isUpdate) {
+    setHeaderOffset(effectiveInsets.top);
   }
 
   public void initWithController (NavigationController controller) {
@@ -200,16 +219,30 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     this.filling = new HeaderFilling(this, controller);
     this.filling.setNeedOffsets();
     this.filling.layout((int) height, getHeightFactor());
-    setHeaderOffset(getTopOffset());
+    // setHeaderOffset(getTopOffset());
     ViewUtils.setBackground(this, filling);
-    Screen.addStatusBarHeightListener(this);
     TGLegacyManager.instance().addEmojiListener(this);
   }
 
   private int currentHeaderOffset = -1;
 
-  private int getCurrentHeaderOffset () {
+  public int getCurrentHeaderOffset () {
     return currentHeaderOffset != -1 ? currentHeaderOffset : 0;
+  }
+
+  public int getSize () {
+    if (currentHeaderOffset == -1) {
+      return HeaderView.getSize(needOffsets);
+    } else {
+      return HeaderView.getSize(false) + currentHeaderOffset;
+    }
+  }
+
+  public int getEffectiveTopOffset () {
+    if (needOffsets) {
+      return currentHeaderOffset != -1 ? currentHeaderOffset : getTopOffset();
+    }
+    return 0;
   }
 
   private void setHeaderOffset (int headerOffset) {
@@ -235,7 +268,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
       if (isOwningStack) {
         setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, getSize(true) + filling.getExtraHeight(), Gravity.TOP));
       } else {
-        setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, Size.getMaximumHeaderSize() + getTopOffset() + filling.getExtraHeight() + Size.getHeaderPortraitSize(), Gravity.TOP));
+        setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, Size.getMaximumHeaderSize() + getEffectiveTopOffset() + filling.getExtraHeight() + Size.getHeaderPortraitSize(), Gravity.TOP));
       }
       // requestLayout();
     }
@@ -247,8 +280,13 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
 
   // Theme stuff
 
+  @SuppressWarnings("deprecation")
   private void invalidateHeader () {
-    invalidate(0, 0, getMeasuredWidth(), filling.getBottom() + filling.getExtraHeight());
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+      invalidate();
+    } else {
+      invalidate(0, 0, getMeasuredWidth(), filling.getBottom() + filling.getExtraHeight());
+    }
   }
 
   public void resetColors (ViewController<?> c, ViewController<?> preview) {
@@ -648,11 +686,11 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     }
   }
 
-  public HeaderButton genButton (@IdRes int id, @DrawableRes int drawableRes, @ThemeColorId int themeColorId, @Nullable ViewController<?> themeProvider, int width, OnClickListener listener) {
+  public HeaderButton genButton (@IdRes int id, @DrawableRes int drawableRes, @ColorId int themeColorId, @Nullable ViewController<?> themeProvider, int width, OnClickListener listener) {
     return genButton(id, drawableRes, themeColorId, themeProvider, width, ThemeDeprecated.headerSelector(), listener);
   }
 
-  public HeaderButton genButton (@IdRes int id, @DrawableRes int image, @ThemeColorId int themeColorId, @Nullable ViewController<?> themeProvider, int width, int resource, OnClickListener listener) {
+  public HeaderButton genButton (@IdRes int id, @DrawableRes int image, @ColorId int themeColorId, @Nullable ViewController<?> themeProvider, int width, int resource, OnClickListener listener) {
     HeaderButton btn = new HeaderButton(getContext());
     btn.setButtonBackground(resource);
     btn.setId(id);
@@ -725,43 +763,43 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     return addDoneButton(menu, themeProvider, themeProvider.getHeaderIconColorId());
   }
 
-  public HeaderButton addDoneButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ThemeColorId int colorId) {
+  public HeaderButton addDoneButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ColorId int colorId) {
     HeaderButton button;
     menu.addView(button = genButton(R.id.menu_btn_done, R.drawable.baseline_check_24, colorId, themeProvider, Screen.dp(56f), this), Lang.rtl() ? 0 : -1);
     return button;
   }
 
-  public HeaderButton addReplyButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ThemeColorId int colorId) {
+  public HeaderButton addReplyButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ColorId int colorId) {
     HeaderButton button;
     menu.addView(button = genButton(R.id.menu_btn_reply, R.drawable.baseline_reply_24, colorId, themeProvider, Screen.dp(52f), ThemeDeprecated.headerSelector(), this).setThemeColorId(colorId), Lang.rtl() ? 0 : -1);
     return button;
   }
 
-  public HeaderButton addEditButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ThemeColorId int colorId) {
+  public HeaderButton addEditButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ColorId int colorId) {
     HeaderButton button;
     menu.addView(button = genButton(R.id.menu_btn_edit, R.drawable.baseline_edit_24, colorId, themeProvider, Screen.dp(52f), ThemeDeprecated.headerSelector(), this), Lang.rtl() ? 0 : -1);
     return button;
   }
 
-  public HeaderButton addCopyButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ThemeColorId int colorId) {
+  public HeaderButton addCopyButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ColorId int colorId) {
     HeaderButton button;
     menu.addView(button = genButton(R.id.menu_btn_copy, R.drawable.baseline_content_copy_24, colorId, themeProvider, Screen.dp(50f), ThemeDeprecated.headerSelector(), this), Lang.rtl() ? 0 : -1);
     return button;
   }
 
-  public HeaderButton addViewButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ThemeColorId int colorId) {
+  public HeaderButton addViewButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ColorId int colorId) {
     HeaderButton button;
     menu.addView(button = genButton(R.id.menu_btn_view, R.drawable.baseline_visibility_24, colorId, themeProvider, Screen.dp(52f), ThemeDeprecated.headerLightSelector(), this), Lang.rtl() ? 0 : -1);
     return button;
   }
 
-  public HeaderButton addRetryButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ThemeColorId int colorId) {
+  public HeaderButton addRetryButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ColorId int colorId) {
     HeaderButton button;
     menu.addView(button = genButton(R.id.menu_btn_retry, R.drawable.baseline_repeat_24, colorId, themeProvider, Screen.dp(52f), ThemeDeprecated.headerSelector(), this), Lang.rtl() ? 0 : -1);
     return button;
   }
 
-  public HeaderButton addDeleteButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ThemeColorId int colorId) {
+  public HeaderButton addDeleteButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ColorId int colorId) {
     HeaderButton button;
     menu.addView(button = genButton(R.id.menu_btn_delete, R.drawable.baseline_delete_24, colorId, themeProvider, Screen.dp(52f), ThemeDeprecated.headerSelector(), this), Lang.rtl() ? 0 : -1);
     return button;
@@ -771,7 +809,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     return addForwardButton(menu, themeProvider, themeProvider.getHeaderIconColorId());
   }
 
-  public HeaderButton addForwardButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ThemeColorId int colorId) {
+  public HeaderButton addForwardButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ColorId int colorId) {
     HeaderButton button;
     menu.addView(button = genButton(R.id.menu_btn_forward, R.drawable.baseline_forward_24, colorId, themeProvider, Screen.dp(52f), ThemeDeprecated.headerSelector(), this), Lang.rtl() ? 0 : -1);
     return button;
@@ -781,19 +819,21 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     return addMoreButton(menu, themeProvider, themeProvider.getHeaderIconColorId());
   }
 
-  public HeaderButton addMoreButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ThemeColorId int colorId) {
-    HeaderButton button;
-    menu.addView(button = genButton(R.id.menu_btn_more, R.drawable.baseline_more_vert_24, colorId, themeProvider, Screen.dp(49f), this), Lang.rtl() ? 0 : -1);
-    return button;
+  public HeaderButton addMoreButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ColorId int colorId) {
+    return addButton(menu, R.id.menu_btn_more, R.drawable.baseline_more_vert_24, 49f, themeProvider, colorId);
   }
 
   public HeaderButton addSearchButton (LinearLayout menu, @NonNull ViewController<?> themeProvider) {
     return addSearchButton(menu, themeProvider, themeProvider.getHeaderIconColorId());
   }
 
-  public HeaderButton addSearchButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ThemeColorId int colorId) {
+  public HeaderButton addSearchButton (LinearLayout menu, @Nullable ViewController<?> themeProvider, @ColorId int colorId) {
+    return addButton(menu, R.id.menu_btn_search, R.drawable.baseline_search_24, 49f, themeProvider, colorId);
+  }
+
+  public HeaderButton addButton (LinearLayout menu, @IdRes int buttonId, @DrawableRes int iconRes, float widthDp, @Nullable ViewController<?> themeProvider, @ColorId int colorId) {
     HeaderButton button;
-    menu.addView(button = genButton(R.id.menu_btn_search, R.drawable.baseline_search_24, colorId, themeProvider, Screen.dp(49f), this), Lang.rtl() ? 0 : -1);
+    menu.addView(button = genButton(buttonId, iconRes, colorId, themeProvider, Screen.dp(widthDp), this), Lang.rtl() ? 0 : -1);
     return button;
   }
 
@@ -818,13 +858,13 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
 
   // Buttons core
 
-  public HeaderButton addButton (LinearLayout menu, @IdRes int id, @DrawableRes int drawableRes, @ThemeColorId int themeColorId, @Nullable ViewController<?> themeProvider, int width) {
+  public HeaderButton addButton (LinearLayout menu, @IdRes int id, @DrawableRes int drawableRes, @ColorId int themeColorId, @Nullable ViewController<?> themeProvider, int width) {
     HeaderButton button;
     menu.addView(button = genButton(id, drawableRes, themeColorId, themeProvider, width, this), Lang.rtl() ? 0 : -1);
     return button;
   }
 
-  public HeaderButton addButton (LinearLayout menu, @IdRes int id, @ThemeColorId int themeColorId, @Nullable ViewController<?> themeProvider, @DrawableRes int drawableRes, int width, int resource) {
+  public HeaderButton addButton (LinearLayout menu, @IdRes int id, @ColorId int themeColorId, @Nullable ViewController<?> themeProvider, @DrawableRes int drawableRes, int width, int resource) {
     HeaderButton button;
     menu.addView(button = genButton(id, drawableRes, themeColorId, themeProvider, width, resource, this), Lang.rtl() ? 0 : -1);
     return button;
@@ -838,7 +878,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     return addClearButton(menu, c.getHeaderIconColorId(), c.getBackButtonResource());
   }
 
-  public ClearButton addClearButton (LinearLayout menu, @ThemeColorId int colorId, int background) {
+  public ClearButton addClearButton (LinearLayout menu, @ColorId int colorId, int background) {
     ClearButton button;
     button = new ClearButton(getContext());
     button.setId(R.id.menu_btn_clear);
@@ -950,7 +990,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
 
   // Counter
 
-  public static CounterHeaderView genCounterHeader (Context context, @ThemeColorId int colorId) {
+  public static CounterHeaderView genCounterHeader (Context context, @ColorId int colorId) {
     FrameLayoutFix.LayoutParams params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, Screen.dp(53f), Gravity.TOP | (Lang.rtl() ? Gravity.RIGHT : Gravity.LEFT));
     if (Lang.rtl()) {
       params.rightMargin = Screen.dp(68f);
@@ -975,15 +1015,15 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
       params.leftMargin = Screen.dp(68f);
     }
     HeaderEditText view = HeaderEditText.createStyled(parent, isLight);
-    view.setTextColor(Theme.getColor(R.id.theme_color_headerText));
+    view.setTextColor(Theme.getColor(ColorId.headerText));
     if (themeProvider != null)
-      themeProvider.addThemeHighlightColorListener(view, R.id.theme_color_textSelectionHighlight);
+      themeProvider.addThemeHighlightColorListener(view, ColorId.textSelectionHighlight);
     view.checkRtl();
     if (themeProvider != null)
-      themeProvider.addThemeTextColorListener(view, R.id.theme_color_headerText);
+      themeProvider.addThemeTextColorListener(view, ColorId.headerText);
     view.setHintTextColor(ColorUtils.alphaColor(Theme.HEADER_TEXT_DECENT_ALPHA, Theme.headerTextColor()));
     if (themeProvider != null)
-      themeProvider.addThemeHintTextColorListener(view, R.id.theme_color_headerText).setAlpha(Theme.HEADER_TEXT_DECENT_ALPHA);
+      themeProvider.addThemeHintTextColorListener(view, ColorId.headerText).setAlpha(Theme.HEADER_TEXT_DECENT_ALPHA);
     view.setLayoutParams(params);
     return view;
   }
@@ -1001,11 +1041,11 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     }
     HeaderEditText view = HeaderEditText.createGreyStyled(parent);
     view.setTextColor(Theme.textAccentColor());
-    themeProvider.addThemeHighlightColorListener(view, R.id.theme_color_textSelectionHighlight);
+    themeProvider.addThemeHighlightColorListener(view, ColorId.textSelectionHighlight);
     view.checkRtl();
-    themeProvider.addThemeTextColorListener(view, R.id.theme_color_text);
+    themeProvider.addThemeTextColorListener(view, ColorId.text);
     view.setHintTextColor(Theme.textDecentColor());
-    themeProvider.addThemeHintTextColorListener(view, R.id.theme_color_textLight);
+    themeProvider.addThemeHintTextColorListener(view, ColorId.textLight);
     view.setLayoutParams(params);
     return view;
   }
@@ -1114,7 +1154,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
         return false;
       }
       if (e.getAction() == MotionEvent.ACTION_DOWN && e.getY() < filling.getBottom()) {
-        ViewController<?> c = UI.getCurrentStackItem();
+        ViewController<?> c = UI.getCurrentStackItem(getContext());
         if (c != null) {
           c.dismissIntercept();
         }
@@ -1309,7 +1349,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
       if (forward) {
         addView(menuPreview, -1);
       } else {
-        addView(menuPreview, 3);
+        addView(menuPreview, Math.min(3, getChildCount()));
       }
     } else {
       menuPreviewUsed = false;
@@ -1385,6 +1425,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
   private boolean useShadowSwitch, shadowSwitch;
   private boolean usePlayerSwitch, playerSwitch;
   private float translationFactor;
+  private boolean forceRtlAnimation;
 
   public float getTranslation () {
     return translationFactor;
@@ -1424,7 +1465,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
 
     switch (translationMode) {
       case MODE_HORIZONTAL: {
-        if (Lang.rtl()) {
+        if (forceRtlAnimation || Lang.rtl()) {
           if (translateForward) {
             title.setTranslationX(currentX * raptor);
             preview.setTranslationX(-currentX * (1f - raptor));
@@ -1449,14 +1490,14 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
       }
       case MODE_VERTICAL: {
         if (translateForward) {
-          title.setTranslationY(-(Size.getHeaderPortraitSize() + HeaderView.getTopOffset()) * raptor);
+          title.setTranslationY(-(Size.getHeaderPortraitSize() + getEffectiveTopOffset()) * raptor);
           preview.setTranslationY(currentY * (1f - raptor));
           if (previewItem != null) {
             previewItem.applyCustomHeaderAnimations(raptor);
           }
         } else {
           title.setTranslationY(currentY * raptor);
-          preview.setTranslationY(-((Size.getHeaderPortraitSize() + HeaderView.getTopOffset()) * (1f - raptor)));
+          preview.setTranslationY(-((Size.getHeaderPortraitSize() + getEffectiveTopOffset()) * (1f - raptor)));
           if (baseItem != null) {
             baseItem.applyCustomHeaderAnimations(1f - raptor);
           }
@@ -1480,14 +1521,14 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
         menu.setAlpha(1f - raptor);
         if (translationMode == MODE_VERTICAL) {
           //noinspection ResourceType
-          menu.setTranslationY(translateForward ? -(Size.getHeaderPortraitSize() + HeaderView.getTopOffset()) * raptor : currentY * raptor);
+          menu.setTranslationY(translateForward ? -(Size.getHeaderPortraitSize() + getEffectiveTopOffset()) * raptor : currentY * raptor);
         }
       }
       if (useMenuPreview) {
         menuPreview.setAlpha(raptor);
         if (translationMode == MODE_VERTICAL) {
           //noinspection ResourceType
-          menuPreview.setTranslationY(translateForward ? currentY * (1f - raptor) : -((Size.getHeaderPortraitSize() + HeaderView.getTopOffset()) * (1f - raptor)));
+          menuPreview.setTranslationY(translateForward ? currentY * (1f - raptor) : -((Size.getHeaderPortraitSize() + getEffectiveTopOffset()) * (1f - raptor)));
         }
       }
     }
@@ -1496,13 +1537,13 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
       if (backFade) {
         backButton.setAlpha(raptor);
         if (translationMode == MODE_VERTICAL) {
-          backButton.setTranslationY(-(Size.getHeaderPortraitSize() + HeaderView.getTopOffset()) * (1f - raptor));
+          backButton.setTranslationY(-(Size.getHeaderPortraitSize() + getEffectiveTopOffset()) * (1f - raptor));
         }
         backButton.setTranslationX(preview.getTranslationX());
       } else {
         backButton.setAlpha(1f - raptor);
         if (translationMode == MODE_VERTICAL) {
-          backButton.setTranslationY((Size.getHeaderPortraitSize() + HeaderView.getTopOffset()) * raptor);
+          backButton.setTranslationY((Size.getHeaderPortraitSize() + getEffectiveTopOffset()) * raptor);
         }
         backButton.setTranslationX(title.getTranslationX());
       }
@@ -1587,7 +1628,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       if (useBarSwitch) {
-        window.setStatusBarColor(barChanger.getColor(raptor));
+        setStatusBarColor(window, barChanger.getColor(raptor));
       }
     }
 
@@ -1603,6 +1644,12 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
         preview.invalidate();
       }
     }
+  }
+
+  @SuppressWarnings("deprecation")
+  @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
+  private static void setStatusBarColor (Window window, int color) {
+    window.setStatusBarColor(color);
   }
 
   void applyPreview (ViewController<?> current) {
@@ -1690,7 +1737,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
   private void transform (final ViewController<?> controller, final int mode, int arg, final boolean open, boolean animated, final Runnable after, boolean needUpdateKeyboard) {
     this.transformMode = mode;
 
-    openPreview(controller, null, open, MODE_FADE, translationFactor);
+    openPreview(controller, null, open, MODE_FADE, translationFactor, false);
 
     if (open) {
       switch (mode) {
@@ -2189,16 +2236,17 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
 
   private boolean previewOpened = false;
 
-  void openPreview (ViewController<?> left, ViewController<?> right, boolean forward, int direction, float factor) {
+  void openPreview (ViewController<?> left, ViewController<?> right, boolean forward, int direction, float factor, boolean forceRtl) {
     this.previewOpened = true;
     this.currentX = (float) getMeasuredWidth() * TRANSLATION_FACTOR;
     this.translationMode = direction;
     this.translationFactor = factor;
+    this.forceRtlAnimation = direction == MODE_HORIZONTAL && forceRtl;
 
     if (right != null && !forward && right.usePopupMode()) {
-      this.currentY = left.getHeaderHeight() + HeaderView.getTopOffset();
+      this.currentY = left.getHeaderHeight() + getEffectiveTopOffset();
     } else {
-      this.currentY = getCurrentHeight() + HeaderView.getTopOffset();
+      this.currentY = getCurrentHeight() + getEffectiveTopOffset();
     }
 
     genPreview(left, right, forward); // Starting the preparation
@@ -2346,7 +2394,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
           backButton.setTranslationY(0);
         } else {
           if (translationMode == MODE_VERTICAL) {
-            backButton.setTranslationY(-(Size.getHeaderPortraitSize() + HeaderView.getTopOffset()));
+            backButton.setTranslationY(-(Size.getHeaderPortraitSize() + getEffectiveTopOffset()));
           } else {
             backButton.setTranslationY(0);
           }
@@ -2768,6 +2816,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
     return ColorUtils.compositeColor(color, STATUS_OVERLAY_COLOR);
   }
 
+  @SuppressWarnings("deprecation")
   public static int computeStatusBarColor (ViewController<?> c, int alpha) {
     return ColorUtils.compositeColor(c.getStatusBarColor(), Color.argb((int) ((float) alpha / 255f * (float) Color.alpha(STATUS_OVERLAY_COLOR)), Color.red(STATUS_OVERLAY_COLOR), Color.green(STATUS_OVERLAY_COLOR), Color.blue(STATUS_OVERLAY_COLOR)));
   }
@@ -2819,7 +2868,7 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
   }
 
   public static int getTopOffset () {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && Config.USE_FULLSCREEN_NAVIGATION) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       return Screen.getStatusBarHeight();
     }
     return 0;
@@ -2831,7 +2880,10 @@ public class HeaderView extends FrameLayoutFix implements View.OnClickListener, 
   public void performDestroy () {
     TGLegacyManager.instance().removeEmojiListener(this);
     Lang.removeLanguageListener(this);
-    Screen.removeStatusBarHeightListener(this);
+    if (rootView != null) {
+      rootView.removeInsetsChangeListener(this);
+      rootView = null;
+    }
     if (filling != null) {
       filling.performDestroy();
     }

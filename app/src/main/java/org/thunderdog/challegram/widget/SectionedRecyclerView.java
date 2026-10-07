@@ -23,12 +23,13 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 
+import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.core.Lang;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Fonts;
 import org.thunderdog.challegram.tool.Paints;
@@ -196,13 +197,17 @@ public class SectionedRecyclerView extends RecyclerView implements Runnable {
   private final int scrollbarPadding = Screen.dp(9f);
   private final int scrollbarMinHeight = Screen.dp(32f);
 
+  private int getScrollBarViewportHeight () {
+    return getMeasuredHeight() - getPaddingBottom();
+  }
+
   private void layoutScrollbar () {
     if (adapter == null || adapter.getSectionCount() == 0) {
       scrollbarEnabled = false;
       return;
     }
 
-    final int totalHeight = getMeasuredHeight();
+    final int totalHeight = getScrollBarViewportHeight();
     if (totalHeight <= 0) {
       scrollbarEnabled = false;
       return;
@@ -267,7 +272,7 @@ public class SectionedRecyclerView extends RecyclerView implements Runnable {
       }
     }
 
-    return (float) scrollY / (float) (totalScrollY - getMeasuredHeight());
+    return (float) scrollY / (float) (totalScrollY - getScrollBarViewportHeight());
   }
 
   private final RectF bubbleRect = new RectF();
@@ -340,7 +345,7 @@ public class SectionedRecyclerView extends RecyclerView implements Runnable {
   private void moveScrollbar (float y) {
     float dy = y - lastScrollY;
     lastScrollY = y;
-    float scale = (float) totalScrollY / (float) getMeasuredHeight();
+    float scale = (float) totalScrollY / (float) getScrollBarViewportHeight();
     int by = (int) (dy * scale);
     if (by != 0) {
       scrollBy(0, by);
@@ -407,9 +412,9 @@ public class SectionedRecyclerView extends RecyclerView implements Runnable {
 
     // Scrollbar drawing
     if (scrollbarEnabled && scrollbarSpace > 0) {
-      int inactiveColor = Theme.getColor(R.id.theme_color_sectionedScrollBar);
-      int activeColor = ColorUtils.compositeColor(Theme.headerColor(), Theme.getColor(R.id.theme_color_sectionedScrollBarActive));
-      int activeTextColor = ColorUtils.compositeColor(Theme.headerTextColor(), Theme.getColor(R.id.theme_color_sectionedScrollBarActiveContent));
+      int inactiveColor = Theme.getColor(ColorId.sectionedScrollBar);
+      int activeColor = ColorUtils.compositeColor(Theme.headerColor(), Theme.getColor(ColorId.sectionedScrollBarActive));
+      int activeTextColor = ColorUtils.compositeColor(Theme.headerTextColor(), Theme.getColor(ColorId.sectionedScrollBarActiveContent));
 
       c.drawRoundRect(scrollbarRect, scrollbarRadius, scrollbarRadius, Paints.fillingPaint(ColorUtils.fromToArgb(inactiveColor, activeColor, bubbleFactor)));
 
@@ -617,7 +622,7 @@ public class SectionedRecyclerView extends RecyclerView implements Runnable {
       return getItemHeight();
     }
     public abstract View createView (int viewType);
-    public abstract void updateView (SectionViewHolder holder, int position);
+    public abstract void updateView (SectionViewHolder holder, int position, boolean isUpdate);
     public final int getSeparatorHeight () {
       return Screen.dp(22f);
     }
@@ -639,9 +644,8 @@ public class SectionedRecyclerView extends RecyclerView implements Runnable {
       }
     }
 
-    public String getSectionName (int section) {
-      return null;
-    }
+    @NonNull
+    public abstract String getSectionName (int section);
 
     public boolean isSeparator (int index) {
       return needSeparators && getSectionedPosition(index) == -1;
@@ -664,10 +668,22 @@ public class SectionedRecyclerView extends RecyclerView implements Runnable {
       }
     }
 
+    public void updateViewByPosition (int position) {
+      View view = parent.getLayoutManager().findViewByPosition(position);
+      if (view != null) {
+        SectionViewHolder holder = (SectionViewHolder) parent.getChildViewHolder(view);
+        if (holder != null) {
+          updateView(holder, position, true);
+          return;
+        }
+      }
+      notifyItemChanged(position);
+    }
+
     @Override
-    public void onBindViewHolder (SectionViewHolder holder, int position) {
+    public void onBindViewHolder (@NonNull SectionViewHolder holder, int position) {
       if (!isSeparator(position)) {
-        updateView(holder, position);
+        updateView(holder, position, false);
       }
     }
 

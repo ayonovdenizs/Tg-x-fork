@@ -22,7 +22,7 @@ import android.view.ViewParent;
 
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BaseActivity;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.R;
@@ -49,8 +49,9 @@ import me.vkryl.android.util.ClickHelper;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.collection.IntList;
 import me.vkryl.core.lambda.CancellableRunnable;
-import me.vkryl.td.ChatId;
-import me.vkryl.td.MessageId;
+import me.vkryl.core.lambda.RunnableData;
+import tgx.td.ChatId;
+import tgx.td.MessageId;
 
 public class BaseView extends SparseDrawableView implements ClickHelper.Delegate, View.OnClickListener, TdlibDelegate {
   public interface ActionListProvider {
@@ -319,25 +320,19 @@ public class BaseView extends SparseDrawableView implements ClickHelper.Delegate
           if (chat != null) {
             if (threadMessages != null && threadMessages.length > 0) {
               cancelAsyncPreview();
-              tdlib.client().send(new TdApi.GetMessageThread(chatId, threadMessages[0].id), result -> {
-                switch (result.getConstructor()) {
-                  case TdApi.MessageThreadInfo.CONSTRUCTOR: {
-                    TdApi.MessageThreadInfo threadInfo = (TdApi.MessageThreadInfo) result;
-                    tdlib.ui().post(() -> {
-                      if (pendingTask == null && pendingController == null) {
-                        openChatPreviewAsync(chatList, chat, ThreadInfo.openedFromChat(tdlib, threadInfo, chatId, contextChatId), filter, x, y);
-                      }
-                    });
-                    break;
-                  }
-                  case TdApi.Error.CONSTRUCTOR: {
-                    Log.i("Message thread unavailable %d %d: %s", chatId, threadMessages[0].id, TD.toErrorString(result));
-                    break;
-                  }
+              tdlib.send(new TdApi.GetMessageThread(chatId, threadMessages[0].id), (threadInfo, error) -> {
+                if (error != null) {
+                  Log.i("Message thread unavailable %d %d: %s", chatId, threadMessages[0].id, TD.toErrorString(error));
+                } else {
+                  tdlib.ui().post(() -> {
+                    if (pendingTask == null && pendingController == null) {
+                      openChatPreviewAsync(chatList, chat, ThreadInfo.openedFromChat(tdlib, threadInfo, chatId, contextChatId), null, filter, x, y);
+                    }
+                  });
                 }
               });
             } else {
-              openChatPreviewAsync(chatList, chat, null, filter, x, y);
+              openChatPreviewAsync(chatList, chat, null, null, filter, x, y);
             }
             return false;
           }
@@ -347,6 +342,7 @@ public class BaseView extends SparseDrawableView implements ClickHelper.Delegate
           if (customControllerProvider != null) {
             ViewController<?> controller = customControllerProvider.createForceTouchPreview(this, x, y);
             if (controller != null) {
+              controller.setInForceTouchMode(true);
               if (controller.needAsynchronousAnimation()) {
                 openPreviewAsync(controller, x, y);
               } else {
@@ -439,6 +435,10 @@ public class BaseView extends SparseDrawableView implements ClickHelper.Delegate
     this.allowMaximizePreview = allowMaximize;
   }
 
+  public void setAllowMaximizePreview (boolean allowMaximizePreview) {
+    this.allowMaximizePreview = allowMaximizePreview;
+  }
+
   public final TdApi.ChatList getPreviewChatList () {
     return chatList;
   }
@@ -462,31 +462,32 @@ public class BaseView extends SparseDrawableView implements ClickHelper.Delegate
   private ViewController<?> pendingController;
   private CancellableRunnable pendingTask;
 
-  private void openChatPreviewAsync (TdApi.ChatList chatList, TdApi.Chat chat, @Nullable ThreadInfo messageThread, TdApi.SearchMessagesFilter filter, float x, float y) {
+  private void openChatPreviewAsync (TdApi.ChatList chatList, TdApi.Chat chat, @Nullable ThreadInfo messageThread, @Nullable TdApi.MessageTopic messageTopicId, TdApi.SearchMessagesFilter filter, float x, float y) {
     if (currentOpenPreview != null) {
       return;
     }
     cancelAsyncPreview();
     final MessagesController controller = new MessagesController(getContext(), tdlib);
-    controller.setArguments(createChatPreviewArguments(chatList, chat, messageThread, filter));
+    controller.setInForceTouchMode(true);
+    controller.setArguments(createChatPreviewArguments(chatList, chat, messageThread, messageTopicId, filter));
     openPreviewAsync(controller, x, y);
   }
 
-  public final MessagesController.Arguments createChatPreviewArguments (TdApi.ChatList chatList, TdApi.Chat chat, @Nullable ThreadInfo messageThread, TdApi.SearchMessagesFilter filter) {
+  public final MessagesController.Arguments createChatPreviewArguments (TdApi.ChatList chatList, TdApi.Chat chat, @Nullable ThreadInfo messageThread, @Nullable TdApi.MessageTopic messageTopicId, TdApi.SearchMessagesFilter filter) {
     ViewController<?> controller = context().navigation().getCurrentStackItem();
     if (controller != null) {
-      String query = controller.getLastSearchInput();
+      String query = controller.inSearchMode() ? controller.getLastSearchInput() : null;
       if (!StringUtils.isEmpty(query) && highlightMode != MessagesManager.HIGHLIGHT_MODE_NONE) {
         controller.preventLeavingSearchMode();
-        return new MessagesController.Arguments(chatList, chat, messageThread, highlightMessageId, highlightMode, filter, highlightMessageId, query);
+        return new MessagesController.Arguments(chatList, chat, messageThread, messageTopicId, highlightMessageId, highlightMode, filter, highlightMessageId, query);
       }
     }
     if (filter != null) {
       return new MessagesController.Arguments(chatList, chat, null, null, filter, highlightMessageId, highlightMode);
     } else if (highlightMode != MessagesManager.HIGHLIGHT_MODE_NONE) {
-      return new MessagesController.Arguments(chatList, chat, messageThread, highlightMessageId, highlightMode, filter);
+      return new MessagesController.Arguments(chatList, chat, messageThread, messageTopicId, highlightMessageId, highlightMode, filter);
     } else {
-      return new MessagesController.Arguments(tdlib, chatList, chat, messageThread, filter);
+      return new MessagesController.Arguments(tdlib, chatList, chat, messageThread, messageTopicId, filter);
     }
   }
 
@@ -551,6 +552,12 @@ public class BaseView extends SparseDrawableView implements ClickHelper.Delegate
 
   private ViewController<?> currentOpenPreview;
 
+  private @Nullable RunnableData<MessagesController> maximiedChatModifier;
+
+  public void setMaximizedChatModifier (@Nullable RunnableData<MessagesController> modifier) {
+    this.maximiedChatModifier = modifier;
+  }
+
   private void openPreview (ViewController<?> controller, float x, float y) {
     ViewController<?> ancestor = ViewController.findAncestor(this);
     if ((ancestor != null && tdlib != null && ancestor.tdlib() != null && ancestor.tdlib().id() != tdlib.id())) {
@@ -570,7 +577,9 @@ public class BaseView extends SparseDrawableView implements ClickHelper.Delegate
     // context.setAdditionalOffsetView(UI.getCurrentStackItem(getContext()).getViewForApplyingOffsets());
 
     if (controller instanceof MessagesController && allowMaximizePreview) {
-      context.setMaximizeListener((target, animateToWhenReady, arg) -> MessagesController.maximizeFrom(tdlib, getContext(), target, animateToWhenReady, arg));
+      context.setMaximizeListener((target, animateToWhenReady, arg) ->
+        MessagesController.maximizeFrom(tdlib, getContext(), target, animateToWhenReady, (MessagesController) arg, maximiedChatModifier)
+      );
     }
 
     ArrayList<ActionItem> actions = new ArrayList<>(5);
@@ -587,9 +596,9 @@ public class BaseView extends SparseDrawableView implements ClickHelper.Delegate
           @Override
           public void onForceTouchAction (ForceTouchView.ForceTouchContext context, int actionId, Object arg) {
             if (actionId == R.id.btn_messageUnpin) {
-              ancestor.showOptions(new ViewController.Options.Builder().item(new ViewController.OptionItem(R.id.btn_messageUnpin, Lang.getString(R.string.UnpinMessage), ViewController.OPTION_COLOR_RED, R.drawable.deproko_baseline_pin_undo_24)).cancelItem().build(), (optionItemView, id) -> {
+              ancestor.showOptions(new ViewController.Options.Builder().item(new ViewController.OptionItem(R.id.btn_messageUnpin, Lang.getString(R.string.UnpinMessage), ViewController.OptionColor.RED, R.drawable.deproko_baseline_pin_undo_24)).cancelItem().build(), (optionItemView, id) -> {
                 if (id == R.id.btn_messageUnpin) {
-                  tdlib.client().send(new TdApi.UnpinChatMessage(messageId.getChatId(), messageId.getMessageId()), tdlib.okHandler());
+                  tdlib.send(new TdApi.UnpinChatMessage(messageId.getChatId(), messageId.getMessageId()), tdlib.typedOkHandler());
                 }
                 return true;
               });
@@ -623,10 +632,12 @@ public class BaseView extends SparseDrawableView implements ClickHelper.Delegate
   }
 
   private void closePreview () {
-    if (currentOpenPreview != null) {
-      UI.getContext(getContext()).closeForceTouch();
-      currentOpenPreview = null;
-    }
+    UI.post(() -> {
+      if (currentOpenPreview != null) {
+        UI.getContext(getContext()).closeForceTouch();
+        currentOpenPreview = null;
+      }
+    });
   }
 
   // Utils

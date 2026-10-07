@@ -20,7 +20,7 @@ import android.view.ViewParent;
 
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.navigation.MenuMoreWrap;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibCache;
@@ -35,7 +35,6 @@ import java.util.List;
 
 import me.vkryl.android.animator.BoolAnimator;
 import me.vkryl.core.lambda.Destroyable;
-import me.vkryl.core.lambda.RunnableBool;
 
 public class HapticMenuHelper implements View.OnTouchListener, View.OnLongClickListener {
   public interface Provider {
@@ -311,9 +310,9 @@ public class HapticMenuHelper implements View.OnTouchListener, View.OnLongClickL
       int centerY = out[1] + viewHeight / 2;
 
       int resultCenterX = Math.max(viewWidth / 2, Math.min(parentWidth - viewWidth / 2, targetCenterX));
-      int resultCenterY = targetCenterY - targetHeight / 2 - (anchorMode == MenuMoreWrap.ANCHOR_MODE_CENTER ? Screen.dp(12): viewHeight / 2);
+      int resultCenterY = targetCenterY - targetHeight / 2 - (anchorMode == MenuMoreWrap.ANCHOR_MODE_CENTER ? Screen.dp(12) : viewHeight / 2);
 
-      v.setTranslationX(resultCenterX - centerX + (anchorMode == MenuMoreWrap.ANCHOR_MODE_CENTER ? Screen.dp(8): 0));
+      v.setTranslationX(resultCenterX - centerX + (anchorMode == MenuMoreWrap.ANCHOR_MODE_CENTER ? Screen.dp(8) : 0));
       v.setTranslationY(resultCenterY - centerY);
 
       if (anchorMode == MenuMoreWrap.ANCHOR_MODE_CENTER) {

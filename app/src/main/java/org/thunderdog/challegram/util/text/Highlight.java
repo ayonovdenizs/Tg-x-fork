@@ -15,10 +15,14 @@
 
 package org.thunderdog.challegram.util.text;
 
-import android.util.Pair;
+import android.text.Spannable;
+import android.text.SpannableStringBuilder;
 import android.util.SparseArray;
 
 import androidx.annotation.Nullable;
+
+import org.thunderdog.challegram.theme.ColorId;
+import org.thunderdog.challegram.util.CustomTypefaceSpan;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -75,6 +79,20 @@ public class Highlight {
     this(text, 0, text.length(), highlight, 0, highlight.length());
   }
 
+  private Highlight (List<Part> parts, int offset) {
+    for (Part part : parts) {
+      this.parts.add(new Part(
+        part.start + offset,
+        part.end + offset,
+        part.missingCount
+      ));
+    }
+  }
+
+  public Highlight offset (int offset) {
+    return new Highlight(parts, offset);
+  }
+
   public TextColorSet getColorSet () {
     return customColorSet != null ? customColorSet : TextColorSets.Regular.SEARCH_HIGHLIGHT;
   }
@@ -95,6 +113,17 @@ public class Highlight {
     return -1;
   }
 
+  private static boolean isSeparatorCodePoint (int codePoint) {
+    int codePointType = Character.getType(codePoint);
+    switch (codePointType) {
+      case Character.SPACE_SEPARATOR:
+      case Character.LINE_SEPARATOR:
+      case Character.CONTROL:
+        return true;
+    }
+    return false;
+  }
+
   private static boolean isWeakCodePoint (int codePoint) {
     int codePointType = Character.getType(codePoint);
     if (Text.isSplitterCodePointType(codePoint, codePointType, true)) {
@@ -111,6 +140,7 @@ public class Highlight {
       case Character.SPACE_SEPARATOR:
       case Character.LINE_SEPARATOR:
       case Character.PARAGRAPH_SEPARATOR:
+      case Character.CONTROL:
         return true;
     }
     return false;
@@ -133,15 +163,9 @@ public class Highlight {
       int highlightIndex = 0;
       while (highlightIndex < highlightLength && matchingLength < (end - index)) {
         int highlightCodePoint = highlight.codePointAt(highlightStart + highlightIndex);
-        int highlightCodePointType = Character.getType(highlightCodePoint);
-        boolean highlightCodePointIsSeparator =
-          highlightCodePointType == Character.SPACE_SEPARATOR ||
-          highlightCodePointType == Character.LINE_SEPARATOR;
+        boolean highlightCodePointIsSeparator = isSeparatorCodePoint(highlightCodePoint);
         int contentCodePoint = text.codePointAt(index + matchingLength);
-        int contentCodePointType = Character.getType(contentCodePoint);
-        boolean contentCodePointIsSeparator =
-          contentCodePointType == Character.SPACE_SEPARATOR ||
-          contentCodePointType == Character.LINE_SEPARATOR;
+        boolean contentCodePointIsSeparator = isSeparatorCodePoint(contentCodePoint);
         if (highlightCodePoint == contentCodePoint || (highlightCodePointIsSeparator && contentCodePointIsSeparator) || StringUtils.normalizeCodePoint(highlightCodePoint) == StringUtils.normalizeCodePoint(contentCodePoint)) {
           // easy path: code points are equal or similar
           matchingLength += Character.charCount(contentCodePoint);
@@ -187,6 +211,12 @@ public class Highlight {
 
   public boolean isEmpty () {
     return parts.isEmpty();
+  }
+
+  @Nullable
+  public static Highlight valueOfExactWord (String text, String highlight) {
+    Highlight result = valueOf(text, highlight);
+    return isExactWordMatch(text, result) ? result : null;
   }
 
   @Nullable
@@ -272,6 +302,20 @@ public class Highlight {
     }
     result.setCustomColorSet(customColorSet);
     return result;
+  }
+
+  public static boolean isExactWordMatch (String source, @Nullable Highlight highlight) {
+    if (highlight == null) {
+      return false;
+    }
+
+    for (Part part : highlight.parts) {
+      if (part.isExactMatch() && (part.start == 0 || isWeakCodePoint(source.codePointAt(part.start - 1)))) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   public static boolean isExactMatch (@Nullable Highlight highlight) {
@@ -384,5 +428,20 @@ public class Highlight {
       mostRelevantHighlightKey = KEY_NONE;
       highlights.clear();
     }
+  }
+
+  public static CharSequence toSpannable (String text, Highlight highlight) {
+    if (highlight == null) {
+      return text;
+    }
+    SpannableStringBuilder b = new SpannableStringBuilder(text);
+    for (Highlight.Part part : highlight.parts) {
+      b.setSpan(new CustomTypefaceSpan(null, ColorId.textSearchQueryHighlight), part.start, part.end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+    }
+    return b;
+  }
+
+  public static CharSequence toSpannable (String text, String highlight) {
+    return toSpannable(text, valueOf(text, highlight));
   }
 }

@@ -14,8 +14,8 @@ package org.thunderdog.challegram;
 
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.Client;
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.Client;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.telegram.TdlibAccount;
 import org.thunderdog.challegram.unsorted.Settings;
 
@@ -26,6 +26,8 @@ import java.util.IllegalFormatException;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+
+import tgx.td.Td;
 
 public final class TDLib {
   private static String format (String format, Object... formatArgs) {
@@ -41,7 +43,9 @@ public final class TDLib {
   }
 
   private static void log (int verbosityLevel, String format, Object... formatArgs) {
-    Client.execute(new TdApi.AddLogMessage(verbosityLevel, format(format, formatArgs)));
+    try {
+      Client.execute(new TdApi.AddLogMessage(verbosityLevel, format(format, formatArgs)));
+    } catch (Client.ExecutionException ignored) { }
   }
 
   public static void e (String format, Object... formatArgs) {
@@ -86,8 +90,33 @@ public final class TDLib {
   }
 
   public static final class Tag {
+    private static void internal (String tag, String format, Object[] formatArgs) {
+      i("[%s]: %s", tag, format(format, formatArgs));
+    }
     public static void safetyNet (String format, Object... formatArgs) {
-      i("[safetynet]: %s", format(format, formatArgs));
+      internal("safetynet", format, formatArgs);
+    }
+
+    public static void playIntegrity (String format, Object... formatArgs) {
+      internal("play-integrity", format, formatArgs);
+    }
+
+    public static void recaptcha (String format, Object... formatArgs) {
+      internal("recaptcha", format, formatArgs);
+    }
+
+    public static void integrity (TdApi.FirebaseDeviceVerificationParameters parameters, String format, Object... formatArgs) {
+      switch (parameters.getConstructor()) {
+        case TdApi.FirebaseDeviceVerificationParametersSafetyNet.CONSTRUCTOR:
+          safetyNet(format, formatArgs);
+          break;
+        case TdApi.FirebaseDeviceVerificationParametersPlayIntegrity.CONSTRUCTOR:
+          playIntegrity(format, formatArgs);
+          break;
+        default:
+          Td.assertFirebaseDeviceVerificationParameters_21a9fc9c();
+          throw Td.unsupported(parameters);
+      }
     }
 
     public static void td_init (String format, Object... formatArgs) {

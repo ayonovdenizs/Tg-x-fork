@@ -7,11 +7,12 @@ import android.graphics.drawable.Drawable;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.thunderdog.challegram.R;
+import org.thunderdog.challegram.theme.ColorId;
+import org.thunderdog.challegram.theme.PorterDuffColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Drawables;
 import org.thunderdog.challegram.tool.Paints;
-import org.thunderdog.challegram.tool.Screen;
+import org.thunderdog.challegram.tool.PorterDuffPaint;
 import org.thunderdog.challegram.tool.UI;
 
 import me.vkryl.android.AnimatorUtils;
@@ -37,9 +38,9 @@ public class TranslationCounterDrawable extends Drawable implements FactorAnimat
   private final int width, height;
   private Runnable invalidateCallback;
 
-  private int defaultColorId = R.id.theme_color_icon;
-  private int backgroundColorId = R.id.theme_color_bubbleIn_time;
-  private int loadingColorId = R.id.theme_color_bubbleIn_textLink;
+  private int defaultColorId = ColorId.icon;
+  private @PorterDuffColorId int backgroundColorId = ColorId.bubbleIn_time;
+  private int loadingColorId = ColorId.bubbleIn_textLink;
 
   public TranslationCounterDrawable (Drawable drawable) {
     this.drawable = drawable;
@@ -50,7 +51,7 @@ public class TranslationCounterDrawable extends Drawable implements FactorAnimat
     UI.post(this::checkStatus);
   }
 
-  public void setColors (int defaultColorId, int backgroundColorId, int loadingColorId) {
+  public void setColors (int defaultColorId, @PorterDuffColorId int backgroundColorId, int loadingColorId) {
     this.defaultColorId = defaultColorId;
     this.backgroundColorId = backgroundColorId;
     this.loadingColorId = loadingColorId;
@@ -89,14 +90,14 @@ public class TranslationCounterDrawable extends Drawable implements FactorAnimat
     final float loadedProgress = 1f - isLoading.getFloatValue();
     final float errorProgress = isError.getFloatValue();
     final float successProgress = isSuccess.getFloatValue();
-    final int iconColor2 = ColorUtils.fromToArgb(Theme.getColor(defaultColorId), Theme.getColor(R.id.theme_color_iconActive), successProgress);
+    final int iconColor2 = ColorUtils.fromToArgb(Theme.getColor(defaultColorId), Theme.getColor(ColorId.iconActive), successProgress);
     final int iconColor1 = ColorUtils.fromToArgb(Theme.getColor(loadingColorId), iconColor2, loadedProgress);
-    final int iconColor = ColorUtils.fromToArgb(iconColor1, Theme.getColor(R.id.theme_color_iconNegative), errorProgress);
+    final int iconColor = ColorUtils.fromToArgb(iconColor1, Theme.getColor(ColorId.iconNegative), errorProgress);
 
     if (loadedProgress == 1f) {
       Drawables.draw(canvas, drawable, 0, 0, Paints.getPorterDuffPaint(iconColor));
     } else {
-      Drawables.draw(canvas, drawableBg, 0, 0, Paints.getPorterDuffPaint(Theme.getColor(backgroundColorId)));
+      Drawables.draw(canvas, drawableBg, 0, 0, PorterDuffPaint.get(backgroundColorId));
 
       float lineWidth = MathUtils.fromTo(0.571f, 1f, loadedProgress) * width;
       float offset = MathUtils.fromTo(MathUtils.fromTo(-lineWidth - width * 0.5f, width * 1.5f, offsetAnimator.getFloatValue()), 0, loadedProgress);
@@ -137,6 +138,7 @@ public class TranslationCounterDrawable extends Drawable implements FactorAnimat
   }
 
   @Override
+  @SuppressWarnings("deprecation")
   public int getOpacity () {
     return drawable.getOpacity();
   }
@@ -146,10 +148,14 @@ public class TranslationCounterDrawable extends Drawable implements FactorAnimat
     invalidate();
   }
 
+  private final RateLimiter checkLimiter = new RateLimiter(this::checkStatus, 100L, null);
+
   @Override
   public void onFactorChangeFinished (int id, float finalFactor, FactorAnimator callee) {
     if (id == ANIMATOR_OFFSET) {
-      checkStatus();
+      if (finalFactor == (offsetAnimator.getValue() ? 1f : 0f)) {
+        checkLimiter.run();
+      }
     }
   }
 }

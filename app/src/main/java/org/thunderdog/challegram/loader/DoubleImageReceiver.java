@@ -19,6 +19,7 @@ import android.view.View;
 
 import org.thunderdog.challegram.loader.gif.GifReceiver;
 
+@SuppressWarnings("unchecked")
 public class DoubleImageReceiver implements Receiver {
   private final boolean isAnimated;
   private final ImageReceiver preview;
@@ -39,9 +40,10 @@ public class DoubleImageReceiver implements Receiver {
   }
 
   @Override
-  public void setUpdateListener (ReceiverUpdateListener listener) {
+  public final DoubleImageReceiver setUpdateListener (ReceiverUpdateListener listener) {
     preview.setUpdateListener(listener);
     receiver.setUpdateListener(listener);
+    return this;
   }
 
   public void setAnimationDisabled (boolean disabled) {
@@ -118,15 +120,9 @@ public class DoubleImageReceiver implements Receiver {
   }
 
   @Override
-  public void setColorFilter (int colorFilter) {
-    preview.setColorFilter(colorFilter);
-    receiver.setColorFilter(colorFilter);
-  }
-
-  @Override
-  public void disableColorFilter () {
-    preview.disableColorFilter();
-    receiver.disableColorFilter();
+  public void setPorterDuffColorFilter (int colorOrColorId, float alpha, boolean colorIsId) {
+    preview.setPorterDuffColorFilter(colorOrColorId, alpha, colorIsId);
+    receiver.setPorterDuffColorFilter(colorOrColorId, alpha, colorIsId);
   }
 
   @Override

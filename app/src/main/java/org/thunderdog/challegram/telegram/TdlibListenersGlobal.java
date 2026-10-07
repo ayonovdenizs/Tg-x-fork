@@ -16,8 +16,9 @@ package org.thunderdog.challegram.telegram;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.UiThread;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.unsorted.Settings;
 import org.thunderdog.challegram.voip.gui.CallSettings;
@@ -82,6 +83,18 @@ public class TdlibListenersGlobal {
     }
   }
 
+  void notifyUpdateMessageContent (Tdlib tdlib, TdApi.UpdateMessageContent update) {
+    for (GlobalMessageListener listener : messageListeners) {
+      listener.onMessageContentChanged(tdlib, update.chatId, update.messageId, update.newContent);
+    }
+  }
+
+  void notifyUpdateEphemeralMessageContent (Tdlib tdlib, TdApi.UpdateMessageEphemeralContent update) {
+    for (GlobalMessageListener listener : messageListeners) {
+      listener.onEphemeralMessageContentChanged(tdlib, update.chatId, update.messageId, update.ephemeralContent);
+    }
+  }
+
   void notifyUpdateNewMessages (Tdlib tdlib, TdApi.Message[] messages) {
     for (GlobalMessageListener listener : messageListeners) {
       listener.onNewMessages(tdlib, messages);
@@ -96,7 +109,7 @@ public class TdlibListenersGlobal {
 
   void notifyUpdateMessageSendFailed (Tdlib tdlib, TdApi.UpdateMessageSendFailed update) {
     for (GlobalMessageListener listener : messageListeners) {
-      listener.onMessageSendFailed(tdlib, update.message, update.oldMessageId, update.errorCode, update.errorMessage);
+      listener.onMessageSendFailed(tdlib, update.message, update.oldMessageId, update.error);
     }
   }
 
@@ -117,6 +130,12 @@ public class TdlibListenersGlobal {
   void notifyTotalCounterChanged (@NonNull TdApi.ChatList chatList, boolean isReset) {
     for (GlobalCountersListener listener : countersListeners) {
       listener.onTotalUnreadCounterChanged(chatList, isReset);
+    }
+  }
+
+  void notifyBadgeSettingsChanged () {
+    for (GlobalCountersListener listener : countersListeners) {
+      listener.onBadgeSettingsChanged();
     }
   }
 
@@ -234,6 +253,12 @@ public class TdlibListenersGlobal {
     }
   }
 
+  void notifyAccountProfileEmojiStatusChanged (TdlibAccount account, boolean isCurrent) {
+    for (GlobalAccountListener listener : accountListeners) {
+      listener.onAccountProfileEmojiStatusChanged(account, isCurrent);
+    }
+  }
+
   void notifyAuthorizationStateChanged (TdlibAccount account, TdApi.AuthorizationState authorizationState, int status) {
     for (GlobalAccountListener listener : accountListeners) {
       listener.onAuthorizationStateChanged(account, authorizationState, status);
@@ -274,12 +299,30 @@ public class TdlibListenersGlobal {
     callListeners.remove(listener);
   }
 
+  @TdlibThread
+  void onUpdateCall (Tdlib tdlib, TdApi.UpdateCall update) {
+    for (GlobalCallListener listener : callListeners) {
+      listener.onUpdateCall(tdlib, update);
+    }
+  }
+
+  @TdlibThread
+  void onUpdateGroupCall (Tdlib tdlib, TdApi.UpdateGroupCall update) {
+    for (GlobalCallListener listener : callListeners) {
+      listener.onUpdateGroupCall(tdlib, update);
+    }
+  }
+
+  // Calls (legacy)
+
+  @UiThread
   void notifyCallUpdated (Tdlib tdlib, TdApi.Call call) {
     for (GlobalCallListener listener : callListeners) {
       listener.onCallUpdated(tdlib, call);
     }
   }
 
+  @UiThread
   void notifyCallSettingsChanged (Tdlib tdlib, int callId, CallSettings settings) {
     for (GlobalCallListener listener : callListeners) {
       listener.onCallSettingsChanged(tdlib, callId, settings);

@@ -30,6 +30,7 @@ import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
+import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
@@ -40,6 +41,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.view.Display;
@@ -58,12 +60,16 @@ import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.activity.ComponentActivity;
+import androidx.activity.BackEventCompat;
+import androidx.activity.OnBackPressedCallback;
+import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.collection.SparseArrayCompat;
+import androidx.fragment.app.FragmentActivity;
+import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.drinkmore.Tracer;
 import org.thunderdog.challegram.component.attach.MediaLayout;
 import org.thunderdog.challegram.component.base.ProgressWrap;
@@ -81,16 +87,19 @@ import org.thunderdog.challegram.data.InlineResult;
 import org.thunderdog.challegram.data.TGReaction;
 import org.thunderdog.challegram.mediaview.MediaViewController;
 import org.thunderdog.challegram.navigation.ActivityResultHandler;
+import org.thunderdog.challegram.navigation.BackPressMode;
 import org.thunderdog.challegram.navigation.DrawerController;
 import org.thunderdog.challegram.navigation.HeaderView;
 import org.thunderdog.challegram.navigation.InterceptLayout;
 import org.thunderdog.challegram.navigation.MenuMoreWrap;
 import org.thunderdog.challegram.navigation.NavigationController;
 import org.thunderdog.challegram.navigation.NavigationGestureController;
+import org.thunderdog.challegram.navigation.NavigationStack;
 import org.thunderdog.challegram.navigation.OptionsLayout;
 import org.thunderdog.challegram.navigation.OverlayView;
 import org.thunderdog.challegram.navigation.ReactionsOverlayView;
 import org.thunderdog.challegram.navigation.RootDrawable;
+import org.thunderdog.challegram.navigation.SystemBackEventListener;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.player.RecordAudioVideoController;
@@ -99,14 +108,15 @@ import org.thunderdog.challegram.player.TGPlayerController;
 import org.thunderdog.challegram.telegram.TGLegacyManager;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibManager;
+import org.thunderdog.challegram.telegram.TdlibMessageViewer;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.ColorState;
+import org.thunderdog.challegram.theme.PropertyId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeChangeListener;
-import org.thunderdog.challegram.theme.ThemeColorId;
 import org.thunderdog.challegram.theme.ThemeDelegate;
 import org.thunderdog.challegram.theme.ThemeListenerList;
 import org.thunderdog.challegram.theme.ThemeManager;
-import org.thunderdog.challegram.theme.ThemeProperty;
 import org.thunderdog.challegram.tool.Intents;
 import org.thunderdog.challegram.tool.Invalidator;
 import org.thunderdog.challegram.tool.Keyboard;
@@ -130,24 +140,33 @@ import org.thunderdog.challegram.widget.DragDropLayout;
 import org.thunderdog.challegram.widget.ForceTouchView;
 import org.thunderdog.challegram.widget.NetworkStatusBarView;
 import org.thunderdog.challegram.widget.PopupLayout;
+import org.thunderdog.challegram.widget.RootFrameLayout;
+import org.thunderdog.challegram.widget.StickersSuggestionsLayout;
 
 import java.lang.ref.Reference;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import me.vkryl.android.AnimatorUtils;
+import me.vkryl.android.DeviceUtils;
 import me.vkryl.android.animator.FactorAnimator;
 import me.vkryl.android.widget.FrameLayoutFix;
 import me.vkryl.core.BitwiseUtils;
 import me.vkryl.core.ColorUtils;
 import me.vkryl.core.lambda.CancellableRunnable;
+import me.vkryl.core.lambda.FutureBool;
 import me.vkryl.core.lambda.FutureInt;
 import me.vkryl.core.lambda.RunnableBool;
+import me.vkryl.core.lambda.RunnableData;
 import me.vkryl.core.reference.ReferenceList;
 import me.vkryl.core.reference.ReferenceUtils;
 import nl.dionsegijn.konfetti.xml.KonfettiView;
+import tgx.app.RecaptchaProviderRegistry;
 
-public abstract class BaseActivity extends ComponentActivity implements View.OnTouchListener, FactorAnimator.Target, Keyboard.OnStateChangeListener, ThemeChangeListener, SensorEventListener, TGPlayerController.TrackChangeListener, TGLegacyManager.EmojiLoadListener, Lang.Listener, Handler.Callback {
+@SuppressWarnings("deprecation")
+public abstract class BaseActivity extends FragmentActivity implements View.OnTouchListener, FactorAnimator.Target, Keyboard.OnStateChangeListener, ThemeChangeListener, SensorEventListener, TGPlayerController.TrackChangeListener, TGLegacyManager.EmojiLoadListener, Lang.Listener, Handler.Callback {
   public static final long POPUP_SHOW_SLOW_DURATION = 240l;
 
   private static final int OPEN_CAMERA_BY_TAP = 1;
@@ -164,6 +183,9 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   protected Invalidator invalidator;
 
   private final ReferenceList<ActivityListener> activityListeners = new ReferenceList<>();
+
+  private final TdlibMessageViewer.Listener messageViewListener = (manager, needRestrictScreenshots) ->
+    checkDisallowScreenshots();
 
   private int currentOrientation;
   private boolean mHasSoftwareKeys;
@@ -188,7 +210,18 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     return gestureController;
   }
 
-  public int getSettingsErrorIcon () {
+  public static class ClickBait {
+    public final int iconRes;
+    public final boolean isError;
+
+    public ClickBait (@DrawableRes int iconRes, boolean isError) {
+      this.iconRes = iconRes;
+      this.isError = isError;
+    }
+  }
+
+  @Nullable
+  public ClickBait getSettingsClickBait () {
     // It's located here for future display inside header menu button
     if (hasTdlib()) {
       Tdlib tdlib = currentTdlib();
@@ -197,20 +230,28 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
         case Tdlib.ResolvableProblem.NONE:
           break;
         case Tdlib.ResolvableProblem.MIXED:
-          return Tdlib.CHAT_FAILED;
+          return new ClickBait(0, true);
         case Tdlib.ResolvableProblem.NOTIFICATIONS:
-          return R.drawable.baseline_notification_important_14;
+          return new ClickBait(R.drawable.baseline_notification_important_14, true);
         case Tdlib.ResolvableProblem.CHECK_PASSWORD:
-          return R.drawable.baseline_gpp_maybe_14;
+          return new ClickBait(R.drawable.baseline_gpp_maybe_14, true);
         case Tdlib.ResolvableProblem.CHECK_PHONE_NUMBER:
-          return R.drawable.baseline_sim_card_alert_14;
+          return new ClickBait(R.drawable.baseline_sim_card_alert_14, true);
+        case Tdlib.ResolvableProblem.SET_BIRTHDATE:
+          return new ClickBait(R.drawable.baseline_cake_variant_14, false);
+        case Tdlib.ResolvableProblem.SET_LOGIN_EMAIL:
+          return new ClickBait(R.drawable.baseline_alternate_email_14, false);
       }
     }
-    return 0;
+    return null;
   }
 
   public boolean isAnimating (boolean intercept) {
-    return (navigation != null && (intercept ? navigation.isAnimatingWithEffect() : navigation.isAnimating())) || (drawer != null && drawer.isAnimating()) || isProgressShowing || (cameraAnimator != null && cameraAnimator.isAnimating());
+    return
+      (navigation != null && (intercept ? navigation.isAnimatingWithEffect() : navigation.isAnimating())) ||
+      (drawer != null && drawer.isAnimating()) ||
+      isProgressShowing ||
+      (cameraAnimator != null && cameraAnimator.isAnimating());
   }
 
   public boolean processTouchEvent (MotionEvent event) {
@@ -218,7 +259,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   }
 
   public void addToRoot (View view, boolean ignoreStatusBar) {
-    int i = passcodeController != null && isPasscodeShowing ? rootView.indexOfChild(passcodeController.getValue()) : -1;
+    int i = passcodeController != null && isPasscodeShowing && view != tooltipOverlayView ? rootView.indexOfChild(passcodeController.getValue()) : -1;
 
     // TODO make some overlay for PiPs
     if (i == -1) {
@@ -235,6 +276,16 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     if (tooltipIndex != -1) {
       i = i == -1 ? tooltipIndex : Math.min(tooltipIndex, i);
     }
+
+    if (view == inlineResultsView) {
+      View customEmojiSuggestonsView = rootView.findViewById(R.id.view_customEmojiSuggestions);
+      int customEmojiSuggestionsIndex = customEmojiSuggestonsView != null ?
+        rootView.indexOfChild(customEmojiSuggestonsView) : -1;
+      if (customEmojiSuggestionsIndex != -1) {
+        i = i == -1 ? customEmojiSuggestionsIndex : Math.min(customEmojiSuggestionsIndex, i);
+      }
+    }
+
     if (i != -1) {
       rootView.addView(view, i);
     } else {
@@ -269,7 +320,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   }
 
   private View focusView;
-  private int activityState = UI.STATE_UNKNOWN;
+  private int activityState = UI.State.UNKNOWN;
 
   private RoundVideoController roundVideoController;
   private RecordAudioVideoController recordAudioVideoController;
@@ -294,15 +345,108 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       if (this.tdlib != null) {
         wasOnline = this.tdlib.isOnline();
         this.tdlib.setOnline(false);
+        this.tdlib.messageViewer().removeListener(messageViewListener);
       }
       this.tdlib = tdlib;
       recordAudioVideoController.setTdlib(tdlib);
       tdlib.setOnline(wasOnline);
+      tdlib.messageViewer().addListener(messageViewListener);
       if (drawer != null) {
         drawer.onCurrentTdlibChanged(tdlib);
       }
       onTdlibChanged();
+      runEmulatorChecks();
     }
+  }
+
+  private boolean ranEmulatorChecks, emulatorChecksFinished;
+  private final List<RunnableData<Settings.EmulatorDetectionResult>> emulatorCheckFinishCallbacks = new ArrayList<>();
+
+  public void runEmulatorChecks () {
+    runEmulatorChecksImpl(false, null);
+  }
+
+  public void forceRunEmulatorChecks (@Nullable RunnableData<Settings.EmulatorDetectionResult> after) {
+    runEmulatorChecksImpl(true, after);
+  }
+
+  private void addEmulatorChecksCallback (@Nullable RunnableData<Settings.EmulatorDetectionResult> after) {
+    if (after == null) {
+      return;
+    }
+    boolean postponed;
+    synchronized (emulatorCheckFinishCallbacks) {
+      postponed = !emulatorChecksFinished;
+      if (postponed) {
+        emulatorCheckFinishCallbacks.add(after);
+      }
+    }
+    if (!postponed) {
+      after.runWithData(Settings.instance().getLastEmulatorDetectionResult());
+    }
+  }
+
+  private void runEmulatorChecksImpl (boolean force, @Nullable RunnableData<Settings.EmulatorDetectionResult> after) {
+    if (ranEmulatorChecks) {
+      addEmulatorChecksCallback(after);
+      return;
+    }
+
+    long installationId = Settings.instance().installationId();
+    if (!force) {
+      Settings.EmulatorDetectionResult previousResult = Settings.instance().getLastEmulatorDetectionResult();
+      List<FutureBool> conditions = Arrays.asList(
+        // every app launch without authorization
+        () -> !tdlib.context().hasActiveAccounts() || tdlib.isUnauthorized(),
+        () -> {
+          if (previousResult != null) {
+            if (previousResult.isEmulatorDetected()) {
+              return false;
+            }
+            long elapsed = System.currentTimeMillis() - previousResult.time;
+            // every 3 days or after every update
+            return installationId != previousResult.installationId || elapsed >= TimeUnit.DAYS.toMillis(3);
+          }
+          return true;
+        }
+      );
+      boolean hasAnyReason = false;
+      for (FutureBool condition : conditions) {
+        if (condition.getBoolValue()) {
+          hasAnyReason = true;
+          break;
+        }
+      }
+      if (!hasAnyReason) {
+        if (after != null) {
+          after.runWithData(previousResult);
+        }
+        return;
+      }
+    }
+
+    ranEmulatorChecks = true;
+    addEmulatorChecksCallback(after);
+
+    // Impl
+    new Thread(() -> {
+      long ms = SystemClock.uptimeMillis();
+      long detectionResult = DeviceUtils.detectEmulator(BaseActivity.this, BuildConfig.EXPERIMENTAL);
+      long elapsed = SystemClock.uptimeMillis() - ms;
+      Log.v("Ran emulator detections in %dms", elapsed);
+      Settings.EmulatorDetectionResult result = Settings.instance().trackEmulatorDetectionResult(installationId, elapsed, detectionResult);
+      tdlib.context().setIsEmulator(result.isEmulatorDetected());
+      UI.post(() -> {
+        emulatorChecksFinished = true;
+        if (activityState != UI.State.DESTROYED) {
+          for (int i = emulatorCheckFinishCallbacks.size() - 1; i >= 0; i--) {
+            RunnableData<Settings.EmulatorDetectionResult> act = emulatorCheckFinishCallbacks.remove(i);
+            act.runWithData(result);
+          }
+        }
+        emulatorCheckFinishCallbacks.clear();
+      });
+    }, "EmulatorDetector").start();
   }
 
   protected void onTdlibChanged () {
@@ -318,12 +462,16 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     return 60.0f;
   }
 
+  private boolean isGestureNavigationEnabled;
+
   @Override
   public void onCreate (Bundle savedInstanceState) {
     UI.setContext(this);
 
     AppState.initApplication();
     AppState.ensureReady();
+
+    RecaptchaProviderRegistry.setApplication(this.getApplication());
 
     appUpdater = new AppUpdater(this);
     roundVideoController = new RoundVideoController(this);
@@ -338,7 +486,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       this.isWindowLight = !Theme.isDark();
     }
     // UI.resetSizes();
-    setActivityState(UI.STATE_RESUMED);
+    setActivityState(UI.State.RESUMED);
     TdlibManager.instance().watchDog().onActivityCreate(this);
     Passcode.instance().checkAutoLock();
 
@@ -351,6 +499,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
 
     Screen.checkDensity();
 
+    this.isGestureNavigationEnabled = Screen.isGesturalNavigationEnabled(getResources());
     mHasSoftwareKeys = hasSoftwareKeys();
 
     currentOrientation = UI.getOrientation();
@@ -415,14 +564,14 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
 
     if (needTdlib()) {
       TdlibManager.instance().player().addTrackChangeListener(this);
-      TdlibManager.instance().resetBadge();
+      TdlibManager.instance().resetBadge(false);
     }
 
     Lang.addLanguageListener(this);
 
-    /*if (BuildConfig.DEBUG) {
-      addRemoveRtlSwitch();
-    }*/
+    navigation.getStack().addChangeListener(navigationStackChangeListener);
+    backPressedCallback.setEnabled(isBackPressActionAvailable(handleOnBackPress(false, false)));
+    getOnBackPressedDispatcher().addCallback(backPressedCallback);
   }
 
   private View rtlSwitchView;
@@ -544,7 +693,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     try {
       dialog = b.show();
     } catch (Throwable t) {
-      if (UI.getUiState() == UI.STATE_RESUMED)
+      if (UI.getUiState() == UI.State.RESUMED)
         UI.showToast("Failed to display system pop-up, see application log for details", Toast.LENGTH_SHORT);
       Log.e("Cannot show dialog", t);
       return null;
@@ -561,7 +710,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     return modifyAlert(dialog, theme);
   }
 
-  private static boolean patchAlertButton (View v, ThemeDelegate theme, @ThemeColorId int colorId) {
+  private static boolean patchAlertButton (View v, ThemeDelegate theme, @ColorId int colorId) {
     if (v == null)
       return false;
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -584,7 +733,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     if (theme == null)
       theme = ThemeManager.instance().currentTheme(false);
 
-    int textColor = theme.getColor(R.id.theme_color_text);
+    int textColor = theme.getColor(ColorId.text);
 
     view = dialog.findViewById(android.R.id.title);
     Views.makeFakeBold(view);
@@ -600,16 +749,16 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     if (view instanceof TextView)
       ((TextView) view).setTextColor(textColor);
 
-    if (!patchAlertButton(dialog.getButton(DialogInterface.BUTTON_POSITIVE), theme, R.id.theme_color_textNeutral))
-      patchAlertButton(dialog.findViewById(android.R.id.button1), theme, R.id.theme_color_textNeutral);
-    if (!patchAlertButton(dialog.getButton(DialogInterface.BUTTON_NEUTRAL), theme, R.id.theme_color_textNeutral))
-      patchAlertButton(dialog.findViewById(android.R.id.button2), theme, R.id.theme_color_textNeutral);
-    if (!patchAlertButton(dialog.getButton(DialogInterface.BUTTON_NEGATIVE), theme, R.id.theme_color_textNeutral))
-      patchAlertButton(dialog.findViewById(android.R.id.button3), theme, R.id.theme_color_textNeutral);
+    if (!patchAlertButton(dialog.getButton(DialogInterface.BUTTON_POSITIVE), theme, ColorId.textNeutral))
+      patchAlertButton(dialog.findViewById(android.R.id.button1), theme, ColorId.textNeutral);
+    if (!patchAlertButton(dialog.getButton(DialogInterface.BUTTON_NEUTRAL), theme, ColorId.textNeutral))
+      patchAlertButton(dialog.findViewById(android.R.id.button2), theme, ColorId.textNeutral);
+    if (!patchAlertButton(dialog.getButton(DialogInterface.BUTTON_NEGATIVE), theme, ColorId.textNeutral))
+      patchAlertButton(dialog.findViewById(android.R.id.button3), theme, ColorId.textNeutral);
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
       Drawable drawable = dialog.getWindow().getDecorView().getBackground();
       if (drawable != null) {
-        drawable.setColorFilter(new PorterDuffColorFilter(theme.getColor(R.id.theme_color_overlayFilling), PorterDuff.Mode.SRC_IN));
+        drawable.setColorFilter(new PorterDuffColorFilter(theme.getColor(ColorId.overlayFilling), PorterDuff.Mode.SRC_IN));
       }
     }
     return dialog;
@@ -655,8 +804,13 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     keyEventListeners.remove(listener);
   }
 
+  private boolean backKeyDownReceived;
+
   @Override
-  public boolean onKeyDown (int keyCode, KeyEvent event) {
+  public final boolean onKeyDown (int keyCode, KeyEvent event) {
+    if (event.getKeyCode() == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_DOWN) {
+      backKeyDownReceived = true;
+    }
     boolean handled = false;
     for (KeyEventListener listener : keyEventListeners) {
       if (!handled && listener.onKeyDown(keyCode, event)) {
@@ -667,7 +821,14 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   }
 
   @Override
-  public boolean onKeyUp (int keyCode, KeyEvent event) {
+  public final boolean onKeyUp (int keyCode, KeyEvent event) {
+    if (event.getKeyCode() == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_UP) {
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && !backKeyDownReceived) {
+        getOnBackPressedDispatcher().onBackPressed();
+        return true;
+      }
+      backKeyDownReceived = false;
+    }
     boolean handled = false;
     for (KeyEventListener listener : keyEventListeners) {
       if (!handled && listener.onKeyUp(keyCode, event)) {
@@ -717,19 +878,11 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   }
 
   public void setWindowDecorSystemUiVisibility (int visibility, boolean remember) {
-    View decorView = getWindow().getDecorView();
-    int setVisibility = visibility;
-    boolean isLight = false;
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && Config.USE_CUSTOM_NAVIGATION_COLOR && !Theme.isDark() && (visibility & View.SYSTEM_UI_FLAG_FULLSCREEN) == 0) {
-      setVisibility |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-      isLight = true;
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Theme.needLightStatusBar()) {
-      setVisibility |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-    }
-    decorView.setSystemUiVisibility(setVisibility);
-    if (this.isWindowLight != isLight) {
-      this.isWindowLight = isLight;
+    boolean lightNavigationBar = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && Config.USE_CUSTOM_NAVIGATION_COLOR && !Theme.isDark() && (visibility & View.SYSTEM_UI_FLAG_FULLSCREEN) == 0;
+    boolean lightStatusBar = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Theme.needLightStatusBar();
+    UI.setLightSystemBars(getWindow(), lightNavigationBar, lightStatusBar, visibility, true);
+    if (this.isWindowLight != lightNavigationBar) {
+      this.isWindowLight = lightNavigationBar;
       updateNavigationBarColor();
     }
     lastWindowVisibility = visibility;
@@ -793,6 +946,14 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       return uiVisibility;
     }
     return View.SYSTEM_UI_FLAG_VISIBLE;
+  }
+
+  public boolean isInFullScreen () {
+    return isFullscreen;
+  }
+
+  public boolean isHideNavigation () {
+    return hideNavigation;
   }
 
   private void setFullScreen (boolean isFullscreen) {
@@ -879,9 +1040,9 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   private void setActivityState (int newState) {
     if (this.activityState != newState) {
       final int prevState = this.activityState;
-      boolean prevResumed = prevState == UI.STATE_RESUMED;
+      boolean prevResumed = prevState == UI.State.RESUMED;
       this.activityState = newState;
-      if (newState != UI.STATE_RESUMED) {
+      if (newState != UI.State.RESUMED) {
         if (prevResumed) {
           handler.removeMessages(DISPATCH_ACTIVITY_STATE);
         }
@@ -916,7 +1077,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   @Override
   public void onPause () {
     blockFocus();
-    setActivityState(UI.STATE_PAUSED);
+    setActivityState(UI.State.PAUSED);
     if (camera != null) {
       camera.onActivityPause();
     }
@@ -966,7 +1127,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   public void onResume () {
     boolean lockBefore = isPasscodeShowing;
     UI.setContext(this);
-    setActivityState(UI.STATE_RESUMED);
+    setActivityState(UI.State.RESUMED);
     Passcode.instance().checkAutoLock();
     checkPasscode(false);
     if (isPasscodeShowing && lockBefore && passcodeController != null) {
@@ -991,6 +1152,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       throw t;
     }
     checkAutoNightMode();
+    setGestureNavigationEnabled(Screen.isGesturalNavigationEnabled(getResources()));
     Intents.revokeFileReadPermissions();
     enableFocus();
     if (timeFilter == null) {
@@ -1012,6 +1174,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       }
     }*/
     appUpdater.checkForUpdates();
+    runEmulatorChecks();
   }
 
   protected void setOnline (boolean isOnline) {
@@ -1044,7 +1207,9 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       Tracer.onUiError(t);
       throw t;
     }
+    setOrientationLockFlags(0);
     if (navigation != null) {
+      navigation.getStack().removeChangeListener(navigationStackChangeListener);
       navigation.destroy();
     }
     Lang.removeLanguageListener(this);
@@ -1054,7 +1219,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     TGLegacyManager.instance().removeEmojiListener(this);
     TdlibManager.instance().watchDog().onActivityDestroy(this);
     Intents.revokeFileReadPermissions();
-    setActivityState(UI.STATE_DESTROYED);
+    setActivityState(UI.State.DESTROYED);
     if (isPasscodeShowing && passcodeController != null) {
       passcodeController.onActivityDestroy();
     }
@@ -1161,6 +1326,13 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     }
   }
 
+  private void setGestureNavigationEnabled (boolean isEnabled) {
+    if (this.isGestureNavigationEnabled != isEnabled) {
+      this.isGestureNavigationEnabled = isEnabled;
+      updateNavigationBarColor();
+    }
+  }
+
   @Override
   public void onConfigurationChanged (@NonNull Configuration newConfig)  {
     super.onConfigurationChanged(newConfig);
@@ -1172,6 +1344,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     if (camera != null) {
       camera.onConfigurationChanged(newConfig);
     }
+    setGestureNavigationEnabled(Screen.isGesturalNavigationEnabled(getResources()));
     currentOrientation = newConfig.orientation;
     Lang.checkLanguageCode();
     setSystemNightMode(newConfig.uiMode & Configuration.UI_MODE_NIGHT_MASK);
@@ -1182,55 +1355,150 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     }
   }
 
-  @Override
-  public void onBackPressed () {
-    if (isPasscodeShowing) {
-      super.onBackPressed();
-    } else {
-      onBackPressed(false);
+  private final NavigationStack.ChangeListener navigationStackChangeListener = stack -> {
+    notifyBackPressAvailabilityChanged();
+  };
+
+  private final OnBackPressedCallback backPressedCallback = new OnBackPressedCallback(false) {
+    @Override
+    public void handleOnBackPressed () {
+      boolean handled = false;
+      if (backPressTarget != null) {
+        handled = backPressTarget.onSystemBackPressed();
+        backPressTarget = null;
+      }
+      if (!handled) {
+        performBackPress(false);
+      }
+    }
+
+    private boolean cancelBackPressTarget () {
+      if (backPressTarget != null) {
+        backPressTarget.onSystemBackCancelled();
+        backPressTarget = null;
+        return true;
+      }
+      return false;
+    }
+
+    private SystemBackEventListener backPressTarget;
+
+    @Override
+    public void handleOnBackStarted (@NonNull BackEventCompat backEvent) {
+      if (cancelBackPressTarget()) {
+        Log.i("System didn't dispatch onBackCancelled / onBackPressed!");
+      }
+      notifyBackPressAvailabilityChanged();
+      @BackPressMode int mode = backPressMode;
+      SystemBackEventListener target;
+      switch (mode) {
+        case BackPressMode.NAVIGATE_BACK_IN_STACK:
+          target = navigation;
+          break;
+        case BackPressMode.CLOSE_NAVIGATION_DRAWER:
+          target = drawer;
+          break;
+        case BackPressMode.CUSTOM_ACTION_PERFORMED:
+        case BackPressMode.SYSTEM_ACTION_REQUIRED:
+          target = null;
+          break;
+        default:
+          throw new AssertionError(Integer.toString(mode));
+      }
+      if (target != null && target.onSystemBackStarted(backEvent)) {
+        backPressTarget = target;
+      } else {
+        backPressTarget = null;
+      }
+    }
+
+    @Override
+    public void handleOnBackCancelled () {
+      cancelBackPressTarget();
+    }
+
+    @Override
+    public void handleOnBackProgressed (@NonNull BackEventCompat backEvent) {
+      if (backPressTarget != null) {
+        backPressTarget.onSystemBackProgressed(backEvent);
+      }
+    }
+  };
+
+  private static boolean isBackPressActionAvailable (@BackPressMode int backPressMode) {
+    return backPressMode != BackPressMode.SYSTEM_ACTION_REQUIRED;
+  }
+
+  private @BackPressMode int backPressMode = BackPressMode.SYSTEM_ACTION_REQUIRED;
+
+  public void notifyBackPressAvailabilityChanged () {
+    @BackPressMode int backPressMode = handleOnBackPress(false, false);
+    this.backPressMode = backPressMode;
+    boolean isEnabled = isBackPressActionAvailable(backPressMode);
+    if (backPressedCallback.isEnabled() != isEnabled) {
+      backPressedCallback.setEnabled(isEnabled);
     }
   }
 
-  public void onBackPressed (boolean fromTop) {
+  public void performBackPress (boolean fromTop) {
+    if (handleOnBackPress(fromTop, true) == BackPressMode.SYSTEM_ACTION_REQUIRED) {
+      backPressedCallback.setEnabled(false);
+      getOnBackPressedDispatcher().onBackPressed();
+    }
+  }
+
+  public @BackPressMode int handleOnBackPress (boolean fromTop, boolean commit) {
+    if (isPasscodeShowing) {
+      return BackPressMode.SYSTEM_ACTION_REQUIRED;
+    }
     if (isProgressShowing) {
-      if (progressListener != null) {
+      if (progressListener != null && commit) {
         hideProgress(true);
       }
-      return;
+      return BackPressMode.CUSTOM_ACTION_PERFORMED;
     }
-    if (tooltipOverlayView != null && tooltipOverlayView.onBackPressed()) {
-      return;
+    if (tooltipOverlayView != null && tooltipOverlayView.handleOnBackPress(commit)) {
+      return BackPressMode.CUSTOM_ACTION_PERFORMED;
     }
-    if (dismissLastOpenWindow(false, true, fromTop)) {
-      return;
+    if (dismissLastOpenWindow(false, true, fromTop, commit)) {
+      return BackPressMode.CUSTOM_ACTION_PERFORMED;
     }
     if (isCameraOpen) {
-      closeCameraByBackPress();
-      return;
+      if (commit) {
+        closeCameraByBackPress();
+      }
+      return BackPressMode.CUSTOM_ACTION_PERFORMED;
     }
     if (recordAudioVideoController.isOpen()) {
-      recordAudioVideoController.onBackPressed();
-      return;
+      if (commit) {
+        recordAudioVideoController.onBackPressed();
+      }
+      return BackPressMode.CUSTOM_ACTION_PERFORMED;
     }
-    if (!isAnimating(false)) {
-      if (navigation.passBackPressToActivity(fromTop)) {
-        super.onBackPressed();
-        return;
-      }
-      if (navigation.onBackPressed(fromTop)) {
-        return;
-      }
-      if (drawer != null && drawer.isVisible()) {
+    if (isAnimating(false)) {
+      return BackPressMode.CUSTOM_ACTION_PERFORMED;
+    }
+    if (navigation.passBackPressToActivity(fromTop)) {
+      return BackPressMode.SYSTEM_ACTION_REQUIRED;
+    }
+    @BackPressMode int navigationBackPress = navigation.performOnBackPressed(fromTop, commit);
+    if (navigationBackPress != BackPressMode.SYSTEM_ACTION_REQUIRED) {
+      return navigationBackPress;
+    }
+    if (drawer != null && drawer.isVisible()) {
+      if (commit) {
         drawer.close(0f, null);
+      }
+      return BackPressMode.CLOSE_NAVIGATION_DRAWER;
+    } else {
+      ViewController<?> c = navigation.getCurrentStackItem();
+      if (c != null && (c.inSelectMode() || c.inSearchMode() || c.inCustomMode())) {
+        navigationBackPress = navigation.performOnBackPressed(fromTop, commit);
+        return navigationBackPress != BackPressMode.SYSTEM_ACTION_REQUIRED ?
+          navigationBackPress :
+          BackPressMode.CUSTOM_ACTION_PERFORMED;
       } else {
-        ViewController<?> c = navigation.getCurrentStackItem();
-        if (c == null) {
-          super.onBackPressed();
-        } else if (c.inSelectMode() || c.inSearchMode() || c.inCustomMode()) {
-          navigation.onBackPressed(fromTop);
-        } else {
-          super.onBackPressed();
-        }
+        return BackPressMode.SYSTEM_ACTION_REQUIRED;
       }
     }
   }
@@ -1263,8 +1531,8 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
         break;
       }
       case DISPATCH_ACTIVITY_STATE: {
-        if (activityState == UI.STATE_RESUMED) {
-          if (!UI.setUiState(this, UI.STATE_RESUMED)) {
+        if (activityState == UI.State.RESUMED) {
+          if (!UI.setUiState(this, UI.State.RESUMED)) {
             TdlibManager.instance().watchDog().checkNetworkAvailability();
           }
         }
@@ -1297,17 +1565,6 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     return currentOrientation;
   }
 
-  public void lockOrientation (int newOrientation) {
-    if (currentOrientation != newOrientation) {
-      currentOrientation = newOrientation;
-      if (mIsOrientationBlocked) {
-        requestAndroidOrientation(newOrientation);
-      } else {
-        setIsOrientationBlocked(true);
-      }
-    }
-  }
-
   private void setIsOrientationBlocked (boolean blocked) {
     if (mIsOrientationBlocked == blocked || mIsOrientationRequested)
       return;
@@ -1315,21 +1572,24 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     mIsOrientationBlocked = blocked;
 
     if (blocked) {
-      int rotation = getWindowManager().getDefaultDisplay().getRotation();
-
-      if (currentOrientation == Configuration.ORIENTATION_LANDSCAPE &&
-        (rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_90)) {
-        requestAndroidOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
-      } else if (currentOrientation == Configuration.ORIENTATION_PORTRAIT &&
-        (rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_90)) {
-        requestAndroidOrientationPortrait();
-      } else if (currentOrientation == Configuration.ORIENTATION_LANDSCAPE &&
-        (rotation == Surface.ROTATION_180 || rotation == Surface.ROTATION_270)) {
-        requestAndroidOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE);
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+        requestAndroidOrientation(ActivityInfo.SCREEN_ORIENTATION_LOCKED);
       } else {
-        if (currentOrientation == Configuration.ORIENTATION_PORTRAIT &&
-          (rotation == Surface.ROTATION_180 || rotation == Surface.ROTATION_270)) {
+        int rotation = getWindowManager().getDefaultDisplay().getRotation();
+        if (currentOrientation == Configuration.ORIENTATION_LANDSCAPE &&
+          (rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_90)) {
+          requestAndroidOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+        } else if (currentOrientation == Configuration.ORIENTATION_PORTRAIT &&
+          (rotation == Surface.ROTATION_0 || rotation == Surface.ROTATION_90)) {
           requestAndroidOrientationPortrait();
+        } else if (currentOrientation == Configuration.ORIENTATION_LANDSCAPE &&
+          (rotation == Surface.ROTATION_180 || rotation == Surface.ROTATION_270)) {
+          requestAndroidOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE);
+        } else {
+          if (currentOrientation == Configuration.ORIENTATION_PORTRAIT &&
+            (rotation == Surface.ROTATION_180 || rotation == Surface.ROTATION_270)) {
+            requestAndroidOrientationPortrait();
+          }
         }
       }
     } else {
@@ -1400,7 +1660,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     passcodeController.setPasscodeMode(PasscodeController.MODE_UNLOCK);
     passcodeController.onPrepareToShow();
     rootView.removeView(contentView);
-    rootView.addView(passcodeController.getValue());
+    addToRoot(passcodeController.getValue(), true);
     passcodeController.onActivityResume();
     passcodeController.onFocus();
 
@@ -1441,6 +1701,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   private void setIsPasscodeShowing (boolean isShowing) {
     if (this.isPasscodeShowing != isShowing) {
       this.isPasscodeShowing = isShowing;
+      notifyBackPressAvailabilityChanged();
       if (isShowing) {
         removeAllWindows();
       } else {
@@ -1623,6 +1884,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       return;
     }
     isProgressShowing = true;
+    notifyBackPressAvailabilityChanged();
     final boolean firstTime;
     if (progressWrap == null) {
       progressWrap = new ProgressWrap(this);
@@ -1699,6 +1961,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
 
     isProgressShowing = false;
     isProgressAnimating = true;
+    notifyBackPressAvailabilityChanged();
 
     ValueAnimator obj;
     obj = AnimatorUtils.simpleValueAnimator();
@@ -1791,7 +2054,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
         PopupLayout window = windows.get(i);
         View boundView = window.getBoundView();
         ViewController<?> boundController = window.getBoundController();
-        if (isContextual(boundView) || (byNavigation && boundView instanceof StickerSetWrap) || (boundView instanceof MediaLayout && !(navigation.getCurrentStackItem() instanceof MessagesController)) || (byNavigation && isContextual(boundController)) ) {
+        if (isContextual(boundView) || (byNavigation && boundView instanceof StickerSetWrap) || (boundView instanceof MediaLayout && !((navigation.getCurrentStackItem() instanceof MessagesController) || (((MediaLayout) boundView).getMode() == MediaLayout.MODE_AVATAR_PICKER))) || (byNavigation && isContextual(boundController)) ) {
           window.hideWindow(true);
         }
       }
@@ -1806,6 +2069,18 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     return contentView;
   }
 
+  public RootFrameLayout getRootView () {
+    return rootView;
+  }
+
+  public int getVisibleContentHeight () {
+    if (Settings.instance().useEdgeToEdge()) {
+      return rootView.getInnerContentHeight();
+    } else {
+      return contentView.getMeasuredHeight();
+    }
+  }
+
   public int getControllerWidth (View view) {
     int viewWidth = view.getMeasuredWidth();
     return viewWidth != 0 ? viewWidth : navigation.getValue().getMeasuredWidth();
@@ -1815,7 +2090,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
 
   private PopupLayout stickerPreviewWindow;
   private StickerPreviewView stickerPreview;
-  private StickerSmallView stickerPreviewControllerView;
+  private View stickerPreviewControllerView;
 
   public void openStickerPreview (Tdlib tdlib, StickerSmallView stickerView, TGStickerObj sticker, int cx, int cy, int maxWidth, int viewportHeight, boolean disableEmojis) {
     if (stickerPreview != null) {
@@ -1825,7 +2100,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     stickerPreviewControllerView = stickerView;
 
     stickerPreview = new StickerPreviewView(this);
-    stickerPreview.setControllerView(stickerPreviewControllerView);
+    stickerPreview.setControllerView(stickerView);
     stickerPreview.setSticker(tdlib, sticker, cx, cy, maxWidth, viewportHeight, disableEmojis);
 
     stickerPreviewWindow = new PopupLayout(this);
@@ -1836,7 +2111,26 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     stickerPreviewWindow.showAnimatedPopupView(stickerPreview, stickerPreview);
   }
 
-  public void openStickerMenu (StickerSmallView stickerView, TGStickerObj sticker) {
+  public void openStickerPreview (Tdlib tdlib, View viewHolder, StickerPreviewView.PreviewCallback callback, TGStickerObj sticker, int cx, int cy, int maxWidth, int viewportHeight, boolean disableEmojis) {
+    if (stickerPreview != null) {
+      return;
+    }
+
+    stickerPreviewControllerView = viewHolder;
+
+    stickerPreview = new StickerPreviewView(this);
+    stickerPreview.setPreviewCallback(viewHolder, callback);
+    stickerPreview.setSticker(tdlib, sticker, cx, cy, maxWidth, viewportHeight, disableEmojis);
+
+    stickerPreviewWindow = new PopupLayout(this);
+    stickerPreviewWindow.setBackListener(stickerPreview);
+    stickerPreviewWindow.setOverlayStatusBar(true);
+    stickerPreviewWindow.init(true);
+    stickerPreviewWindow.setNeedRootInsets();
+    stickerPreviewWindow.showAnimatedPopupView(stickerPreview, stickerPreview);
+  }
+
+  public void openStickerMenu (View stickerView, TGStickerObj sticker) {
     if (this.stickerPreview != null && stickerPreviewControllerView == stickerView) {
       stickerPreview.openMenu(sticker);
     }
@@ -1872,7 +2166,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     stickerPreviewControllerView = stickerView;
 
     stickerPreview = new StickerPreviewView(this);
-    stickerPreview.setControllerView(stickerPreviewControllerView);
+    stickerPreview.setControllerView(stickerView);
     stickerPreview.setReaction(tdlib, reaction, effectAnimation, cx, cy, maxWidth, viewportHeight, disableEmojis);
 
     stickerPreviewWindow = new PopupLayout(this);
@@ -1910,6 +2204,9 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       forceTouchView.initWithContext(context);
     } catch (Throwable t) {
       Log.e("Unable to open force touch preview", t);
+      if (BuildConfig.DEBUG && t instanceof RuntimeException) {
+        throw (RuntimeException) t;
+      }
       return false;
     }
 
@@ -1919,6 +2216,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       // forceTouchWindow.setNeedRootInsets();
     }
     forceTouchWindow.init(true);
+    forceTouchWindow.setNeedFullScreen(Settings.instance().useEdgeToEdge());
     if (!context.allowFullscreen()) {
       forceTouchWindow.setNeedRootInsets();
     }
@@ -1945,9 +2243,13 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
 
   // Inline results
 
+  private StickersSuggestionsLayout emojiSuggestionsWrap;
   private InlineResultsWrap inlineResultsView;
 
   public void updateHackyOverlaysPositions () {
+    if (emojiSuggestionsWrap != null && emojiSuggestionsWrap.getParent() != null) {
+      emojiSuggestionsWrap.updatePosition(true);
+    }
     if (inlineResultsView != null && inlineResultsView.getParent() != null) {
       inlineResultsView.updatePosition(true);
     }
@@ -1961,6 +2263,10 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   }
 
   public void showInlineResults (ViewController<?> context, Tdlib tdlib, @Nullable ArrayList<InlineResult<?>> results, boolean needBackground, @Nullable InlineResultsWrap.LoadMoreCallback callback) {
+    showInlineResults(context, tdlib, results, needBackground, callback, null, null);
+  }
+
+  public void showInlineResults (ViewController<?> context, Tdlib tdlib, @Nullable ArrayList<InlineResult<?>> results, boolean needBackground, @Nullable InlineResultsWrap.LoadMoreCallback callback, @Nullable RecyclerView.OnScrollListener scrollCallback, @Nullable StickerSmallView.StickerMovementCallback stickerMovementCallback) {
     if (inlineResultsView == null) {
       if (results == null || results.isEmpty()) {
         return;
@@ -1973,12 +2279,16 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       addToRoot(inlineResultsView, false);
     }
 
-    inlineResultsView.showItems(context, results, needBackground, callback, !context.isFocused());
+    inlineResultsView.showItems(context, results, needBackground, callback, scrollCallback, stickerMovementCallback, !context.isFocused());
   }
 
   public void addInlineResults (ViewController<?> context, ArrayList<InlineResult<?>> results, InlineResultsWrap.LoadMoreCallback callback) {
+    addInlineResults(context, results, callback, null, null);
+  }
+
+  public void addInlineResults (ViewController<?> context, ArrayList<InlineResult<?>> results, InlineResultsWrap.LoadMoreCallback callback, @Nullable RecyclerView.OnScrollListener scrollCallback, @Nullable StickerSmallView.StickerMovementCallback stickerMovementCallback) {
     if (inlineResultsView != null) {
-      inlineResultsView.addItems(context, results, callback);
+      inlineResultsView.addItems(context, results, callback, scrollCallback, stickerMovementCallback);
     }
   }
 
@@ -1991,6 +2301,62 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
 
   public boolean areInlineResultsVisible () {
     return inlineResultsView != null && inlineResultsView.isDisplayingItems();
+  }
+
+  @Nullable
+  public InlineResultsWrap getInlineResultsView () {
+    return inlineResultsView;
+  }
+
+  public void destroyStickersSuggestions (StickersSuggestionsLayout layout) {
+    if (emojiSuggestionsWrap == layout) {
+      emojiSuggestionsWrap = null;
+    }
+  }
+
+  public void setEmojiSuggestions (MessagesController context, @Nullable ArrayList<TGStickerObj> stickers, @Nullable RecyclerView.OnScrollListener scrollCallback, StickersSuggestionsLayout.Delegate choosingDelegate) {
+    if (emojiSuggestionsWrap == null) {
+      emojiSuggestionsWrap = new StickersSuggestionsLayout(context.context());
+      emojiSuggestionsWrap.setId(R.id.view_customEmojiSuggestions);
+      emojiSuggestionsWrap.init(context, true);
+    }
+    emojiSuggestionsWrap.setChoosingDelegate(choosingDelegate);
+    emojiSuggestionsWrap.setOnScrollListener(scrollCallback);
+    emojiSuggestionsWrap.setStickers(context, stickers);
+  }
+
+  public void updateEmojiSuggestionsPosition (boolean needTranslate) {
+    if (emojiSuggestionsWrap != null) {
+      emojiSuggestionsWrap.updatePosition(needTranslate);
+    }
+  }
+
+  public void addEmojiSuggestions (MessagesController context, ArrayList<TGStickerObj> stickers) {
+    if (emojiSuggestionsWrap != null && stickers != null && !stickers.isEmpty()) {
+      emojiSuggestionsWrap.addStickers(context, stickers);
+    }
+  }
+
+  public void setEmojiSuggestionsVisible (boolean visible) {
+    if (emojiSuggestionsWrap != null) {
+      if (visible) {
+        emojiSuggestionsWrap.updatePosition(false);
+      }
+      emojiSuggestionsWrap.setStickersVisible(visible);
+    }
+  }
+
+  public boolean hasEmojiSuggestions () {
+    return emojiSuggestionsWrap != null && emojiSuggestionsWrap.hasStickers();
+  }
+
+  public boolean isEmojiSuggestionsVisible () {
+    return emojiSuggestionsWrap != null && emojiSuggestionsWrap.isStickersVisible();
+  }
+
+  @Nullable
+  public StickersSuggestionsLayout getEmojiSuggestionsView () {
+    return emojiSuggestionsWrap;
   }
 
   // etc
@@ -2098,10 +2464,13 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
         return;
       }
     }
-    hideContextualPopups(false);
+    if (window.needDismissOtherPopUps()) {
+      hideContextualPopups(false);
+    }
     windows.add(window);
     checkDisallowScreenshots();
     window.showBoundWindow(rootView);
+    notifyBackPressAvailabilityChanged();
   }
 
   public boolean hasAnimatingWindow () {
@@ -2126,6 +2495,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     if (!windows.remove(window)) {
       completelyForgetThisWindow(window);
     }
+    notifyBackPressAvailabilityChanged();
     checkDisallowScreenshots();
   }
 
@@ -2134,18 +2504,20 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     return popupLayout != null ? popupLayout.getBoundController() : null;
   }
 
-  public boolean dismissLastOpenWindow (boolean byKeyPress, boolean byBackPress, boolean byHeaderBackPress) {
+  public boolean dismissLastOpenWindow (boolean byKeyPress, boolean byBackPress, boolean byHeaderBackPress, boolean commit) {
     final int size = windows.size();
     for (int i = size - 1; i >= 0; i--) {
       PopupLayout window = windows.get(i);
       if (window.isBoundWindowShowing()) {
         if (byKeyPress && window.canHideKeyboard()) {
-          return window.hideSoftwareKeyboard();
+          return commit || window.hideSoftwareKeyboard();
         }
-        if (byBackPress && window.onBackPressed(byHeaderBackPress)) {
+        if (byBackPress && window.performOnBackPressed(byHeaderBackPress, commit)) {
           return true;
         }
-        window.hideWindow(true);
+        if (commit) {
+          window.hideWindow(true);
+        }
         return true;
       }
     }
@@ -2163,6 +2535,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       }
       forgottenWindows.put(i, window);
     }
+    notifyBackPressAvailabilityChanged();
   }
 
   private int indexOfForgottenWindow (PopupLayout window) {
@@ -2187,6 +2560,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       }
       forgottenWindows.remove(oldIndex);
       checkDisallowScreenshots();
+      notifyBackPressAvailabilityChanged();
     }
   }
 
@@ -2374,6 +2748,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     if (grantResults.length == 0) {
       return;
     }
+    boolean fallback = false;
     switch (requestCode) {
       case REQUEST_CUSTOM_NEW:
       case REQUEST_USE_MIC_CALL: {
@@ -2440,20 +2815,25 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
           }
         }
         // else act with other cases
+        fallback = true;
+        break;
       }
 
       default: {
-        View currentPopup = getCurrentPopupWindow();
-        if (currentPopup != null && currentPopup instanceof ActivityListener) {
-          ((ActivityListener) currentPopup).onActivityPermissionResult(requestCode, grantResults[0] == PackageManager.PERMISSION_GRANTED);
-        } else {
-          ViewController<?> controller = navigation.getCurrentStackItem();
-          if (controller != null) {
-            controller.onRequestPermissionResult(requestCode, grantResults[0] == PackageManager.PERMISSION_GRANTED);
-          }
-        }
-
+        fallback = true;
         break;
+      }
+    }
+
+    if (fallback) {
+      View currentPopup = getCurrentPopupWindow();
+      if (currentPopup != null && currentPopup instanceof ActivityListener) {
+        ((ActivityListener) currentPopup).onActivityPermissionResult(requestCode, grantResults[0] == PackageManager.PERMISSION_GRANTED);
+      } else {
+        ViewController<?> controller = navigation.getCurrentStackItem();
+        if (controller != null) {
+          controller.onRequestPermissionResult(requestCode, grantResults[0] == PackageManager.PERMISSION_GRANTED);
+        }
       }
     }
   }
@@ -2465,6 +2845,9 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     }
     boolean disallowScreenshots = false;
     disallowScreenshots = (navigation.shouldDisallowScreenshots() || Passcode.instance().shouldDisallowScreenshots());
+    if (tdlib != null && tdlib.messageViewer().needRestrictScreenshots()) {
+      disallowScreenshots = true;
+    }
     for (PopupLayout popupLayout : windows) {
       boolean shouldDisallowScreenshots = popupLayout.shouldDisallowScreenshots();
       popupLayout.checkWindowFlags();
@@ -2527,6 +2910,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     switch (id) {
       case ANIMATOR_ID_CAMERA: {
         processCameraAnimationFinish(finalFactor);
+        notifyBackPressAvailabilityChanged();
         break;
       }
     }
@@ -2547,7 +2931,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     return !(
       // getCurrentPopupWindow() != null ||
       (cameraAnimator != null && cameraAnimator.isAnimating()) ||
-      activityState != UI.STATE_RESUMED ||
+      activityState != UI.State.RESUMED ||
       recordAudioVideoController.isOpen() ||
       isCameraOwnershipTaken ||
       isNavigationBusy()
@@ -2730,41 +3114,53 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     }
   }
 
-  private boolean cameraOrientationBlocked;
-  private int savedAnimation;
+  private int savedRotationAnimation = -1;
 
-  private void checkCameraOrientationBlocked () {
-    boolean isBlocked = ((cameraFactor < 1f && isCameraOpen) || (cameraFactor != 0f && cameraFactor != 1f) || isCameraDragging || (cameraFactor == 1f && camera != null && camera.supportsCustomRotations())) && !(camera != null && camera.hasOpenEditor());
-    if (cameraOrientationBlocked != isBlocked) {
-      cameraOrientationBlocked = isBlocked;
-      setIsOrientationBlocked(isBlocked);
-    }
+  private void requestWindowRotationAnimation (int requestedAnimation) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
-      boolean needCrossFadeAnimation = cameraFactor == 1f;
-      int desiredRotation;
       Window window = getWindow();
       WindowManager.LayoutParams attrs = window.getAttributes();
-      if (needCrossFadeAnimation) {
-        if (attrs.rotationAnimation != WindowManager.LayoutParams.ROTATION_ANIMATION_JUMPCUT) {
-          savedAnimation = attrs.rotationAnimation;
-        }
-        desiredRotation = WindowManager.LayoutParams.ROTATION_ANIMATION_JUMPCUT;
+      int pendingRotationAnimation;
+      if (requestedAnimation == -1) {
+        pendingRotationAnimation = savedRotationAnimation;
+        savedRotationAnimation = -1;
       } else {
-        desiredRotation = savedAnimation;
+        pendingRotationAnimation = requestedAnimation;
+        if (savedRotationAnimation == -1) {
+          savedRotationAnimation = attrs.rotationAnimation;
+        }
       }
-      if (attrs.rotationAnimation != desiredRotation) {
-        attrs.rotationAnimation = desiredRotation;
+      if (pendingRotationAnimation != -1 && attrs.rotationAnimation != pendingRotationAnimation) {
+        attrs.rotationAnimation = pendingRotationAnimation;
         window.setAttributes(attrs);
       }
     }
-    /*if (isBlocked && camera != null && !camera.supportsCustomRotations()) {
-      lockOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
-    }*/
+  }
+
+  private void checkCameraOrientationBlocked () {
+    boolean isBlocked = ((cameraFactor < 1f && isCameraOpen) || (cameraFactor != 0f && cameraFactor != 1f) || isCameraDragging || (cameraFactor == 1f && camera != null && camera.supportsCustomRotations())) && !(camera != null && camera.hasOpenEditor());
+    setOrientationLockFlagEnabled(ORIENTATION_FLAG_CAMERA, isBlocked);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+      boolean needCrossFadeAnimation = cameraFactor == 1f;
+      int rotationAnimation;
+      if (needCrossFadeAnimation) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && false) {
+          // looks bad on AOSP (Pixel Fold), and exactly like JUMPCUT on Samsung devices
+          rotationAnimation = WindowManager.LayoutParams.ROTATION_ANIMATION_SEAMLESS;
+        } else {
+          rotationAnimation = WindowManager.LayoutParams.ROTATION_ANIMATION_JUMPCUT;
+        }
+      } else {
+        rotationAnimation = -1;
+      }
+      requestWindowRotationAnimation(rotationAnimation);
+    }
   }
 
   private void setCameraOpen (ViewController.CameraOpenOptions options, boolean isOpen, boolean byDrag) {
     if (this.isCameraOpen != isOpen) {
       this.isCameraOpen = isOpen;
+      notifyBackPressAvailabilityChanged();
       if (isOpen) {
         this.cameraOptions = options;
       }
@@ -2832,11 +3228,14 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   }
 
   private void processCameraAnimationFinish (final float toFactor) {
-    if (toFactor == 1f && isCameraOpen) {
-      onCameraCompletelyOpen();
-    } else if (toFactor == 0f && !isCameraOpen) {
-      onCameraCompletelyClosed();
-    }
+    UI.post(() -> {
+      if (toFactor == 1f && isCameraOpen) {
+        onCameraCompletelyOpen();
+      } else if (toFactor == 0f && !isCameraOpen) {
+        onCameraCompletelyClosed();
+      }
+      notifyBackPressAvailabilityChanged();
+    });
   }
 
   private void replaceCameraWithContent (final boolean launchAnimation) { // called before closing, when camera has been completely open
@@ -2870,9 +3269,14 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     hideSoftwareKeyboard();
   }
 
-  public boolean dispatchCameraMargins (View view, int left, int top, int right, int bottom) {
+  public boolean dispatchCameraMargins (View view, Rect legacyInsets, Rect insets, Rect insetsWithoutIme) {
     if (view != null && camera != null && camera.getWrapUnchecked() == view) {
-      camera.setControlMargins(left, top, right, bottom);
+      camera.setControlMargins(
+        insetsWithoutIme.left,
+        insetsWithoutIme.top,
+        insetsWithoutIme.right,
+        insetsWithoutIme.bottom
+      );
       return true;
     }
     return false;
@@ -2954,15 +3358,17 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   }
 
   private void initializeCamera (ViewController.CameraOpenOptions options) {
-    if (camera == null) {
+    final boolean needCreateCamera = camera == null;
+    if (needCreateCamera) {
       camera = new CameraController(this);
-      camera.setMode(options.mode, options.readyListener);
-      camera.setQrListener(options.qrCodeListener, options.qrModeSubtitle, options.qrModeDebug);
+    }
+    camera.setMode(options.mode, options.readyListener);
+    camera.setAvatarPickerMode(options.avatarPickerMode);
+    camera.setQrListener(options.qrCodeListener, options.qrModeSubtitle, options.qrModeDebug);
+    camera.setMediaEditorDelegates(options.delegate, options.selectDelegate, options.sendDelegate);
+    if (needCreateCamera) {
       camera.getValue(); // Ensure view creation
       addActivityListener(camera);
-    } else {
-      camera.setMode(options.mode, options.readyListener);
-      camera.setQrListener(options.qrCodeListener, options.qrModeSubtitle, options.qrModeDebug);
     }
     hideContextualPopups(false);
     closeAllMedia(true);
@@ -3057,6 +3463,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     }
   }
 
+  @SuppressWarnings("deprecation")
   private void updateNavigationBarColor () {
     if (Config.USE_CUSTOM_NAVIGATION_COLOR) {
       int color;
@@ -3078,20 +3485,13 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
       }
       float passcodeFactor = isPasscodeShowing ? 1f : dismissingPasscodeController != null ? dismissingPasscodeController.getValue().getAlpha() : 0f;
       if (passcodeFactor != 0f) {
-        color = ColorUtils.fromToArgb(color, Theme.getColor(R.id.theme_color_passcode), passcodeFactor);
+        color = ColorUtils.fromToArgb(color, Theme.getColor(ColorId.passcode), passcodeFactor);
         isLight = isLight && passcodeFactor < .5f;
       }
-      getWindow().setNavigationBarColor(color);
+      UI.setNavigationBarColor(getWindow(), color, isGestureNavigationEnabled);
       if (this.isWindowLight != isLight) {
         this.isWindowLight = isLight;
-        int visibility = lastWindowVisibility;
-        if (isLight) {
-          visibility |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-        }
-        if (Theme.needLightStatusBar()) {
-          visibility |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-        }
-        getWindow().getDecorView().setSystemUiVisibility(visibility);
+        UI.setLightSystemBars(getWindow(), isLight, Theme.needLightStatusBar(), lastWindowVisibility, true);
       }
     }
   }
@@ -3139,7 +3539,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   }
 
   private void checkAutoNightMode () {
-    setRegisterLightSensor(activityState == UI.STATE_RESUMED && Settings.instance().getNightMode() == Settings.NIGHT_MODE_AUTO);
+    setRegisterLightSensor(activityState == UI.State.RESUMED && Settings.instance().getNightMode() == Settings.NIGHT_MODE_AUTO);
     setSystemNightMode(getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK);
   }
 
@@ -3202,7 +3602,7 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   }
 
   private boolean needsLightSensorChanges () {
-    return (lightSensorRegistered && lightSensor != null && activityState == UI.STATE_RESUMED && Settings.instance().getNightMode() == Settings.NIGHT_MODE_AUTO);
+    return (lightSensorRegistered && lightSensor != null && activityState == UI.State.RESUMED && Settings.instance().getNightMode() == Settings.NIGHT_MODE_AUTO);
   }
 
   @Override
@@ -3268,10 +3668,10 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   }
 
   @Override
-  public void onThemePropertyChanged (int themeId, int propertyId, float value, boolean isDefault) {
+  public void onThemePropertyChanged (int themeId, @PropertyId int propertyId, float value, boolean isDefault) {
     switch (propertyId) {
-      case ThemeProperty.DARK:
-      case ThemeProperty.LIGHT_STATUS_BAR:
+      case PropertyId.DARK:
+      case PropertyId.LIGHT_STATUS_BAR:
         updateWindowDecorSystemUiVisibility();
         break;
     }
@@ -3356,16 +3756,21 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
   public static final int ORIENTATION_FLAG_RECORDING = 1 << 5;
   public static final int ORIENTATION_FLAG_CROP = 1 << 6;
   public static final int ORIENTATION_FLAG_PROXIMITY = 1 << 7;
+  public static final int ORIENTATION_FLAG_CAMERA = 1 << 8;
 
   private int orientationFlags;
 
-  public void setOrientationLockFlagEnabled (int flag, boolean enabled) {
+  private void setOrientationLockFlags (int flags) {
     boolean oldLocked = this.orientationFlags != 0;
-    this.orientationFlags = BitwiseUtils.setFlag(this.orientationFlags, flag, enabled);
+    this.orientationFlags = flags;
     boolean newLocked =  this.orientationFlags != 0;
     if (oldLocked != newLocked) {
       setIsOrientationBlocked(newLocked);
     }
+  }
+
+  public void setOrientationLockFlagEnabled (int flag, boolean enabled) {
+    setOrientationLockFlags(BitwiseUtils.setFlag(this.orientationFlags, flag, enabled));
   }
 
   // Language
@@ -3467,5 +3872,18 @@ public abstract class BaseActivity extends ComponentActivity implements View.OnT
     konfettiView.start(
       KonfettiBuilder.buildKonfettiParty(pivotX, pivotY)
     );
+  }
+
+  private boolean activityReady;
+
+  public void markActivityReady () {
+    if (!activityReady) {
+      activityReady = true;
+      try {
+        reportFullyDrawn();
+      } catch (Throwable t) {
+        Log.i("Unable to call reportFullyDrawn()", t);
+      }
+    }
   }
 }

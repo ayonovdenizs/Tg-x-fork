@@ -30,10 +30,11 @@ import android.widget.Toast;
 import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.StringRes;
 import androidx.core.os.CancellationSignal;
 import androidx.core.view.ViewCompat;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.core.Lang;
@@ -46,10 +47,12 @@ import org.thunderdog.challegram.loader.gif.GifFile;
 import org.thunderdog.challegram.loader.gif.GifReceiver;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibUi;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.theme.ThemeDelegate;
 import org.thunderdog.challegram.tool.Drawables;
 import org.thunderdog.challegram.tool.Paints;
+import org.thunderdog.challegram.tool.PorterDuffPaint;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
 import org.thunderdog.challegram.unsorted.Settings;
@@ -120,27 +123,27 @@ public class TooltipOverlayView extends ViewGroup {
       return colorTheme().getColor(tooltipColorId());
     }
     default int tooltipColorId () {
-      return R.id.theme_color_tooltip;
+      return ColorId.tooltip;
     }
     default int tooltipOutlineColor () {
       return colorTheme().getColor(tooltipOutlineColorId());
     }
     default int tooltipOutlineColorId () {
-      return R.id.theme_color_tooltip_outline;
+      return ColorId.tooltip_outline;
     }
     @Override
     default int defaultTextColorId () {
-      return R.id.theme_color_tooltip_text;
+      return ColorId.tooltip_text;
     }
 
     @Override
     default int clickableTextColorId (boolean isPressed) {
-      return R.id.theme_color_tooltip_textLink;
+      return ColorId.tooltip_textLink;
     }
 
     @Override
     default int pressedBackgroundColorId () {
-      return R.id.theme_color_tooltip_textLinkPressHighlight;
+      return ColorId.tooltip_textLinkPressHighlight;
     }
   }
 
@@ -268,7 +271,7 @@ public class TooltipOverlayView extends ViewGroup {
       this.listener = listener;
       final String currentLang = message.getCurrentTranslatedLanguage();
       originalLanguage = Lang.getLanguageName(message.getOriginalMessageLanguage(), Lang.getString(R.string.TranslateLangUnknown));
-      translatedLanguage = Lang.getLanguageName(message.getCurrentTranslatedLanguage(), currentLang != null ? currentLang: originalLanguage);
+      translatedLanguage = Lang.getLanguageName(message.getCurrentTranslatedLanguage(), currentLang != null ? currentLang : originalLanguage);
       arrowX = (int) U.measureText(originalLanguage, Paints.getRegularTextPaint(14));
       width = (int)(arrowX + U.measureText(translatedLanguage, Paints.getRegularTextPaint(14)) + Screen.dp(18));
       arrow = Drawables.get(R.drawable.round_keyboard_arrow_right_16);
@@ -309,9 +312,9 @@ public class TooltipOverlayView extends ViewGroup {
 
     @Override
     public void draw (Canvas c, ColorProvider colorProvider, int left, int top, int right, int bottom, float alpha, ComplexReceiver iconReceiver) {
-      c.drawText(originalLanguage, left, top + Screen.dp(14), Paints.getRegularTextPaint(14, Theme.getColor(R.id.theme_color_tooltip_text)));
-      c.drawText(translatedLanguage, left + arrowX + Screen.dp(18), top + Screen.dp(14), Paints.getRegularTextPaint(14, Theme.getColor(R.id.theme_color_tooltip_textLink)));
-      Drawables.draw(c, arrow, left + arrowX + Screen.dp(1), top, Paints.getPorterDuffPaint(Theme.getColor(R.id.theme_color_tooltip_text)));
+      c.drawText(originalLanguage, left, top + Screen.dp(14), Paints.getRegularTextPaint(14, Theme.getColor(ColorId.tooltip_text)));
+      c.drawText(translatedLanguage, left + arrowX + Screen.dp(18), top + Screen.dp(14), Paints.getRegularTextPaint(14, Theme.getColor(ColorId.tooltip_textLink)));
+      Drawables.draw(c, arrow, left + arrowX + Screen.dp(1), top, PorterDuffPaint.get(ColorId.tooltip_text));
     }
   }
 
@@ -855,6 +858,11 @@ public class TooltipOverlayView extends ViewGroup {
         locationProvider.getTargetBounds(view, innerRect);
       } else if (view instanceof LocationProvider) {
         ((LocationProvider) view).getTargetBounds(view, innerRect);
+      } else {
+        Object tag = view.getTag(R.id.tag_tooltip_location_provider);
+        if (tag instanceof LocationProvider) {
+          ((LocationProvider) tag).getTargetBounds(view, innerRect);
+        }
       }
 
       boolean hasIcon = hasIcon();
@@ -927,6 +935,7 @@ public class TooltipOverlayView extends ViewGroup {
       return false;
     }
 
+    @SuppressWarnings("deprecation")
     public void draw (Canvas c) {
       float factor = this.isVisible.getFloatValue();
       float alpha = MathUtils.clamp(factor);
@@ -1046,27 +1055,27 @@ public class TooltipOverlayView extends ViewGroup {
 
       @Override
       public int tooltipColorId () {
-        return R.id.theme_color_filling;
+        return ColorId.filling;
       }
 
       @Override
       public int tooltipOutlineColorId () {
-        return R.id.theme_color_separator;
+        return ColorId.separator;
       }
 
       @Override
       public int defaultTextColorId () {
-        return R.id.theme_color_text;
+        return ColorId.text;
       }
 
       @Override
       public int clickableTextColorId (boolean isPressed) {
-        return R.id.theme_color_textLink;
+        return ColorId.textLink;
       }
 
       @Override
       public int pressedBackgroundColorId () {
-        return R.id.theme_color_textLinkPressHighlight;
+        return ColorId.textLinkPressHighlight;
       }
     };
   }
@@ -1275,11 +1284,12 @@ public class TooltipOverlayView extends ViewGroup {
       return this;
     }
 
-    public void show (ViewController<?> controller, Tdlib tdlib, int iconRes, CharSequence text) {
+    public TooltipInfo show (ViewController<?> controller, Tdlib tdlib, int iconRes, CharSequence text) {
       if (originalView == null && viewProvider == null && locationProvider == null) {
         UI.showToast(text, Toast.LENGTH_SHORT);
+        return null;
       } else {
-        icon(iconRes).needBlink(iconRes == R.drawable.baseline_info_24 || iconRes == R.drawable.baseline_error_24).controller(controller != null ? controller.getParentOrSelf() : null).show(tdlib, text).hideDelayed(3500, TimeUnit.MILLISECONDS);
+        return icon(iconRes).needBlink(iconRes == R.drawable.baseline_info_24 || iconRes == R.drawable.baseline_error_24).controller(controller != null ? controller.getParentOrSelf() : null).show(tdlib, text).hideDelayed(3500, TimeUnit.MILLISECONDS);
       }
     }
 
@@ -1287,7 +1297,7 @@ public class TooltipOverlayView extends ViewGroup {
       return show(new TooltipContentViewText(parentView, tdlib, text, 0, urlOpenParameters));
     }
 
-    public TooltipInfo show (Tdlib tdlib, int stringRes) {
+    public TooltipInfo show (Tdlib tdlib, @StringRes int stringRes) {
       return show(tdlib, new TdApi.FormattedText(Lang.getString(stringRes), null));
     }
 
@@ -1332,12 +1342,13 @@ public class TooltipOverlayView extends ViewGroup {
       activePopups.get(i).hide(force);
     }
   }
-
-  public boolean onBackPressed () {
+  public boolean handleOnBackPress (boolean commit) {
     for (int i = activePopups.size() - 1; i >= 0; i--) {
       TooltipInfo info = activePopups.get(i);
       boolean handled = info.wontHideDelayed();
-      info.hide(true);
+      if (commit) {
+        info.hide(true);
+      }
       if (handled || BitwiseUtils.hasFlag(info.flags, FLAG_HANDLE_BACK_PRESS)) {
         return true;
       }
@@ -1373,10 +1384,13 @@ public class TooltipOverlayView extends ViewGroup {
   private final List<TooltipInfo> activePopups = new ArrayList<>();
 
   private void removeHint (TooltipInfo tooltipInfo) {
-    if (activePopups.remove(tooltipInfo) && activePopups.isEmpty()) {
-      setWillNotDraw(true);
-      if (availabilityListener != null) {
-        availabilityListener.onAvailabilityChanged(this, false);
+    if (activePopups.remove(tooltipInfo)) {
+      UI.getContext(getContext()).notifyBackPressAvailabilityChanged();
+      if (activePopups.isEmpty()) {
+        setWillNotDraw(true);
+        if (availabilityListener != null) {
+          availabilityListener.onAvailabilityChanged(this, false);
+        }
       }
     }
   }
@@ -1393,6 +1407,7 @@ public class TooltipOverlayView extends ViewGroup {
       info.layout(getMeasuredWidth(), getMeasuredHeight());
     }
     this.activePopups.add(info);
+    UI.getContext(getContext()).notifyBackPressAvailabilityChanged();
     if (this.activePopups.size() == 1) {
       setWillNotDraw(false);
       addOnAttachStateChangeListener(new OnAttachStateChangeListener() {

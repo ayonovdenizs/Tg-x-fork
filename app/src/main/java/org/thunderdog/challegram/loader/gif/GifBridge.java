@@ -21,9 +21,8 @@ import androidx.annotation.Keep;
 import androidx.annotation.UiThread;
 import androidx.collection.ArraySet;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
-import org.thunderdog.challegram.N;
 import org.thunderdog.challegram.telegram.Tdlib;
 
 import java.util.ArrayList;
@@ -32,7 +31,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 
 import me.vkryl.core.lambda.RunnableData;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
 public class GifBridge {
   private static GifBridge instance;
@@ -55,7 +54,6 @@ public class GifBridge {
   private final GifThread[] lottieThreads;
 
   private GifBridge () {
-    N.gifInit();
     thread = new GifBridgeThread();
     // TODO: rework to executors
     threads = new GifThread[THREAD_POOL_SIZE];
@@ -66,7 +64,7 @@ public class GifBridge {
     for (int i = 0; i < emojiThreads.length; i++) {
       emojiThreads[i] = new GifThread(i);
     }
-    lottieThreads = new GifThread[3];
+    lottieThreads = new GifThread[5];
     for (int i = 0; i < lottieThreads.length; i++) {
       lottieThreads[i] = new GifThread(i);
     }
@@ -74,6 +72,9 @@ public class GifBridge {
 
   private GifThread obtainFrameThread (GifFile file) {
     if (file.getGifType() == GifFile.TYPE_TG_LOTTIE) {
+      if (file.isHighPriorityForDecode()) {
+        return lottieThreads[lottieThreads.length - 1];
+      }
       return lottieThreads[file.getOptimizationMode()];
     } else {
       // TODO rework to executors

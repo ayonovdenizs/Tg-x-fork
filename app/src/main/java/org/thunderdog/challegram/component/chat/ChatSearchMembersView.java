@@ -14,15 +14,16 @@ import androidx.annotation.Nullable;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.TdApi;
-import org.thunderdog.challegram.Log;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.component.attach.CustomItemAnimator;
 import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.data.DoubleTextWrapper;
+import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibCache;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.UI;
@@ -43,7 +44,7 @@ import me.vkryl.android.widget.FrameLayoutFix;
 import me.vkryl.core.ArrayUtils;
 import me.vkryl.core.StringUtils;
 import me.vkryl.core.lambda.CancellableRunnable;
-import me.vkryl.td.Td;
+import tgx.td.Td;
 
 public class ChatSearchMembersView extends FrameLayout implements TdlibCache.BasicGroupDataChangeListener {
   private final MessagesController controller;
@@ -104,7 +105,7 @@ public class ChatSearchMembersView extends FrameLayout implements TdlibCache.Bas
         }
       }
     });
-    controller.addThemeBackgroundColorListener(usersRecyclerView, R.id.theme_color_background);
+    controller.addThemeBackgroundColorListener(usersRecyclerView, ColorId.background);
     Views.setScrollBarPosition(usersRecyclerView);
     addView(usersRecyclerView);
 
@@ -115,13 +116,13 @@ public class ChatSearchMembersView extends FrameLayout implements TdlibCache.Bas
         return true;
       }
     };
-    ViewSupport.setThemedBackground(footerView, R.id.theme_color_filling, controller);
+    ViewSupport.setThemedBackground(footerView, ColorId.filling, controller);
     footerView.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, Screen.dp(56f), Gravity.BOTTOM));
     addView(footerView);
 
     for (int i = 0; i < 2; i++) {
       TextView button = new NoScrollTextView(context);
-      int colorId = R.id.theme_color_textNeutral;
+      int colorId = ColorId.textNeutral;
       button.setTextColor(Theme.getColor(colorId));
       controller.addThemeTextColorListener(button, colorId);
       button.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16f);
@@ -132,11 +133,11 @@ public class ChatSearchMembersView extends FrameLayout implements TdlibCache.Bas
       CharSequence text;
       if (i == 0) {
         button.setId(R.id.btn_cancel);
-        button.setText(text = Lang.getString(R.string.Cancel).toUpperCase());
+        button.setText(text = Lang.uppercase(Lang.getString(R.string.Cancel)));
         button.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, Screen.dp(55f), (Lang.rtl() ? Gravity.RIGHT : Gravity.LEFT) | Gravity.BOTTOM));
       } else {
         button.setId(R.id.btn_clear);
-        button.setText(text = Lang.getString(R.string.Clear).toUpperCase());
+        button.setText(text = Lang.uppercase(Lang.getString(R.string.Clear)));
         button.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.WRAP_CONTENT, Screen.dp(55f), (Lang.rtl() ? Gravity.LEFT : Gravity.RIGHT) | Gravity.BOTTOM));
       }
       Views.updateMediumTypeface(button, text);
@@ -182,6 +183,11 @@ public class ChatSearchMembersView extends FrameLayout implements TdlibCache.Bas
 
   private void loadMembers (final String query, boolean isStart) {
     if (tdlib.isChannel(chatId)) return;
+
+    TdApi.Supergroup supergroup = tdlib.chatToSupergroup(chatId);
+    if (supergroup != null && !TD.canAccessMembers(supergroup)) {
+      return;
+    }
 
     boolean queryWasChanged = !StringUtils.equalsOrBothEmpty(query, currentQuery);
     if (this.isLoading && !queryWasChanged) {
@@ -265,8 +271,7 @@ public class ChatSearchMembersView extends FrameLayout implements TdlibCache.Bas
         break;
       }
       default: {
-        Log.unexpectedTdlibResponse(object, TdApi.GetChats.class, TdApi.Chats.class);
-        return;
+        throw new UnsupportedOperationException(object.toString());
       }
     }
 
@@ -475,7 +480,7 @@ public class ChatSearchMembersView extends FrameLayout implements TdlibCache.Bas
         return DoubleTextWrapper.valueOf(tdlib, (TdApi.ChatMember) object, false, true);
       }
       case TdApi.User.CONSTRUCTOR: {
-        return new DoubleTextWrapper(tdlib, ((TdApi.User) object).id, true);
+        return new DoubleTextWrapper(tdlib, ((TdApi.User) object).id, true, DoubleTextWrapper.SubtitleOption.SHOW_ACCESS_TO_MESSAGE_PRIVACY);
       }
     }
     return null;
@@ -513,20 +518,16 @@ public class ChatSearchMembersView extends FrameLayout implements TdlibCache.Bas
   }
 
   private void onClickControlButtons (View v) {
-    switch (v.getId()) {
-      case R.id.btn_cancel: {
+    final int viewId = v.getId();
+    if (viewId == R.id.btn_cancel) {
+      if (delegate != null) {
+        delegate.onClose();
+      }
+    } else if (viewId == R.id.btn_clear) {
+      if (!setMessageSender(null, false)) {
         if (delegate != null) {
           delegate.onClose();
         }
-        break;
-      }
-      case R.id.btn_clear: {
-        if (!setMessageSender(null, false)) {
-          if (delegate != null) {
-            delegate.onClose();
-          }
-        }
-        break;
       }
     }
   }

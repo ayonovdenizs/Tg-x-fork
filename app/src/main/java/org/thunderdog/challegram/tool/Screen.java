@@ -15,7 +15,9 @@
 package org.thunderdog.challegram.tool;
 
 import android.content.Context;
+import android.content.res.Resources;
 import android.graphics.Point;
+import android.graphics.Rect;
 import android.os.Build;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
@@ -207,40 +209,29 @@ public class Screen {
 
   private static Point point;
 
-  /*public static int getDisplayWidth () {
-    if (UI.getUiContext() == null)
-      return 0;
-
-    Display display;
-
-    display = UI.getUiContext().getWindowManager().getDefaultDisplay();
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB_MR2) {
-      if (point == null)
-        point = new Point();
-      display.getSize(point);
-      return point.x;
-    } else {
-      //noinspection deprecation
-      return display.getWidth();
-    }
-  }*/
-
+  @SuppressWarnings("deprecation")
   public static int getDisplayHeight () {
     final BaseActivity context = UI.getUiContext();
     if (context == null) {
       return 0;
     }
+    WindowManager windowManager = context.getWindowManager();
 
-    Display display = context.getWindowManager().getDefaultDisplay();
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      try {
+        android.view.WindowMetrics windowMetrics = windowManager.getCurrentWindowMetrics();
+        Rect bounds = windowMetrics.getBounds();
+        return bounds.height();
+      } catch (Throwable ignored) { }
+    }
 
+    Display display = windowManager.getDefaultDisplay();
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB_MR2) {
       if (point == null)
         point = new Point();
       display.getSize(point);
       return point.y;
     } else {
-      //noinspection deprecation
       return display.getHeight();
     }
   }
@@ -251,6 +242,8 @@ public class Screen {
 
   private static int navigationBarHeight;
 
+  @Deprecated
+  @SuppressWarnings({"DiscouragedApi", "InternalInsetResource"})
   public static int getNavigationBarHeight () {
     if (navigationBarHeight != 0) {
       return navigationBarHeight;
@@ -264,6 +257,8 @@ public class Screen {
 
   private static int navigationBarFrameHeight;
 
+  @Deprecated
+  @SuppressWarnings("DiscouragedApi")
   public static int getNavigationBarFrameHeight () {
     if (navigationBarFrameHeight != 0) {
       return navigationBarFrameHeight;
@@ -275,23 +270,26 @@ public class Screen {
     return navigationBarFrameHeight;
   }
 
+  @Deprecated
   public static int getNavigationBarFrameDifference () {
     return Screen.getNavigationBarFrameHeight() - Screen.getNavigationBarHeight();
   }
 
+  @Deprecated
   public static boolean needsKeyboardPadding (BaseActivity context) {
-    return context.isKeyboardVisible() && isGesturalNavigationEnabled() && getNavigationBarHeight() > 0;
+    return context.isKeyboardVisible() && isGesturalNavigationEnabled(UI.getResources()) && getNavigationBarHeight() > 0;
   }
 
-  public static boolean isGesturalNavigationEnabled () {
+  @SuppressWarnings("DiscouragedApi")
+  public static boolean isGesturalNavigationEnabled (Resources resources) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
       return false;
     }
 
     try {
-      int resourceId = UI.getResources().getIdentifier("config_navBarInteractionMode", "integer", "android");
+      int resourceId = resources.getIdentifier("config_navBarInteractionMode", "integer", "android");
       if (resourceId > 0) {
-        return UI.getResources().getInteger(resourceId) == 2; // 2 is gestural by AOSP docs, SO says some Samsung devices can have values like 17694897, needs further investigation
+        return resources.getInteger(resourceId) == 2; // 2 is gestural by AOSP docs, SO says some Samsung devices can have values like 17694897, needs further investigation
       }
     } catch (android.content.res.Resources.NotFoundException ignored) {}
 
@@ -328,6 +326,8 @@ public class Screen {
       listeners.remove(listener);
   }
 
+  @SuppressWarnings({"DiscouragedApi", "InternalInsetResource"})
+  @Deprecated
   public static int getStatusBarHeight () {
     if (__statusBarHeight != null) {
       return __statusBarHeight;

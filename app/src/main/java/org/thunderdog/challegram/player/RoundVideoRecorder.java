@@ -14,7 +14,6 @@
  */
 package org.thunderdog.challegram.player;
 
-import android.annotation.TargetApi;
 import android.graphics.SurfaceTexture;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
@@ -33,6 +32,8 @@ import android.os.Looper;
 import android.os.Message;
 import android.os.SystemClock;
 import android.view.Surface;
+
+import androidx.annotation.RequiresApi;
 
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.U;
@@ -61,7 +62,7 @@ import javax.microedition.khronos.opengles.GL;
 
 import me.vkryl.core.BitwiseUtils;
 
-@TargetApi(Build.VERSION_CODES.JELLY_BEAN_MR2)
+@RequiresApi(Build.VERSION_CODES.JELLY_BEAN_MR2)
 public class RoundVideoRecorder {
   public interface Delegate {
     /**
@@ -152,7 +153,7 @@ public class RoundVideoRecorder {
   private volatile boolean isSwitchingToNewCamera;
 
   public boolean canSwitchToNewCamera () {
-    return !isSwitchingToNewCamera && initied && eglSurface != null;
+    return !isSwitchingToNewCamera && initied; // && eglSurface != null;
   }
 
   public void switchToNewCamera () {
@@ -747,7 +748,7 @@ public class RoundVideoRecorder {
     }
   }
 
-  private boolean doCapture () {
+  public boolean isCapturing () {
     return isCapturing || finishCapture || recording;
   }
 
@@ -764,7 +765,7 @@ public class RoundVideoRecorder {
     }
     cameraSurface.updateTexImage();
 
-    if (doCapture()) {
+    if (isCapturing()) {
       if (!recording) {
         int resolution;
         int bitrate;
@@ -835,13 +836,13 @@ public class RoundVideoRecorder {
     private WeakReference<VideoRecorder> mWeakEncoder;
 
     public EncoderHandler(VideoRecorder encoder) {
+      super(Looper.myLooper());
       mWeakEncoder = new WeakReference<>(encoder);
     }
 
     @Override
     public void handleMessage(Message inputMessage) {
       int what = inputMessage.what;
-      Object obj = inputMessage.obj;
 
       VideoRecorder encoder = mWeakEncoder.get();
       if (encoder == null) {
@@ -1095,7 +1096,7 @@ public class RoundVideoRecorder {
           int inputBufferIndex = audioEncoder.dequeueInputBuffer(0);
           if (inputBufferIndex >= 0) {
             ByteBuffer inputBuffer;
-            if (Build.VERSION.SDK_INT >= 21) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
               inputBuffer = audioEncoder.getInputBuffer(inputBufferIndex);
             } else {
               ByteBuffer[] inputBuffers = audioEncoder.getInputBuffers();
@@ -1446,7 +1447,7 @@ public class RoundVideoRecorder {
     }
 
     private void didWriteData(File file, boolean last) {
-      if (videoConvertFirstWrite) {
+      if (videoConvertFirstWrite && !last) {
         videoConvertFirstWrite = false;
       } else if (last) {
         dispatchVideoRecordFinished(workingKey, file.length(), SystemClock.uptimeMillis() - recordStartTime, TimeUnit.MILLISECONDS);

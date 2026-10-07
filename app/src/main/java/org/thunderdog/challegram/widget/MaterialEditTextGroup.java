@@ -37,14 +37,14 @@ import org.thunderdog.challegram.core.Lang;
 import org.thunderdog.challegram.navigation.TooltipOverlayView;
 import org.thunderdog.challegram.navigation.ViewController;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
-import org.thunderdog.challegram.theme.ThemeColorId;
 import org.thunderdog.challegram.tool.Fonts;
 import org.thunderdog.challegram.tool.Screen;
 import org.thunderdog.challegram.tool.Strings;
 import org.thunderdog.challegram.tool.UI;
-import org.thunderdog.challegram.tool.Views;
 import org.thunderdog.challegram.util.HeightChangeListener;
+import org.thunderdog.challegram.v.EditText;
 
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.animator.BoolAnimator;
@@ -53,7 +53,7 @@ import me.vkryl.android.widget.FrameLayoutFix;
 import me.vkryl.core.ColorUtils;
 import me.vkryl.core.StringUtils;
 
-@SuppressWarnings("NullableProblems")
+@SuppressWarnings("ViewConstructor")
 public class MaterialEditTextGroup extends FrameLayoutFix implements View.OnFocusChangeListener, FactorAnimator.Target, TextWatcher, TextView.OnEditorActionListener {
   public interface EmptyListener {
     void onTextEmptyStateChanged (MaterialEditTextGroup v, boolean isEmpty);
@@ -82,14 +82,14 @@ public class MaterialEditTextGroup extends FrameLayoutFix implements View.OnFocu
   private @Nullable FocusListener focusListener;
   private @Nullable HeightChangeListener heightChangeListener;
 
-  public MaterialEditTextGroup (Context context) {
+  public MaterialEditTextGroup (Context context, Tdlib tdlib) {
     super(context);
-    init(context, true);
+    init(context, tdlib, true);
   }
 
-  public MaterialEditTextGroup (Context context, boolean needHint) {
+  public MaterialEditTextGroup (Context context, Tdlib tdlib, boolean needHint) {
     super(context);
-    init(context, needHint);
+    init(context, tdlib, needHint);
   }
 
   private void setIsNotEmpty (boolean isNotEmpty) {
@@ -109,10 +109,10 @@ public class MaterialEditTextGroup extends FrameLayoutFix implements View.OnFocu
     this.heightChangeListener = heightChangeListener;
   }
 
-  @ThemeColorId
-  private int textColorId = R.id.theme_color_text;
+  @ColorId
+  private int textColorId = ColorId.text;
 
-  public void setTextColorId (@ThemeColorId int colorId) {
+  public void setTextColorId (@ColorId int colorId) {
     if (this.textColorId != colorId) {
       this.textColorId = colorId;
       editText.setTextColor(Theme.getColor(colorId));
@@ -124,7 +124,7 @@ public class MaterialEditTextGroup extends FrameLayoutFix implements View.OnFocu
 
   public void setInputEnabled (boolean enabled) {
     editText.setEnabled(enabled);
-    setTextColorId(enabled ? R.id.theme_color_text : R.id.theme_color_textLight);
+    setTextColorId(enabled ? ColorId.text : ColorId.textLight);
   }
 
   public interface NextCallback {
@@ -137,13 +137,13 @@ public class MaterialEditTextGroup extends FrameLayoutFix implements View.OnFocu
     this.nextCallback = forceNextButton;
   }
 
-  private void init (Context context, boolean needHint) {
+  private void init (Context context, Tdlib tdlib, boolean needHint) {
     FrameLayoutFix.LayoutParams params;
 
     params = FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
     params.topMargin = Screen.dp(needHint ? 20f : 8f);
 
-    editText = new MaterialEditText(context) {
+    editText = new MaterialEditText(context, tdlib) {
       @Override
       public InputConnection createInputConnection (EditorInfo outAttrs) {
         InputConnection conn = super.createInputConnection(outAttrs);
@@ -229,7 +229,7 @@ public class MaterialEditTextGroup extends FrameLayoutFix implements View.OnFocu
           lengthCounter.setText("");
         } else {
           lengthCounter.setText(Strings.buildCounter(remaining));
-          lengthCounter.setTextColor(Theme.getColor(remaining <= 0 ? R.id.theme_color_textNegative : R.id.theme_color_textLight));
+          lengthCounter.setTextColor(Theme.getColor(remaining <= 0 ? ColorId.textNegative : ColorId.textLight));
         }
       }
     }
@@ -254,7 +254,7 @@ public class MaterialEditTextGroup extends FrameLayoutFix implements View.OnFocu
     }
   }
 
-  public void addLengthCounter (@Deprecated boolean reduceOffset) {
+  public void addLengthCounter (boolean reduceOffset) {
     if (lengthCounter == null) {
       editText.setParent(this);
 
@@ -293,50 +293,59 @@ public class MaterialEditTextGroup extends FrameLayoutFix implements View.OnFocu
     if (themeProvider != null) {
       themeProvider.addThemeTextColorListener(editText, textColorId);
       if (hintView != null)
-        themeProvider.addThemeTextColorListener(hintView, R.id.theme_color_textPlaceholder);
+        themeProvider.addThemeTextColorListener(hintView, ColorId.textPlaceholder);
       themeProvider.addThemeInvalidateListener(editText);
-      themeProvider.addThemeHighlightColorListener(editText, R.id.theme_color_textSelectionHighlight);
-      themeProvider.addThemeHintTextColorListener(editText, R.id.theme_color_textPlaceholder);
+      themeProvider.addThemeHighlightColorListener(editText, ColorId.textSelectionHighlight);
+      themeProvider.addThemeHintTextColorListener(editText, ColorId.textPlaceholder);
       if (lengthCounter != null) {
-        themeProvider.addThemeTextColorListener(lengthCounter, R.id.theme_color_textLight);
+        themeProvider.addThemeTextColorListener(lengthCounter, ColorId.textLight);
       }
-      if (radioView != null) {
-        themeProvider.addThemeInvalidateListener(radioView);
+      if (checkboxView != null) {
+        themeProvider.addThemeInvalidateListener(checkboxView);
       }
     }
   }
 
   private static final int ANIMATOR_RADIO_VISIBILITY = 6;
-  private RadioView radioView;
-  private BoolAnimator radioVisible;
+  private CheckBoxView checkboxView;
+  private BoolAnimator checkboxVisible;
 
-  public void setRadioVisible (boolean visible, boolean animated) {
-    if (radioView != null || visible) {
-      addRadio();
-      radioVisible.setValue(visible, animated);
+  public void setCheckboxVisible (boolean visible, boolean circular, boolean animated) {
+    if (checkboxView != null || visible) {
+      addCheckbox();
+      checkboxView.setCircular(circular, animated && checkboxVisible.getFloatValue() > 0f);
+      checkboxVisible.setValue(visible, animated);
     }
   }
 
   private TooltipOverlayView.TooltipInfo radioTooltip;
 
-  public void showRadioHint (ViewController<?> controller, Tdlib tdlib, int stringRes) {
-    if (radioView == null) {
-      addRadio();
+  public void showCheckboxHint (ViewController<?> controller, Tdlib tdlib, int stringRes) {
+    if (checkboxView == null) {
+      addCheckbox();
     }
     if (radioTooltip != null)
       radioTooltip.hide(true);
-    radioTooltip = UI.getContext(getContext()).tooltipManager().builder(radioView).controller(controller).offset(outRect -> outRect.offset(-Screen.dp(40f) * (1f - radioVisible.getFloatValue()), 0)).show(tdlib, stringRes).hideDelayed();
+    radioTooltip = UI.getContext(getContext())
+      .tooltipManager()
+      .builder(checkboxView)
+      .controller(controller)
+      .offset(outRect ->
+        outRect.offset(-Screen.dp(40f) * (1f - checkboxVisible.getFloatValue()), 0)
+      )
+      .show(tdlib, stringRes)
+      .hideDelayed();
   }
 
-  public void setRadioActive (boolean isActive, boolean animated) {
-    if (radioView != null || isActive) {
-      addRadio();
-      radioView.setChecked(isActive, animated);
+  public void setCheckboxSelected (boolean isActive, boolean animated) {
+    if (checkboxVisible != null || isActive) {
+      addCheckbox();
+      checkboxView.setChecked(isActive, animated);
     }
   }
 
   public interface RadioClickListener {
-    void onRadioClick (MaterialEditTextGroup editText, RadioView radioView);
+    void onCheckboxClick (MaterialEditTextGroup editText, CheckBoxView radioView);
   }
 
   private RadioClickListener radioClickListener;
@@ -345,27 +354,29 @@ public class MaterialEditTextGroup extends FrameLayoutFix implements View.OnFocu
     this.radioClickListener = radioClickListener;
   }
 
-  public void addRadio () {
-    if (radioView == null) {
-      radioView = RadioView.simpleRadioView(getContext(), true);
-      Views.translateMarginsToPadding(radioView);
-      radioView.setOnClickListener(v -> {
+  public CheckBoxView addCheckbox () {
+    if (checkboxView == null) {
+      int size = Screen.dp(18f);
+      int padding = Screen.dp(19f);
+      checkboxView = CheckBoxView.simpleCheckBox(getContext(), true);
+      checkboxView.setLayoutParams(FrameLayoutFix.newParams(size + padding * 2, size + padding * 2, Gravity.LEFT | Gravity.CENTER_VERTICAL));
+      checkboxView.setPadding(padding, padding, padding, padding);
+      checkboxView.setOnClickListener(v -> {
         if (radioClickListener != null) {
-          radioClickListener.onRadioClick(this, radioView);
+          radioClickListener.onCheckboxClick(this, checkboxView);
         }
       });
-      // Views.setTopMargin(radioView, Screen.dp(4f));
-      // radioView.setPadding(radioView.getPaddingLeft(), editText.getPaddingTop(), radioView.getPaddingRight(), editText.getPaddingBottom());
-      radioView.setAlpha(0f);
-      ((ViewGroup) getParent()).addView(radioView);
+      checkboxView.setAlpha(0f);
+      ((ViewGroup) getParent()).addView(checkboxView);
 
-      radioVisible = new BoolAnimator(ANIMATOR_RADIO_VISIBILITY, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 180l);
+      checkboxVisible = new BoolAnimator(ANIMATOR_RADIO_VISIBILITY, this, AnimatorUtils.DECELERATE_INTERPOLATOR, 180l);
     }
+    return checkboxView;
   }
 
   private void setRadioVisibility (float factor) {
-    radioView.setAlpha(factor);
-    radioView.setTranslationX(-Screen.dp(40f) * (1f - factor));
+    checkboxView.setAlpha(factor);
+    checkboxView.setTranslationX(-Screen.dp(40f) * (1f - factor));
     editText.setTranslationX(Screen.dp(40f) * factor);
     if (radioTooltip != null) {
       radioTooltip.reposition();
@@ -422,7 +433,7 @@ public class MaterialEditTextGroup extends FrameLayoutFix implements View.OnFocu
     }
   }
 
-  private String lastInput;
+  private CharSequence lastInput;
   private boolean ignoreChanges;
 
   @Override
@@ -442,15 +453,14 @@ public class MaterialEditTextGroup extends FrameLayoutFix implements View.OnFocu
     }
 
     updateRemainingCharCount();
-    String str = s.toString();
-    if (lastInput == null || !lastInput.equals(str)) {
-      this.lastInput = str;
+    if (lastInput == null || !lastInput.equals(s)) {
+      this.lastInput = EditText.nonModifiableCopy(s);
       if (useTextChangeAnimations && hasFocus) {
-        forceAlphaFactor(str.trim().length() > 0 ? 1f : 0f);
+        forceAlphaFactor(StringUtils.trim(s).length() > 0 ? 1f : 0f);
       }
-      setIsNotEmpty(!str.isEmpty());
+      setIsNotEmpty(!StringUtils.isEmpty(s));
       if (textListener != null) {
-        textListener.onTextChanged(this, str);
+        textListener.onTextChanged(this, s);
       }
     }
   }

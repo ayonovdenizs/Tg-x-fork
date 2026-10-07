@@ -17,7 +17,7 @@ package org.thunderdog.challegram.data;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.component.chat.MessageView;
 import org.thunderdog.challegram.component.chat.MessagesManager;
 
@@ -56,7 +56,7 @@ public class TGMessageInvoice extends TGMessage {
 
   public TGMessageInvoice (MessagesManager context, TdApi.Message msg, TdApi.MessageInvoice invoice) {
     super(context, msg);
-    setPhoto(invoice.photo);
+    // setPhoto(invoice.photo);
   }
 
   @Override

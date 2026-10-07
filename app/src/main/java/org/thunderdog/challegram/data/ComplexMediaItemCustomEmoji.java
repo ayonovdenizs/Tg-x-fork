@@ -16,33 +16,37 @@
 package org.thunderdog.challegram.data;
 
 import android.graphics.Canvas;
-import android.graphics.Path;
 import android.graphics.Rect;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.loader.ComplexReceiver;
 import org.thunderdog.challegram.loader.DoubleImageReceiver;
 import org.thunderdog.challegram.loader.ImageFile;
 import org.thunderdog.challegram.loader.Receiver;
 import org.thunderdog.challegram.loader.gif.GifFile;
 import org.thunderdog.challegram.telegram.Tdlib;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.tool.Views;
 
-import me.vkryl.td.Td;
+import tgx.td.Td;
+import tgx.td.data.StickerOutline;
 
 public class ComplexMediaItemCustomEmoji implements ComplexMediaItem {
+  private final Tdlib tdlib;
   public final TdApi.Sticker sticker;
   public final int size;
-  public final Path outline;
+  public final StickerOutline outline;
   public final ImageFile miniThumbnail, thumbnail;
   public final ImageFile imageFile;
   public final GifFile gifFile;
 
   public ComplexMediaItemCustomEmoji (Tdlib tdlib, TdApi.Sticker sticker, int size) {
+    this.tdlib = tdlib;
     this.sticker = sticker;
     this.size = size;
 
-    this.outline = Td.buildOutline(sticker, size);
+    this.outline = new StickerOutline(sticker, true);
+    this.outline.setDisplaySize(size);
 
     this.miniThumbnail = null; // keeping in case it will appear in sticker object
 
@@ -99,6 +103,9 @@ public class ComplexMediaItemCustomEmoji implements ComplexMediaItem {
     } else if (gifFile != null) {
       receiver.getGifReceiver(displayMediaKey).requestFile(gifFile);
     }
+    if (outline != null && preview.needPlaceholder()) {
+      outline.requestOutline(tdlib, receiver);
+    }
   }
 
   @Override
@@ -107,10 +114,12 @@ public class ComplexMediaItemCustomEmoji implements ComplexMediaItem {
   }
 
   @Override
-  public void draw (Canvas c, Rect rect, ComplexReceiver mediaReceiver, long displayMediaKey, boolean translate) {
+  public void draw (Canvas c, Rect rect, int alpha, ComplexReceiver mediaReceiver, long displayMediaKey, boolean translate) {
     if (translate && (rect.left == 0 && rect.top == 0)) {
       translate = false;
     }
+
+    boolean needThemedColorFilter = TD.needThemedColorFilter(sticker);
 
     Receiver receiver;
     if (imageFile != null) {
@@ -134,14 +143,24 @@ public class ComplexMediaItemCustomEmoji implements ComplexMediaItem {
     }
     if (receiver.needPlaceholder()) {
       DoubleImageReceiver preview = mediaReceiver.getPreviewReceiver(displayMediaKey);
+      if (needThemedColorFilter) {
+        preview.setThemedPorterDuffColorId(ColorId.text);
+      } else {
+        preview.disablePorterDuffColorFilter();
+      }
       if (translate) {
         preview.setBounds(0, 0, rect.right - rect.left, rect.bottom - rect.top);
       } else {
         preview.setBounds(rect.left, rect.top, rect.right, rect.bottom);
       }
       if (preview.needPlaceholder()) {
-        preview.drawPlaceholderContour(c, outline);
+        preview.drawPlaceholderOutline(c, outline);
       }
+    }
+    if (needThemedColorFilter) {
+      receiver.setThemedPorterDuffColorId(ColorId.text);
+    } else {
+      receiver.disablePorterDuffColorFilter();
     }
     receiver.draw(c);
     if (translate) {

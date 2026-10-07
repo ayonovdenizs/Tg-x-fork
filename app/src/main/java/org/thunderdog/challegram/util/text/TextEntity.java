@@ -23,7 +23,7 @@ import android.view.View;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.BuildConfig;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.data.TD;
@@ -86,10 +86,15 @@ public abstract class TextEntity {
   }
 
   @NonNull
-  public final TdlibUi.UrlOpenParameters openParameters (View view, Text text, TextPart part) {
-    if (this.openParameters != null && this.openParameters.tooltip != null)
+  public final TdlibUi.UrlOpenParameters openParameters (View view, Text text, TextPart part, boolean isFromLongPressMenu) {
+    if (!isFromLongPressMenu && this.openParameters != null && this.openParameters.tooltip != null)
       return this.openParameters;
-    TooltipOverlayView.TooltipBuilder b = part.newTooltipBuilder(view);
+    TooltipOverlayView.TooltipBuilder b;
+    if (isFromLongPressMenu) {
+      b = UI.getContext(view.getContext()).tooltipManager().builder(view);
+    } else {
+      b = part.newTooltipBuilder(view);
+    }
     // TODO highlight the text part & modify color, if needed
     return new TdlibUi.UrlOpenParameters(this.openParameters).tooltip(b);
   }
@@ -101,9 +106,9 @@ public abstract class TextEntity {
     if (callback.forceInstantView(url)) {
       parameters.forceInstantView();
     }
-    TdApi.WebPage webPage = callback.findWebPage(url);
+    TdApi.LinkPreview webPage = callback.findLinkPreview(url);
     if (webPage != null) {
-      parameters.sourceWebView(webPage);
+      parameters.sourceLinkPreview(webPage);
     }
     return parameters;
   }
@@ -130,7 +135,11 @@ public abstract class TextEntity {
   public abstract boolean isFullWidth ();
   public abstract boolean isCustomEmoji ();
   public abstract long getCustomEmojiId ();
+  public abstract boolean forceDisableAnimations ();
   public abstract TextEntity createCopy ();
+  public abstract boolean isQuote ();
+  public abstract  TdApi.TextEntity getQuote ();
+  public abstract int getQuoteId ();
 
   // TODO: TextEntityCustom & TextEntityMessage to make things simpler
   public abstract TextEntity setOnClickListener (ClickableSpan onClickListener);
@@ -147,6 +156,7 @@ public abstract class TextEntity {
     // different storages
     boolean isUnderline = isUnderline();
     boolean isStrikeThrough = isStrikethrough();
+    boolean isSmall = isSmall();
 
     Fonts.TextPaintStorage storage = textStyleProvider.getTextPaintStorage();
 
@@ -162,6 +172,9 @@ public abstract class TextEntity {
     if (isStrikeThrough) {
       storage = storage.getStrikeThroughStorage();
     }
+    if (isSmall) {
+      storage = storage.getAlternativeSizeStorage();
+    }
 
     TextPaint textPaint;
     if (isBold && isItalic) {
@@ -175,8 +188,7 @@ public abstract class TextEntity {
     }
 
     textStyleProvider.preparePaint(textPaint);
-
-    if (isSmall()) {
+    if (isSmall) {
       textPaint.setTextSize(textPaint.getTextSize() * .75f);
     }
 
@@ -184,7 +196,7 @@ public abstract class TextEntity {
   }
   public abstract boolean isMonospace ();
   public abstract boolean isSmall ();
-  public abstract void performClick (View view, Text text, TextPart textPart, @Nullable Text.ClickCallback callback);
+  public abstract void performClick (View view, Text text, TextPart textPart, @Nullable Text.ClickCallback callback, boolean isFromLongPressMenu);
   public abstract boolean performLongPress (View view, Text text, TextPart textPart, boolean allowShare, @Nullable Text.ClickCallback callback);
   protected abstract boolean equals (TextEntity b, int compareMode, String originalText);
   public abstract boolean isEssential ();

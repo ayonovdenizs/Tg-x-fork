@@ -1,10 +1,11 @@
 package org.thunderdog.challegram.video.old;
 
-import android.annotation.TargetApi;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.os.Build;
+
+import androidx.annotation.RequiresApi;
 
 import com.coremedia.iso.boxes.AbstractMediaHeaderBox;
 import com.coremedia.iso.boxes.SampleDescriptionBox;
@@ -27,7 +28,7 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.Map;
 
-@TargetApi(Build.VERSION_CODES.JELLY_BEAN)
+@RequiresApi(Build.VERSION_CODES.JELLY_BEAN)
 public class Track {
 
   private static class SamplePresentationTime {
@@ -271,6 +272,8 @@ public class Track {
   }
 
   public void prepare() {
+    duration = 0;
+
     ArrayList<SamplePresentationTime> original = new ArrayList<>(samplePresentationTimes);
     Collections.sort(samplePresentationTimes, (o1, o2) -> {
       if (o1.presentationTime > o2.presentationTime) {

@@ -19,12 +19,13 @@ import android.graphics.Bitmap;
 import androidx.annotation.Keep;
 import androidx.collection.ArraySet;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.Log;
 import org.thunderdog.challegram.config.Config;
 import org.thunderdog.challegram.data.TD;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibAccount;
+import org.thunderdog.challegram.telegram.TdlibFilesManager;
 import org.thunderdog.challegram.tool.UI;
 
 import java.util.ArrayList;
@@ -127,7 +128,7 @@ public class ImageLoader {
               });
             } else {
               if (!Config.DEBUG_DISABLE_DOWNLOAD) {
-                tdlib.client().send(new TdApi.DownloadFile(fileId, 32, 0, 0, false), tdlib.imageLoadHandler());
+                tdlib.send(new TdApi.DownloadFile(fileId, TdlibFilesManager.PRIORITY_IMAGE, 0, 0, false), tdlib.imageLoadHandler());
               }
             }
           } else {
@@ -167,12 +168,20 @@ public class ImageLoader {
 
     persistentFile.updateRemoteFile(file);
 
-    if (TD.isFileLoadedAndExists(file)) {
+    if (isFileLoaded(tdlib, file)) {
       onLoad(tdlib, file);
     } else {
       if (!Config.DEBUG_DISABLE_DOWNLOAD) {
-        tdlib.client().send(new TdApi.DownloadFile(file.id, 1, 0, 0, false), tdlib.imageLoadHandler());
+        tdlib.send(new TdApi.DownloadFile(file.id, TdlibFilesManager.PRIORITY_PERSISTENT_IMAGE, 0, 0, false), tdlib.imageLoadHandler());
       }
+    }
+  }
+
+  public static boolean isFileLoaded (Tdlib tdlib, TdApi.File file) {
+    if (tdlib != null) {
+      return TD.isFileLoadedAndExists(file);
+    } else {
+      return TD.isFileLoaded(file);
     }
   }
 
@@ -219,7 +228,7 @@ public class ImageLoader {
                 workers.remove(ImageFile.getFileLoadKey(tdlib, file.getId()));
               }
               if (!isPersistent && file.needCancellation()) {
-                tdlib.client().send(new TdApi.CancelDownloadFile(file.getId(), file.isCancellationOnlyPending()), tdlib.okHandler());
+                tdlib.send(new TdApi.CancelDownloadFile(file.getId(), file.isCancellationOnlyPending()), tdlib.typedOkHandler());
               }
             }
           }
@@ -331,7 +340,7 @@ public class ImageLoader {
           if (Log.isEnabled(Log.TAG_IMAGE_LOADER)) {
             Log.d(Log.TAG_IMAGE_LOADER, "#%s: recycling, because there will be no references", file.toString());
           }
-          ((Bitmap) bitmap).recycle();
+          bitmap.recycle();
         }
       }
 

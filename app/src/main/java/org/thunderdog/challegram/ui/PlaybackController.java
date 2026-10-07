@@ -41,7 +41,7 @@ import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import org.drinkless.td.libcore.telegram.TdApi;
+import org.drinkless.tdlib.TdApi;
 import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.component.attach.CustomItemAnimator;
@@ -66,6 +66,7 @@ import org.thunderdog.challegram.support.ViewSupport;
 import org.thunderdog.challegram.telegram.TGLegacyManager;
 import org.thunderdog.challegram.telegram.Tdlib;
 import org.thunderdog.challegram.telegram.TdlibFilesManager;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.DrawAlgorithms;
 import org.thunderdog.challegram.tool.Drawables;
@@ -196,13 +197,24 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
   private ImageView shuffleButton, repeatButton, nextButton, prevButton;
   private PlayPauseButton playPauseButton;
 
+  @Override
+  public boolean supportsBottomInset () {
+    return true;
+  }
+
+  @Override
+  protected void onBottomInsetChanged (int extraBottomInset, int extraBottomInsetWithoutIme, boolean isImeInset) {
+    super.onBottomInsetChanged(extraBottomInset, extraBottomInsetWithoutIme, isImeInset);
+    Views.applyBottomInset(recyclerView, extraBottomInset);
+  }
+
   private ImageView newButton (int id, int image, boolean isActive) {
     ImageView imageView = new ImageView(context());
     imageView.setId(id);
     imageView.setScaleType(ImageView.ScaleType.CENTER);
     imageView.setImageResource(image);
     imageView.setLayoutParams(FrameLayoutFix.newParams(Screen.dp(64f), Screen.dp(48f)));
-    int colorId = isActive ? R.id.theme_color_playerButtonActive : R.id.theme_color_playerButton;
+    int colorId = isActive ? ColorId.playerButtonActive : ColorId.playerButton;
     imageView.setColorFilter(Theme.getColor(colorId));
     imageView.setOnClickListener(this);
     addThemeFilterListener(imageView, colorId);
@@ -224,9 +236,10 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
     FrameLayoutFix frameLayout = new FrameLayoutFix(context);
     frameLayout.setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-    ViewSupport.setThemedBackground(frameLayout, R.id.theme_color_filling, this);
+    ViewSupport.setThemedBackground(frameLayout, ColorId.filling, this);
 
     recyclerView = new PlayListRecyclerView(context);
+    Views.applyBottomInset(recyclerView, extraBottomInset);
     recyclerView.initWithController(this);
     recyclerView.setVerticalScrollBarEnabled(false);
     recyclerView.setLayoutManager(new LinearLayoutManager(context, RecyclerView.VERTICAL, false));
@@ -244,7 +257,7 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
         if (isTrackListLess()) {
           return 0;
         }
-        int position = viewHolder.getAdapterPosition();
+        int position = viewHolder.getBindingAdapterPosition();
         int headerItemCount = 1;
         if (position == -1 || position < headerItemCount || viewHolder.getItemViewType() != ListItem.TYPE_CUSTOM_INLINE) {
           return 0;
@@ -287,8 +300,8 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
       @Override
       public boolean onMove (RecyclerView recyclerView, RecyclerView.ViewHolder viewHolder, RecyclerView.ViewHolder target) {
-        int fromPosition = viewHolder.getAdapterPosition();
-        int toPosition = target.getAdapterPosition();
+        int fromPosition = viewHolder.getBindingAdapterPosition();
+        int toPosition = target.getBindingAdapterPosition();
 
         int headerItemCount = 1;
         int trackCount = getTrackCount();
@@ -798,7 +811,7 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
   private void setActive (ImageView imageView, boolean isActive) {
     removeThemeListenerByTarget(imageView);
-    int colorId = isActive ? R.id.theme_color_playerButtonActive : R.id.theme_color_playerButton;
+    int colorId = isActive ? ColorId.playerButtonActive : ColorId.playerButton;
     imageView.setColorFilter(Theme.getColor(colorId));
     addThemeFilterListener(imageView, colorId);
   }
@@ -929,12 +942,9 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
   private void removeTrack (final InlineResultCommon common) {
     if (currentItem != null) {
-      showOptions(Lang.getStringBold(R.string.PlayListRemoveTrack, common.getTrackTitle() + " – " + common.getTrackSubtitle()), new int[]{R.id.btn_delete, R.id.btn_cancel}, new String[]{Lang.getString(R.string.PlayListRemove), Lang.getString(R.string.Cancel)}, new int[] {OPTION_COLOR_RED, OPTION_COLOR_NORMAL}, new int[] {R.drawable.baseline_remove_circle_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
-        switch (id) {
-          case R.id.btn_delete: {
-            tdlib.context().player().removeTrack(common.getMessage(), true);
-            break;
-          }
+      showOptions(Lang.getStringBold(R.string.PlayListRemoveTrack, common.getTrackTitle() + " – " + common.getTrackSubtitle()), new int[]{R.id.btn_delete, R.id.btn_cancel}, new String[]{Lang.getString(R.string.PlayListRemove), Lang.getString(R.string.Cancel)}, new int[] {OptionColor.RED, OptionColor.NORMAL}, new int[] {R.drawable.baseline_remove_circle_24, R.drawable.baseline_cancel_24}, (itemView, id) -> {
+        if (id == R.id.btn_delete) {
+          tdlib.context().player().removeTrack(common.getMessage(), true);
         }
         return true;
       });
@@ -1067,35 +1077,23 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
   @Override
   public void onClick (View v) {
-    switch (v.getId()) {
-      case R.id.btn_custom: {
-        ListItem item = (ListItem) v.getTag();
-        InlineResultCommon resultCommon = (InlineResultCommon) item.getData();
-        tdlib.context().player().playPauseMessage(tdlib, resultCommon.getMessage(), this);
-        break;
+    final int viewId = v.getId();
+    if (viewId == R.id.btn_custom) {
+      ListItem item = (ListItem) v.getTag();
+      InlineResultCommon resultCommon = (InlineResultCommon) item.getData();
+      tdlib.context().player().playPauseMessage(tdlib, resultCommon.getMessage(), this);
+    } else if (viewId == R.id.btn_play) {
+      if (currentItem != null) {
+        tdlib.context().player().playPauseMessage(tdlib, currentItem.getMessage(), this);
       }
-      case R.id.btn_play: {
-        if (currentItem != null) {
-          tdlib.context().player().playPauseMessage(tdlib, currentItem.getMessage(), this);
-        }
-        break;
-      }
-      case R.id.btn_next: {
-        tdlib.context().player().skip(true);
-        break;
-      }
-      case R.id.btn_previous: {
-        tdlib.context().player().skip(false);
-        break;
-      }
-      case R.id.btn_repeat: {
-        tdlib.context().player().toggleRepeatMode();
-        break;
-      }
-      case R.id.btn_shuffle: {
-        tdlib.context().player().togglePlaybackFlag(TGPlayerController.PLAY_FLAG_SHUFFLE);
-        break;
-      }
+    } else if (viewId == R.id.btn_next) {
+      tdlib.context().player().skip(true);
+    } else if (viewId == R.id.btn_previous) {
+      tdlib.context().player().skip(false);
+    } else if (viewId == R.id.btn_repeat) {
+      tdlib.context().player().toggleRepeatMode();
+    } else if (viewId == R.id.btn_shuffle) {
+      tdlib.context().player().togglePlaybackFlag(TGPlayerController.PLAY_FLAG_SHUFFLE);
     }
   }
 
@@ -1307,7 +1305,7 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
     public void getItemOffsets (Rect outRect, View view, RecyclerView parent, RecyclerView.State state) {
       RecyclerView.ViewHolder holder = parent.getChildViewHolder(view);
       ListItem item = (ListItem) view.getTag();
-      if ((holder != null && holder.getAdapterPosition() == 0) || (item != null && item.getViewType() == ListItem.TYPE_ZERO_VIEW)) {
+      if ((holder != null && holder.getBindingAdapterPosition() == 0) || (item != null && item.getViewType() == ListItem.TYPE_ZERO_VIEW)) {
         outRect.top = context.getAvailableOverlayHeight(parent.getMeasuredWidth(), parent.getMeasuredHeight());
       } else {
         outRect.top = 0;
@@ -1353,7 +1351,7 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
       int cx = getMeasuredWidth() / 2;
       int cy = getMeasuredHeight() / 2;
 
-      DrawAlgorithms.drawPlayPause(c, cx, cy, Screen.dp(18f), path, drawFactor, drawFactor = factor, 1f, Theme.getColor(R.id.theme_color_playerButton));
+      DrawAlgorithms.drawPlayPause(c, cx, cy, Screen.dp(18f), path, drawFactor, drawFactor = factor, 1f, Theme.getColor(ColorId.playerButton));
     }
   }
 
@@ -1429,6 +1427,7 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
         }
 
         @Override
+        @SuppressWarnings("deprecation")
         public int getOpacity () {
           return PixelFormat.UNKNOWN;
         }
@@ -2034,11 +2033,11 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
       final float seekDistanceReadyStart = seekDistance * fileOffset;
       final float seekDistanceReadyEnd = seekDistance * fileProgress;
       final int seekStroke = Screen.dp(2f);
-      int doneColor = Theme.getColor(R.id.theme_color_seekDone);
+      int doneColor = Theme.getColor(ColorId.seekDone);
       if (seekDistanceReadyStart > 0 || seekDistanceReadyEnd < seekDistance) {
-        c.drawLine(seekX, seekY, seekX + seekDistance, seekY, Paints.getProgressPaint(Theme.getColor(R.id.theme_color_seekEmpty), seekStroke));
+        c.drawLine(seekX, seekY, seekX + seekDistance, seekY, Paints.getProgressPaint(Theme.getColor(ColorId.seekEmpty), seekStroke));
       }
-      c.drawLine(seekX + seekDistanceReadyStart, seekY, seekX + seekDistanceReadyEnd, seekY, Paints.getProgressPaint(Theme.getColor(R.id.theme_color_seekReady), seekStroke));
+      c.drawLine(seekX + seekDistanceReadyStart, seekY, seekX + seekDistanceReadyEnd, seekY, Paints.getProgressPaint(Theme.getColor(ColorId.seekReady), seekStroke));
       c.drawLine(seekX, seekY, seekX + seekDistanceDone, seekY, Paints.getProgressPaint(doneColor, seekStroke));
       float seekCenterX = seekX + seekDistance * getSeekFactor();
       c.drawCircle(seekCenterX, seekY, Screen.dp(6f) + Screen.dp(4f) * seekDesireFactor, Paints.fillingPaint(doneColor));
@@ -2060,16 +2059,16 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
       boolean ignoreSource = coverFactor < .5f;
 
       if (source.needPlaceholder() || ignoreSource) {
-        // receiver.setRadius(radius);
+        receiver.setRadius(radius);
         receiver.setBounds(x, y, x + width, y + height);
         if (receiver.needPlaceholder()) {
           if (mediaPreview == null || mediaPreview.needPlaceholder(preview)) {
             if (radius == 0) {
-              c.drawRect(x, y, x + width, y + height, Paints.fillingPaint(Theme.getColor(R.id.theme_color_playerCoverPlaceholder)));
+              c.drawRect(x, y, x + width, y + height, Paints.fillingPaint(Theme.getColor(ColorId.playerCoverPlaceholder)));
             } else {
               RectF rectF = Paints.getRectF();
               rectF.set(x, y, x + width, y + height);
-              c.drawRoundRect(rectF, radius, radius, Paints.fillingPaint(Theme.getColor(R.id.theme_color_playerCoverPlaceholder)));
+              c.drawRoundRect(rectF, radius, radius, Paints.fillingPaint(Theme.getColor(ColorId.playerCoverPlaceholder)));
             }
             c.save();
             c.clipRect(x, y, x + width, y + height);
@@ -2088,7 +2087,7 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
         }
         receiver.draw(c);
       }
-      // source.setRadius(radius);
+      source.setRadius(radius);
       source.setBounds(x, y, x + width, y + height);
       source.draw(c);
 
@@ -2270,7 +2269,7 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
   @Override
   protected int getHeaderIconColor () {
-    return ColorUtils.fromToArgb(0xffffffff, Theme.getColor(R.id.theme_color_headerLightIcon), coverView.getActualCollapseFactor());
+    return ColorUtils.fromToArgb(0xffffffff, Theme.getColor(ColorId.headerLightIcon), coverView.getActualCollapseFactor());
   }
 
   @Override
@@ -2288,85 +2287,70 @@ public class PlaybackController extends ViewController<Void> implements Menu, Mo
 
   @Override
   public void fillMenuItems (int id, HeaderView header, LinearLayout menu) {
-    switch (id) {
-      case R.id.menu_player: {
-        header.addMoreButton(menu, this, 0).setThemeColorId(R.id.theme_color_white, R.id.theme_color_headerLightIcon, coverView.getActualCollapseFactor());
-        break;
-      }
+    if (id == R.id.menu_player) {
+      header.addMoreButton(menu, this, ColorId.NONE)
+        .setThemeColorId(ColorId.white, ColorId.headerLightIcon, coverView.getActualCollapseFactor());
     }
   }
 
   @Override
   public void onMenuItemPressed (int id, View view) {
-    switch (id) {
-      case R.id.menu_btn_more: {
-        IntList ids = new IntList(3);
-        StringList strings = new StringList(3);
+    if (id == R.id.menu_btn_more) {
+      IntList ids = new IntList(3);
+      StringList strings = new StringList(3);
 
-        TdApi.Message message = currentItem.getMessage();
+      TdApi.Message message = currentItem.getMessage();
 
-        TdApi.File file = TD.getFile(message);
-        if (TD.isFileLoaded(file)) {
-          ids.append(R.id.btn_saveFile);
-          strings.append(R.string.SaveToMusic);
-        }
-
-        if (message.chatId != 0) {
-          ids.append(R.id.btn_share);
-          strings.append(R.string.Share);
-
-          ids.append(R.id.btn_showInChat);
-          strings.append(R.string.ShowInChat);
-        }
-
-        if (tracks.size() > 5 && isScrollUnlocked) {
-          ids.append(R.id.btn_showInPlaylist);
-          strings.append(R.string.PlayListHighlight);
-        }
-
-        if (tdlib.context().player().canReverseOrder()) {
-          ids.append(R.id.btn_reverseOrder);
-          strings.append(R.string.PlayListReverse);
-        }
-
-        showMore(ids.get(), strings.get(), 0);
-        break;
+      TdApi.File file = TD.getFile(message);
+      if (TD.isFileLoaded(file)) {
+        ids.append(R.id.btn_saveFile);
+        strings.append(R.string.SaveToMusic);
       }
+
+      if (message.chatId != 0) {
+        ids.append(R.id.btn_share);
+        strings.append(R.string.Share);
+
+        ids.append(R.id.btn_showInChat);
+        strings.append(R.string.ShowInChat);
+      }
+
+      if (tracks.size() > 5 && isScrollUnlocked) {
+        ids.append(R.id.btn_showInPlaylist);
+        strings.append(R.string.PlayListHighlight);
+      }
+
+      if (tdlib.context().player().canReverseOrder()) {
+        ids.append(R.id.btn_reverseOrder);
+        strings.append(R.string.PlayListReverse);
+      }
+
+      showMore(ids.get(), strings.get(), 0);
     }
   }
 
   @Override
   public void onMoreItemPressed (int id) {
-    switch (id) {
-      case R.id.btn_share: {
-        ShareController c = new ShareController(context, tdlib);
-        c.setArguments(new ShareController.Args(currentItem.getMessage()).setAllowCopyLink(true));
-        c.show();
-        break;
+    if (id == R.id.btn_share) {
+      ShareController c = new ShareController(context, tdlib);
+      c.setArguments(new ShareController.Args(currentItem.getMessage()).setAllowCopyLink(true));
+      c.show();
+    } else if (id == R.id.btn_showInPlaylist) {
+      highlightCurrentItem();
+    } else if (id == R.id.btn_reverseOrder) {
+      tdlib.context().player().toggleReverseMode();
+    } else if (id == R.id.btn_showInChat) {
+      TdApi.Message message = currentItem.getMessage();
+      if (TD.isScheduled(message)) {
+        tdlib.ui().openScheduledMessage(this, message);
+      } else {
+        tdlib.ui().openMessage(this, message, null);
       }
-      case R.id.btn_showInPlaylist: {
-        highlightCurrentItem();
-        break;
-      }
-      case R.id.btn_reverseOrder: {
-        tdlib.context().player().toggleReverseMode();
-        break;
-      }
-      case R.id.btn_showInChat: {
-        TdApi.Message message = currentItem.getMessage();
-        if (TD.isScheduled(message)) {
-          tdlib.ui().openScheduledMessage(this, message);
-        } else {
-          tdlib.ui().openMessage(this, message, null);
-        }
-        break;
-      }
-      case R.id.btn_saveFile: {
-        TD.DownloadedFile downloadedFile = TD.getDownloadedFile(currentItem.getMessage());;
-        if (downloadedFile != null) {
-          TD.saveFile(context, downloadedFile);
-        }
-        break;
+    } else if (id == R.id.btn_saveFile) {
+      TD.DownloadedFile downloadedFile = TD.getDownloadedFile(currentItem.tdlib(), currentItem.getMessage());
+      ;
+      if (downloadedFile != null) {
+        TD.saveFile(context, downloadedFile);
       }
     }
   }

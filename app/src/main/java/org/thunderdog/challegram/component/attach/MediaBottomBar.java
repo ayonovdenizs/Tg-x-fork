@@ -31,13 +31,14 @@ import android.view.ViewGroup;
 import androidx.annotation.DrawableRes;
 import androidx.annotation.NonNull;
 
-import org.thunderdog.challegram.R;
 import org.thunderdog.challegram.U;
 import org.thunderdog.challegram.core.Lang;
+import org.thunderdog.challegram.theme.ColorId;
 import org.thunderdog.challegram.theme.Theme;
 import org.thunderdog.challegram.tool.Drawables;
 import org.thunderdog.challegram.tool.Paints;
 import org.thunderdog.challegram.tool.Screen;
+import org.thunderdog.challegram.tool.Views;
 
 import me.vkryl.android.AnimatorUtils;
 import me.vkryl.android.ViewUtils;
@@ -117,6 +118,11 @@ public class MediaBottomBar extends FrameLayoutFix implements GestureDetector.On
     setLayoutParams(FrameLayoutFix.newParams(ViewGroup.LayoutParams.MATCH_PARENT, barHeight, Gravity.BOTTOM));
   }
 
+  public void setBottomInset (int inset) {
+    Views.setPaddingBottom(this, inset);
+    Views.setLayoutHeight(this, barHeight + inset);
+  }
+
   // Getters
 
   public static int getBarHeight () {
@@ -191,7 +197,7 @@ public class MediaBottomBar extends FrameLayoutFix implements GestureDetector.On
 
     int totalWidth;
     if (itemWidth > maxItemWidth) {
-      this.itemStartX = (maxItemWidth * items.length - barWidth) / 2;
+      this.itemStartX = (barWidth - maxItemWidth * items.length) / 2;
       totalWidth = maxItemWidth * items.length;
       itemWidth = maxItemWidth;
     } else {
@@ -423,6 +429,7 @@ public class MediaBottomBar extends FrameLayoutFix implements GestureDetector.On
 
       int centerX = barWidth / 2;
       int centerY = barHeight / 2;
+      int barHeight = MediaBottomBar.this.barHeight + MediaBottomBar.this.getPaddingBottom();
 
       if (overlayFactor != 1f) {
         int backgroundColor = Theme.getColor(items[index].backgroundColorId);
@@ -451,7 +458,7 @@ public class MediaBottomBar extends FrameLayoutFix implements GestureDetector.On
 
           int iconCenterY = item.factor == 0f ? centerY : centerY - (int) ((float) (iconActivePadding - item.paddingTop) * item.factor);
           int iconAlpha = item.factor == 1f ? 255 : 255 - (int) ((255f * .25f) * (1f - item.factor));
-          int color = Theme.getColor(R.id.theme_color_attachText);
+          int color = Theme.getColor(ColorId.attachText);
           Paint bitmapPaint = iconPaint != null && iconColor == color ? iconPaint : (iconPaint = Paints.createPorterDuffPaint(iconPaint, iconColor = color));
           bitmapPaint.setAlpha(iconAlpha);
           if (item.icon != null) {
@@ -503,6 +510,7 @@ public class MediaBottomBar extends FrameLayoutFix implements GestureDetector.On
     }
 
     @Override
+    @SuppressWarnings("deprecation")
     public int getOpacity () {
       return PixelFormat.UNKNOWN;
     }
