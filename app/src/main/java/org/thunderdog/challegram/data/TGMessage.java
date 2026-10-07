@@ -665,6 +665,9 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     if (isImported()) {
       b.append(Lang.getString(R.string.ImportedSign)).append(" ");
     }
+    if (isDeletedLocally) {
+      b.append(Lang.getString(R.string.DeletedSign)).append(" ");
+    }
     if (TD.isFailed(msg)) {
       b.append(Lang.getString(R.string.failed));
     } else if (isScheduled()) {
@@ -5550,6 +5553,32 @@ public abstract class TGMessage implements InvalidateContentProvider, TdlibDeleg
     fTime = genForwardTime();
     if ((flags & FLAG_LAYOUT_BUILT) != 0) {
       buildForward();
+    }
+  }
+
+  // Anti-delete (fork feature): message was deleted remotely, but kept on screen
+
+  private boolean isDeletedLocally;
+
+  public boolean isDeletedLocally () {
+    return isDeletedLocally;
+  }
+
+  public void markAsDeletedLocally () {
+    if (!isDeletedLocally) {
+      isDeletedLocally = true;
+      if ((flags & FLAG_LAYOUT_BUILT) != 0) {
+        if (useBubbles()) {
+          buildTime();
+          buildBubble(false);
+        } else {
+          buildTime();
+          buildHeader();
+        }
+        invalidate();
+      } else {
+        buildTime();
+      }
     }
   }
 

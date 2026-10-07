@@ -234,6 +234,10 @@ public class SettingsPrivacyController extends RecyclerViewController<SettingsPr
       items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_toggleNewSetting, 0, R.string.GhostNoScreenshotNotification).setLongId(Settings.SETTING_FLAG_GHOST_NO_SCREENSHOT_NOTIFICATION));
       items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
       items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.GhostModeInfo));
+      items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));
+      items.add(new ListItem(ListItem.TYPE_RADIO_SETTING, R.id.btn_toggleNewSetting, 0, R.string.AntiDelete).setLongId(Settings.SETTING_FLAG_ANTI_DELETE));
+      items.add(new ListItem(ListItem.TYPE_SHADOW_BOTTOM));
+      items.add(new ListItem(ListItem.TYPE_DESCRIPTION, 0, 0, R.string.AntiDeleteInfo));
 
       items.add(new ListItem(ListItem.TYPE_HEADER, 0, 0, R.string.SecretChats));
       items.add(new ListItem(ListItem.TYPE_SHADOW_TOP));

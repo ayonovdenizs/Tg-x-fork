@@ -2273,6 +2273,42 @@ public class MessagesManager implements Client.ResultHandler, MessagesSearchMana
   }
 
   public void updateMessagesDeleted (long chatId, long[] messageIds) {
+    if (Settings.instance().isAntiDeleteEnabled() && !areScheduled() && !ChatId.isSecret(chatId)) {
+      // Anti-delete: keep incoming messages on screen, mark them as deleted
+      boolean[] kept = new boolean[messageIds.length];
+      int keptCount = 0;
+      int messageCount = adapter.getMessageCount();
+      for (int index = 0; index < messageCount; index++) {
+        TGMessage item = adapter.getMessage(index);
+        if (item.isOutgoing() || item.isSponsoredMessage()) {
+          continue;
+        }
+        boolean affected = false;
+        for (int i = 0; i < messageIds.length; i++) {
+          if (!kept[i] && item.isDescendantOrSelf(messageIds[i])) {
+            kept[i] = true;
+            keptCount++;
+            affected = true;
+          }
+        }
+        if (affected) {
+          item.markAsDeletedLocally();
+        }
+      }
+      if (keptCount == messageIds.length) {
+        return;
+      }
+      if (keptCount > 0) {
+        long[] remaining = new long[messageIds.length - keptCount];
+        int j = 0;
+        for (int i = 0; i < messageIds.length; i++) {
+          if (!kept[i]) {
+            remaining[j++] = messageIds[i];
+          }
+        }
+        messageIds = remaining;
+      }
+    }
     controller.removeReply(chatId, messageIds);
     controller.onMessagesDeleted(chatId, messageIds);
 

@@ -12,6 +12,7 @@
 | Hide typing status | «typing…», «recording voice…», «sending photo…» etc. are never sent. |
 | Stay offline | The `online` option is never set to `true` in TDLib, so your «last seen» doesn't update while using the app. Applied immediately when toggled. |
 | Don't notify about screenshots | Screenshot notifications in secret chats are suppressed. |
+| Keep deleted messages (anti-delete) | Incoming messages deleted by the sender stay in the open chat with a «deleted» mark. Session-only: TDLib removes them from its DB, so they disappear after the chat is reopened. Secret chats excluded. |
 
 ## Building via GitHub Actions
 

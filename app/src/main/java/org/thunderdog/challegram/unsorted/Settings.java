@@ -435,6 +435,7 @@ public class Settings {
   public static final long SETTING_FLAG_GHOST_NO_TYPING = 1 << 22;
   public static final long SETTING_FLAG_GHOST_OFFLINE = 1 << 23;
   public static final long SETTING_FLAG_GHOST_NO_SCREENSHOT_NOTIFICATION = 1 << 24;
+  public static final long SETTING_FLAG_ANTI_DELETE = 1 << 25;
 
   public static final long EXPERIMENT_FLAG_ALLOW_EXPERIMENTS = 1;
   public static final long EXPERIMENT_FLAG_SHOW_PEER_IDS = 1 << 2;
@@ -1464,6 +1465,10 @@ public class Settings {
 
   public boolean isGhostNoScreenshotNotification () {
     return getNewSetting(SETTING_FLAG_GHOST_NO_SCREENSHOT_NOTIFICATION);
+  }
+
+  public boolean isAntiDeleteEnabled () {
+    return getNewSetting(SETTING_FLAG_ANTI_DELETE);
   }
 
   public boolean toggleNewSetting (long key) {
